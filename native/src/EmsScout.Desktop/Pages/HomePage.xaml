@@ -1,0 +1,287 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page
+    x:Class="EmsScout.Desktop.Pages.HomePage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:vm="using:EmsScout.Desktop.ViewModels"
+    Loaded="Page_Loaded"
+    mc:Ignorable="d">
+
+    <ScrollViewer>
+        <StackPanel Padding="{StaticResource PagePadding}" Spacing="14">
+            <Grid ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Spacing="3">
+                    <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="EMS 空调运维总览" />
+                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.PageStatus, Mode=OneWay}" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                    <Button
+                        VerticalAlignment="Top"
+                        Click="Refresh_Click"
+                        Style="{StaticResource ToolbarButtonStyle}"
+                        IsEnabled="{x:Bind ViewModel.CanRefresh, Mode=OneWay}">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <FontIcon FontSize="14" Glyph="&#xE72C;" />
+                            <TextBlock Text="刷新" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </Grid>
+
+            <InfoBar
+                IsClosable="False"
+                IsOpen="True"
+                Severity="{x:Bind ViewModel.OverviewSeverity, Mode=OneWay}"
+                Title="{x:Bind ViewModel.OverviewStatusTitle, Mode=OneWay}"
+                Message="{x:Bind ViewModel.OverviewStatusMessage, Mode=OneWay}" />
+
+            <Border Style="{StaticResource WorkbenchCardStyle}" Padding="0">
+                <Grid RowSpacing="0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <StackPanel Padding="16,14,16,6" Spacing="2">
+                        <TextBlock Style="{StaticResource SectionTitleStyle}" Text="优先处理" />
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="合并基础质量、实时审计、实时对账、历史批次和关注设备状态。" TextWrapping="WrapWholeWords" />
+                    </StackPanel>
+                    <ListView
+                        Grid.Row="1"
+                        IsItemClickEnabled="True"
+                        ItemsSource="{x:Bind ViewModel.Risks, Mode=OneWay}"
+                        ItemClick="Risks_ItemClick"
+                        SelectionMode="None">
+                        <ListView.Header>
+                            <Grid Padding="16,10" ColumnSpacing="14">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="58" />
+                                    <ColumnDefinition Width="120" />
+                                    <ColumnDefinition Width="1.1*" />
+                                    <ColumnDefinition Width="2*" />
+                                    <ColumnDefinition Width="84" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock FontWeight="SemiBold" Text="级别" />
+                                <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="来源" />
+                                <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="事项" />
+                                <TextBlock Grid.Column="3" FontWeight="SemiBold" Text="说明" />
+                                <TextBlock Grid.Column="4" FontWeight="SemiBold" Text="数量" />
+                                <TextBlock Grid.Column="5" FontWeight="SemiBold" Text="操作" />
+                            </Grid>
+                        </ListView.Header>
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="vm:DashboardRiskRow">
+                                <Grid Padding="16,9" ColumnSpacing="14">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="58" />
+                                        <ColumnDefinition Width="120" />
+                                        <ColumnDefinition Width="1.1*" />
+                                        <ColumnDefinition Width="2*" />
+                                        <ColumnDefinition Width="84" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <FontIcon FontSize="14" Glyph="{x:Bind Glyph}" />
+                                        <TextBlock FontWeight="SemiBold" Text="{x:Bind SeverityText}" />
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="1" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind Source}" TextWrapping="WrapWholeWords" />
+                                    <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="{x:Bind Title}" TextWrapping="WrapWholeWords" />
+                                    <TextBlock Grid.Column="3" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind Detail}" TextWrapping="WrapWholeWords" />
+                                    <TextBlock Grid.Column="4" Text="{x:Bind CountText}" />
+                                    <TextBlock Grid.Column="5" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" Text="{x:Bind ActionText}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                </Grid>
+            </Border>
+
+            <Grid ColumnSpacing="14">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1.4*" />
+                    <ColumnDefinition Width="0.9*" />
+                </Grid.ColumnDefinitions>
+
+                <GridView
+                    IsItemClickEnabled="True"
+                    ItemsSource="{x:Bind ViewModel.Metrics, Mode=OneWay}"
+                    ItemClick="Metrics_ItemClick"
+                    SelectionMode="None">
+                    <GridView.ItemContainerStyle>
+                        <Style TargetType="GridViewItem">
+                            <Setter Property="MinWidth" Value="172" />
+                            <Setter Property="MinHeight" Value="96" />
+                        </Style>
+                    </GridView.ItemContainerStyle>
+                    <GridView.ItemTemplate>
+                        <DataTemplate x:DataType="vm:MetricItem">
+                            <Border Style="{StaticResource MetricCardStyle}">
+                                <StackPanel Spacing="5">
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind Label}" />
+                                    <TextBlock FontSize="26" FontWeight="SemiBold" Text="{x:Bind Value}" />
+                                    <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind Detail}" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" Text="{x:Bind ActionText}" />
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </GridView.ItemTemplate>
+                </GridView>
+
+                <Border Grid.Column="1" Style="{StaticResource WorkbenchCardStyle}">
+                    <StackPanel Spacing="12">
+                        <StackPanel Spacing="2">
+                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="当前口径" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="总览、筛选和 Excel 导出共用当前数据口径。" TextWrapping="WrapWholeWords" />
+                        </StackPanel>
+
+                        <Grid ColumnSpacing="12" RowSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="在线设备" />
+                                <TextBlock FontSize="22" FontWeight="SemiBold" Text="{x:Bind ViewModel.OnlineDevices, Mode=OneWay}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Spacing="2">
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="需关注" />
+                                <TextBlock FontSize="22" FontWeight="SemiBold" Text="{x:Bind ViewModel.AttentionDevices, Mode=OneWay}" />
+                            </StackPanel>
+                            <StackPanel Grid.Row="1" Spacing="2">
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="开机率" />
+                                <TextBlock FontSize="22" FontWeight="SemiBold" Text="{x:Bind ViewModel.RunningRate, Mode=OneWay}" />
+                            </StackPanel>
+                            <StackPanel Grid.Row="1" Grid.Column="1" Spacing="2">
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="离线率" />
+                                <TextBlock FontSize="22" FontWeight="SemiBold" Text="{x:Bind ViewModel.OfflineRate, Mode=OneWay}" />
+                            </StackPanel>
+                        </Grid>
+
+                        <StackPanel Spacing="3">
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.SourcePath, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind ViewModel.SourceUpdatedAt, Mode=OneWay}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <Grid ColumnSpacing="14">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="0.75*" />
+                    <ColumnDefinition Width="1.45*" />
+                </Grid.ColumnDefinitions>
+
+                <Border Style="{StaticResource WorkbenchCardStyle}">
+                    <StackPanel Spacing="10">
+                        <StackPanel Spacing="2">
+                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="状态分布" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="按当前通讯状态聚合。" />
+                        </StackPanel>
+                        <ItemsControl ItemsSource="{x:Bind ViewModel.StatusDistribution, Mode=OneWay}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate x:DataType="vm:StatusDistributionRow">
+                                    <Grid Margin="0,0,0,8" ColumnSpacing="10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="68" />
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Spacing="1">
+                                            <TextBlock FontWeight="SemiBold" Text="{x:Bind Label}" />
+                                            <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind Detail}" />
+                                        </StackPanel>
+                                        <ProgressBar
+                                            Grid.Column="1"
+                                            VerticalAlignment="Center"
+                                            Maximum="100"
+                                            Value="{x:Bind PercentValue}" />
+                                        <StackPanel Grid.Column="2" HorizontalAlignment="Right" Spacing="1">
+                                            <TextBlock HorizontalAlignment="Right" FontWeight="SemiBold" Text="{x:Bind Count}" />
+                                            <TextBlock HorizontalAlignment="Right" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind PercentText}" />
+                                        </StackPanel>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Column="1" Style="{StaticResource WorkbenchCardStyle}" Padding="0">
+                    <Grid RowSpacing="0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <StackPanel Padding="16,14,16,6" Spacing="2">
+                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="楼栋状态" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="点击楼栋可进入数据管理并保留筛选口径。" />
+                        </StackPanel>
+                        <ListView
+                            Grid.Row="1"
+                            IsItemClickEnabled="True"
+                            ItemsSource="{x:Bind ViewModel.Buildings, Mode=OneWay}"
+                            ItemClick="Buildings_ItemClick"
+                            SelectionMode="None">
+                            <ListView.Header>
+                                <Grid Padding="16,10" ColumnSpacing="14">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="1.1*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock FontWeight="SemiBold" Text="楼栋" />
+                                    <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="总数" />
+                                    <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="开机" />
+                                    <TextBlock Grid.Column="3" FontWeight="SemiBold" Text="离线" />
+                                    <TextBlock Grid.Column="4" FontWeight="SemiBold" Text="需关注" />
+                                    <TextBlock Grid.Column="5" FontWeight="SemiBold" Text="开机率" />
+                                    <TextBlock Grid.Column="6" FontWeight="SemiBold" Text="离线率" />
+                                    <TextBlock Grid.Column="7" FontWeight="SemiBold" Text="操作" />
+                                </Grid>
+                            </ListView.Header>
+                            <ListView.ItemTemplate>
+                                <DataTemplate x:DataType="vm:BuildingSummaryRow">
+                                    <Grid Padding="16,10" ColumnSpacing="14">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="1.1*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock FontWeight="SemiBold" Text="{x:Bind Building}" />
+                                        <TextBlock Grid.Column="1" Text="{x:Bind Total}" />
+                                        <TextBlock Grid.Column="2" Text="{x:Bind Running}" />
+                                        <TextBlock Grid.Column="3" Text="{x:Bind Offline}" />
+                                        <TextBlock Grid.Column="4" Text="{x:Bind Attention}" />
+                                        <TextBlock Grid.Column="5" Text="{x:Bind RunningRate}" />
+                                        <TextBlock Grid.Column="6" Text="{x:Bind OfflineRate}" />
+                                        <TextBlock Grid.Column="7" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" Text="查看" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
+                    </Grid>
+                </Border>
+            </Grid>
+        </StackPanel>
+    </ScrollViewer>
+</Page>

@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/EmsScout.Application/EmsScout.Application.csproj" />
+    <Project Path="src/EmsScout.Collection/EmsScout.Collection.csproj" />
+    <Project Path="src/EmsScout.Desktop/EmsScout.Desktop.csproj" />
+    <Project Path="src/EmsScout.Domain/EmsScout.Domain.csproj" />
+    <Project Path="src/EmsScout.Infrastructure/EmsScout.Infrastructure.csproj" />
+    <Project Path="src/EmsScout.Legacy/EmsScout.Legacy.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/EmsScout.Tests/EmsScout.Tests.csproj" />
+  </Folder>
+  <Folder Name="/tools/">
+    <Project Path="tools/EmsScout.ExportSmoke/EmsScout.ExportSmoke.csproj" />
+  </Folder>
+</Solution>

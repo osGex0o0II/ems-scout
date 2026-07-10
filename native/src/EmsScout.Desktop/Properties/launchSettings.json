@@ -1,0 +1,7 @@
+{
+  "profiles": {
+    "EmsScout.Desktop (Package)": {
+      "commandName": "MsixPackage"
+    }
+  }
+}

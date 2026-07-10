@@ -1,0 +1,17 @@
+# 临时文件和调试产物
+*.tmp
+*.bak
+*.log
+
+# 运行时输出（脚本默认写到 $PSScriptRoot 旁边，run_all 复制到 out/）
+scripts/screenshot.png
+scripts/ac_dashboard.json
+scripts/rt_state.json
+scripts/all_points.json
+
+# out/ 是 run_all.ps1 -OutDir 的默认目录
+out/
+
+# Native WinUI rebuild outputs
+native/**/bin/
+native/**/obj/
