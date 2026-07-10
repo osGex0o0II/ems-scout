@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "findings": [
+    {
+      "id": "2026-07-07-1hao-8f-offline-template",
+      "type": "offline_template_page",
+      "status": "accepted_long_offline",
+      "building": "1号",
+      "floor": 8,
+      "subArea": "8F",
+      "page": "一页",
+      "reason": "2026-07-07 real EMS run, targeted recapture, page screenshot, and raw SVG evidence show 1号 8F 一页 is 20/20 grey/offline with 0/0/0/通风 values. Historical archive and production DB show the same long-running full-offline page. Treat as confirmed EMS source state, keep visible in quality report.",
+      "evidence": [
+        "out/field-e2e-20260707_134530_679-5be79c79/quality/quality_report_run1.txt",
+        "out/field-e2e-20260707_134530_679-5be79c79/recapture-8f-exit-test/recapture_result.json",
+        "out/field-e2e-20260707_134530_679-5be79c79/source-inspect-8f/804-KT-2_source_evidence.json",
+        "out/field-e2e-20260707_134530_679-5be79c79/source-inspect-8f/804-KT-2_page.png"
+      ]
+    },
+    {
+      "id": "2026-07-07-1hao-17f-1717-kt-2",
+      "type": "device_invalid_fields",
+      "status": "accepted_ems_source_defect",
+      "building": "1号",
+      "floor": 17,
+      "subArea": "17F",
+      "page": "二页",
+      "device": "1717-KT-2",
+      "reason": "2026-07-07 real EMS capture, targeted recapture, page screenshot, and raw SVG text all show the live EMS UI source for 1717-KT-2 has invalid fields: indoor=-1615.5, setTemp=3301.4, mode=32897, fan=32899. Treat as current EMS source-data defect, keep visible in quality report.",
+      "evidence": [
+        "out/field-e2e-20260707_134530_679-5be79c79/enum_rejected_20260707T054741Z.json",
+        "out/field-e2e-20260707_134530_679-5be79c79/recapture-17f-2",
+        "out/field-e2e-20260707_134530_679-5be79c79/source-inspect-17f-v4/1717-KT-2_source_evidence.json",
+        "out/field-e2e-20260707_134530_679-5be79c79/source-inspect-17f-v4/1717-KT-2_page.png"
+      ]
+    },
+    {
+      "id": "2026-07-10-2hao-2_5f-2m001-kt-1-indicator",
+      "type": "device_missing_indicator",
+      "status": "accepted_ems_source_defect",
+      "building": "2号",
+      "floor": 2.5,
+      "subArea": "2.5F",
+      "page": "default",
+      "device": "2-2BC-2M001-KT-1",
+      "reason": "EMS source does not render an indicator image for this device. Keep comm unknown instead of borrowing a neighboring repeated card indicator.",
+      "evidence": [
+        "AGENTS.md",
+        "out/enum_rejected_20260710T064752Z.json",
+        "out/ac_before_full_import_20260710_144208.db"
+      ]
+    },
+    {
+      "id": "2026-07-10-2hao-2_5f-2m001-kt-2-indicator",
+      "type": "device_missing_indicator",
+      "status": "accepted_ems_source_defect",
+      "building": "2号",
+      "floor": 2.5,
+      "subArea": "2.5F",
+      "page": "default",
+      "device": "2-2BC-2M001-KT-2",
+      "reason": "EMS source does not render an indicator image for this device. Keep comm unknown instead of borrowing a neighboring repeated card indicator.",
+      "evidence": [
+        "AGENTS.md",
+        "out/enum_rejected_20260710T064752Z.json",
+        "out/ac_before_full_import_20260710_144208.db"
+      ]
+    }
+  ]
+}

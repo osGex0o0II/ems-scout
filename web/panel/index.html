@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EMS 空调采集面板</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div id="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">EMS</div>
+        <div>
+          <h1>空调采集面板</h1>
+          <p id="dbState">连接中</p>
+        </div>
+      </div>
+      <nav class="nav" aria-label="主导航">
+        <button class="nav-item active" data-view="overview">总览</button>
+        <button class="nav-item" data-view="tasks">采集任务</button>
+        <button class="nav-item" data-view="monitor">区域管理</button>
+        <button class="nav-item" data-view="data">数据管理</button>
+        <button class="nav-item" data-view="quality">质量审计</button>
+        <button class="nav-item" data-view="reports">说明 / 关于</button>
+      </nav>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">D:\Code\ems-tool-audit-fix</div>
+          <h2 id="viewTitle">总览</h2>
+        </div>
+        <div class="top-actions">
+          <div class="run-picker" id="runPicker">
+            <button class="run-picker-btn" id="runPickerBtn" type="button" aria-expanded="false">
+              <span id="runPickerLabel">当前数据</span>
+              <strong id="runPickerMeta">--</strong>
+            </button>
+            <div class="run-picker-menu" id="runPickerMenu"></div>
+          </div>
+          <select id="runSelect" title="数据批次" hidden>
+            <option value="">当前数据</option>
+          </select>
+          <button class="icon-btn" id="refreshBtn" title="刷新">↻</button>
+        </div>
+      </header>
+
+      <section class="view active" id="view-overview">
+        <div class="kpi-grid">
+          <div class="kpi metric-card info"><span>总设备数</span><strong>--</strong><em>当前数据口径</em></div>
+          <div class="kpi metric-card info"><span>实时详情数</span><strong>--</strong><em>最新详情文件</em></div>
+          <div class="kpi metric-card success"><span>已纳管</span><strong>--</strong><em>实时详情可用</em></div>
+          <div class="kpi metric-card warning"><span>需人工分类</span><strong>--</strong><em>区域/座号待确认</em></div>
+          <div class="kpi metric-card success"><span>在线 / 运行中</span><strong>--</strong><em>关机 --</em></div>
+          <div class="kpi metric-card warning"><span>离线 / 异常</span><strong>--</strong><em>离线设备</em></div>
+          <div class="kpi metric-card muted"><span>质量问题数</span><strong>--</strong><em>质量审计</em></div>
+          <div class="kpi metric-card muted"><span>最近采集时间</span><strong>--</strong><em>当前数据</em></div>
+        </div>
+
+        <div id="overviewAlerts" class="alert-list"></div>
+
+        <section class="panel overview-charts">
+          <div class="panel-head">
+            <h3>运行分布</h3>
+            <span id="overviewRunLabel" class="badge">最新采集时间</span>
+          </div>
+          <div class="chart-grid">
+            <div class="mini-chart">
+              <h4>状态分布</h4>
+              <div id="statusChart" class="stack-chart"></div>
+            </div>
+            <div class="mini-chart">
+              <h4>区域分布</h4>
+              <div id="areaChart" class="stack-chart"></div>
+            </div>
+            <div class="mini-chart wide">
+              <h4>楼栋开机率</h4>
+              <div id="buildingChart" class="bar-list"></div>
+            </div>
+          </div>
+        </section>
+
+        <div class="split">
+          <section class="panel">
+            <div class="panel-head">
+              <h3>楼栋状态</h3>
+              <span id="qualityBadge" class="badge">质量 --</span>
+            </div>
+            <div class="table-wrap compact">
+              <table>
+                <thead>
+                  <tr><th>楼栋</th><th>总数</th><th>开机</th><th>关机</th><th>离线</th><th>差异</th><th>更新时间</th></tr>
+                </thead>
+                <tbody id="buildingRows"></tbody>
+              </table>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h3>区域概览</h3>
+              <button class="ghost small" data-view-jump="monitor">打开</button>
+            </div>
+            <div id="areaSummary" class="event-list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="view-tasks">
+        <div class="task-console">
+          <section class="panel task-control-panel">
+            <div class="panel-head">
+              <h3>内置采集引擎</h3>
+              <span id="taskPlanBadge" class="badge">详情采集</span>
+            </div>
+            <div class="task-note">
+              <strong>选择采集范围后点击开始采集。</strong>
+              <span>默认启动内置 Edge 会话，采集实时详情并自动执行质量审计。</span>
+            </div>
+
+            <input id="taskKind" value="realtimeDetails" hidden>
+
+            <div class="task-status-grid" id="taskStatusCards"></div>
+
+            <div class="task-section-head">
+              <div>
+                <h4>采集范围</h4>
+                <span id="buildingSelectedCount" class="building-count">已选 6 栋</span>
+              </div>
+              <div class="building-actions">
+                <button class="ghost small" id="selectAllBuildingsBtn" type="button">全选</button>
+                <button class="ghost small" id="clearBuildingsBtn" type="button">清空</button>
+              </div>
+            </div>
+            <div class="building-card-grid" id="buildingChecks"></div>
+
+            <section class="preflight">
+              <div class="task-section-head">
+                <div>
+                  <h4>运行前检查</h4>
+                  <span id="taskPreflightSummary">等待检查</span>
+                </div>
+                <button class="ghost small" id="refreshPreflightBtn" type="button">重新检测</button>
+              </div>
+              <div id="taskPreflight" class="preflight-list"></div>
+            </section>
+
+            <details class="advanced-settings">
+              <summary>
+                <span>高级采集设置</span>
+                <small>采集方式、补采、日志、诊断</small>
+              </summary>
+              <div class="advanced-task-grid">
+                <div class="advanced-group">
+                  <h4>采集方式</h4>
+                  <label>浏览器连接</label>
+                  <select id="captureMode">
+                    <option value="autoLaunch">自动启动 Edge（推荐，持久登录态）</option>
+                    <option value="cdp">连接已有 Edge CDP（专家）</option>
+                  </select>
+                  <label class="inline-check"><input type="checkbox" id="append"> 追加/保留未采楼栋</label>
+                </div>
+                <div class="advanced-group">
+                  <h4>补采</h4>
+                  <label>补采定位</label>
+                  <input id="recapture" placeholder="3号:1087:144">
+                </div>
+                <div class="advanced-group realtime-settings">
+                  <h4>详情采集</h4>
+                  <label>批量设备数</label>
+                  <input id="realtimeBatchSize" type="number" min="1" max="100" value="20">
+                  <label>重开弹窗间隔</label>
+                  <input id="realtimeReopenEvery" type="number" min="0" max="20" value="3">
+                  <label>单批超时 ms</label>
+                  <input id="realtimeTimeout" type="number" min="3000" max="60000" step="1000" value="15000">
+                  <label>最大设备数</label>
+                  <input id="realtimeMaxDevices" type="number" min="0" value="0">
+                  <div class="check-row">
+                    <label><input type="checkbox" id="realtimeRefreshInventory" checked>刷新卡片状态/设备清单</label>
+                    <label><input type="checkbox" id="realtimeSkipInventory">跳过清单检查</label>
+                  </div>
+                </div>
+                <div class="advanced-group">
+                  <h4>诊断日志</h4>
+                  <label>日志级别</label>
+                  <select id="logLevel">
+                    <option value="">默认 INFO</option>
+                    <option value="DEBUG">DEBUG</option>
+                    <option value="INFO">INFO</option>
+                    <option value="WARN">WARN</option>
+                    <option value="ERROR">ERROR</option>
+                  </select>
+                  <label>日志类别</label>
+                  <input id="logCategory" placeholder="RULE,QUALITY,VUE">
+                  <div class="check-row">
+                    <label><input type="checkbox" id="logFile" checked>日志文件</label>
+                    <label><input type="checkbox" id="selfDiagnose">自检</label>
+                    <label><input type="checkbox" id="noNetMonitor">关闭网络监听</label>
+                  </div>
+                </div>
+              </div>
+            </details>
+            <div class="actions">
+              <button class="primary" id="startTaskBtn">开始采集</button>
+              <button class="danger-btn" id="stopTaskBtn">停止任务</button>
+              <button class="ghost" id="openEmsBtn" type="button">打开 EMS 页面</button>
+              <button class="ghost" id="viewTaskLogBtn" type="button">查看日志</button>
+            </div>
+          </section>
+
+          <section class="panel task-runtime-panel">
+            <div class="panel-head">
+              <h3>任务进度</h3>
+              <span id="taskState" class="badge">空闲</span>
+            </div>
+            <div id="taskRuntimeSummary" class="runtime-summary"></div>
+            <div id="taskSteps" class="step-list"></div>
+            <details class="log-details" open>
+              <summary>详细日志</summary>
+              <pre id="taskLog" class="logbox"></pre>
+            </details>
+          </section>
+
+          <section class="panel task-history-panel">
+            <div class="panel-head">
+              <h3>最近任务</h3>
+              <span class="badge">本次面板会话</span>
+            </div>
+            <div id="taskHistory" class="task-history-list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="view-monitor">
+        <div class="area-layout">
+          <section class="panel">
+            <div class="panel-head">
+              <h3>区域组</h3>
+              <span class="badge">按楼栋 / 楼层 / 子区 / 设备分组</span>
+            </div>
+            <div class="task-note">
+              <strong>区域组用于在数据管理中快速筛选一批设备。</strong>
+              <span>先建立区域组，再把整层、子区或单台设备加入它；公区和非公区是系统区域，不需要手动维护包含范围。</span>
+            </div>
+            <div class="form-grid">
+              <label>区域组名</label>
+              <input id="groupName" placeholder="未开放楼层 / 装修区 / 巡检区">
+              <label>用途标签</label>
+              <input id="groupArea" placeholder="例如 B座 / 未交付 / 高负荷">
+              <label>级别</label>
+              <select id="groupPriority">
+                <option>普通</option>
+                <option>关注</option>
+                <option>紧急</option>
+              </select>
+              <label>说明</label>
+              <input id="groupDescription" placeholder="用途说明">
+            </div>
+            <div class="actions">
+              <button class="primary" id="saveGroupBtn">保存区域组</button>
+              <button class="ghost" id="clearGroupBtn">新建</button>
+            </div>
+            <div class="table-wrap compact">
+              <table>
+                <thead><tr><th>区域组</th><th>用途</th><th>级别</th><th>包含范围</th><th>设备状态</th><th></th></tr></thead>
+                <tbody id="groupRows"></tbody>
+              </table>
+            </div>
+
+            <div class="panel-head subpanel-head">
+              <h3>包含范围</h3>
+              <span id="areaPreview" class="badge">选择范围后显示预览</span>
+            </div>
+            <div class="form-grid">
+              <label>加入到</label>
+              <select id="itemGroup"></select>
+              <label>范围类型</label>
+              <select id="itemTargetType">
+                <option value="floor">整层</option>
+                <option value="sub_area">子区</option>
+                <option value="device">单台设备</option>
+              </select>
+              <label>楼栋</label>
+              <select id="monitorBuilding"></select>
+              <label>楼层</label>
+              <select id="monitorFloor"></select>
+              <label>子区</label>
+              <select id="monitorSubArea"></select>
+              <label>设备</label>
+              <select id="monitorCardName"></select>
+              <label>备注</label>
+              <input id="monitorNote" placeholder="装修中 / 未交付">
+            </div>
+            <div class="actions">
+              <button class="primary" id="addGroupItemBtn">加入区域组</button>
+              <button class="ghost" id="addFloorBtn">新增楼层目录</button>
+            </div>
+            <div class="table-wrap compact">
+              <table>
+                <thead><tr><th>区域组</th><th>范围类型</th><th>包含对象</th><th>备注</th><th></th></tr></thead>
+                <tbody id="groupItemRows"></tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view" id="view-data">
+        <section class="panel">
+          <div class="panel-head">
+            <h3>设备数据</h3>
+            <div class="data-head-meta">
+              <span id="realtimeCoverageBadge" class="badge">详情 --</span>
+              <span id="cardCount" class="badge">--</span>
+              <div id="dataPager" class="pager" aria-label="数据分页">
+                <button class="ghost small" id="prevCardsPage" type="button">上一页</button>
+                <span id="cardPageInfo" class="pager-info">1 / 1</span>
+                <button class="ghost small" id="nextCardsPage" type="button">下一页</button>
+                <select id="cardPageSize" title="每页显示数量">
+                  <option value="100">100/页</option>
+                  <option value="200">200/页</option>
+                  <option value="500" selected>500/页</option>
+                  <option value="1000">1000/页</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div id="deviceWorkbench" class="device-workbench"></div>
+          <div class="filters compact-filters">
+            <div class="filter-row">
+              <div class="multi-filter" id="buildingFilter">
+                <input type="hidden" id="filterBuilding">
+                <button type="button" class="multi-filter-btn" id="buildingFilterBtn" aria-haspopup="listbox" aria-expanded="false">
+                  <span id="buildingFilterLabel">楼栋</span>
+                  <span class="multi-filter-caret">▾</span>
+                </button>
+                <div id="buildingFilterMenu" class="multi-filter-menu" role="listbox" aria-label="楼栋筛选"></div>
+              </div>
+              <div class="multi-filter" id="zuoFilter">
+                <input type="hidden" id="filterZuo">
+                <button type="button" class="multi-filter-btn" id="zuoFilterBtn" aria-haspopup="listbox" aria-expanded="false">
+                  <span id="zuoFilterLabel">座号</span>
+                  <span class="multi-filter-caret">▾</span>
+                </button>
+                <div id="zuoFilterMenu" class="multi-filter-menu" role="listbox" aria-label="座号筛选"></div>
+              </div>
+              <div class="multi-filter" id="floorFilter">
+                <input type="hidden" id="filterFloor">
+                <button type="button" class="multi-filter-btn" id="floorFilterBtn" aria-haspopup="listbox" aria-expanded="false">
+                  <span id="floorFilterLabel">楼层</span>
+                  <span class="multi-filter-caret">▾</span>
+                </button>
+                <div id="floorFilterMenu" class="multi-filter-menu wide" role="listbox" aria-label="楼层筛选"></div>
+              </div>
+                <select id="filterIssue"><option value="">健康/排查</option></select>
+              <select id="filterCommState"><option value="">通讯</option></select>
+              <select id="filterRealtimePower"><option value="">开关</option></select>
+              <select id="filterRealtimeMode"><option value="">模式</option></select>
+              <select id="filterRealtimeFan"><option value="">风速</option></select>
+              <select id="filterRealtimeMatch">
+                <option value="">纳管</option>
+                <option value="matched">实时详情可用</option>
+                <option value="missing">需人工分类</option>
+                <option value="invalid">详情字段异常</option>
+                <option value="ignored">已忽略</option>
+              </select>
+              <select id="filterRealtimeLock"><option value="">集控</option></select>
+              <select id="filterRealtimeSystem"><option value="">系统</option></select>
+              <select id="filterAreaType"><option value="">区域</option></select>
+              <select id="filterTempState"><option value="">温度</option></select>
+              <select id="filterRealtimePoints">
+                <option value="">点位</option>
+                <option value="complete">点位完整</option>
+                <option value="incomplete">点位不完整</option>
+                <option value="missing">无点位详情</option>
+              </select>
+              <input id="filterRealtimeModbus" placeholder="Modbus 地址">
+            </div>
+            <div class="filter-row">
+              <select id="filterTag">
+                <option value="">标签</option>
+                <option>重点关注</option>
+                <option>已核实</option>
+                <option>待复采</option>
+                <option>疑似错误</option>
+              </select>
+              <div class="area-filter" id="areaFilter">
+                <button type="button" class="area-filter-btn" id="areaFilterBtn" aria-haspopup="listbox" aria-expanded="false">
+                  <span id="areaFilterLabel">区域组</span>
+                  <span class="area-filter-caret">▾</span>
+                </button>
+                <div id="areaFilterTags" class="area-filter-tags"></div>
+                <div id="filterGroups" class="area-filter-menu" role="listbox" aria-label="区域筛选"></div>
+              </div>
+              <input id="filterQ" placeholder="卡名 / 子区 / 模式 / 座号">
+              <button class="ghost" id="clearFiltersBtn" hidden>清空筛选</button>
+              <button class="ghost" id="applyFilterBtn">筛选</button>
+            </div>
+          </div>
+          <div class="table-wrap data-table">
+            <table>
+              <thead>
+                <tr id="cardHeaderRow"><th>旧 Web 数据表已停用</th></tr>
+              </thead>
+              <tbody id="cardRows"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" id="view-quality">
+        <section class="panel">
+            <div class="panel-head">
+              <h3>质量审计</h3>
+              <button class="ghost small" data-task-kind="quality">运行审计</button>
+            </div>
+            <div id="qualityContent" class="quality-grid"></div>
+            <div class="subpanel-head">
+              <h3>批次管理</h3>
+              <span class="badge">异常隔离 / 恢复</span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>批次</th><th>数量</th><th>状态</th><th>质量</th><th>说明</th><th>操作</th></tr>
+                </thead>
+                <tbody id="runRows"></tbody>
+              </table>
+            </div>
+          </section>
+      </section>
+
+      <section class="view" id="view-reports">
+        <section class="panel">
+          <div class="panel-head">
+            <h3>说明 / 关于</h3>
+          </div>
+          <div class="about-grid">
+            <section class="about-card">
+              <h4>说明文档</h4>
+              <div id="helpDoc" class="doc-content"></div>
+            </section>
+            <section class="about-card">
+              <h4>关于</h4>
+              <div id="aboutInfo" class="about-list"></div>
+            </section>
+            <section class="about-card wide">
+              <h4>开发修改记录</h4>
+              <pre id="changeLogPreview" class="doc-pre">加载中...</pre>
+            </section>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <div id="deviceDetailModal" class="device-detail-modal" hidden>
+    <div class="device-detail-backdrop" data-close-device-detail></div>
+    <aside class="device-detail-panel" role="dialog" aria-modal="true" aria-labelledby="deviceDetailTitle">
+      <div class="device-detail-toolbar">
+        <strong id="deviceDetailTitle">设备详情</strong>
+        <button class="ghost small" type="button" data-close-device-detail>关闭</button>
+      </div>
+      <div id="deviceDetailContent" class="device-detail-content"></div>
+    </aside>
+  </div>
+
+  <script src="./components/ui.js"></script>
+  <script src="./components/device-health.js"></script>
+  <script src="./components/device-table.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
