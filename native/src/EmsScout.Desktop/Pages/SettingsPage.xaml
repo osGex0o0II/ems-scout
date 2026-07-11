@@ -69,8 +69,8 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <Border IsEnabled="{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}" Style="{StaticResource WorkbenchCardStyle}">
-                    <StackPanel Spacing="10">
+                <Border Style="{StaticResource WorkbenchCardStyle}">
+                    <StackPanel IsEnabled="{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}" Spacing="10">
                         <TextBlock Style="{StaticResource SectionTitleStyle}" Text="EMS 连接" />
                         <TextBox Header="EMS 地址" Text="{x:Bind ViewModel.EmsUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                         <NumberBox
@@ -85,8 +85,8 @@
                     </StackPanel>
                 </Border>
 
-                <Border Grid.Column="1" IsEnabled="{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}" Style="{StaticResource WorkbenchCardStyle}">
-                    <StackPanel Spacing="10">
+                <Border Grid.Column="1" Style="{StaticResource WorkbenchCardStyle}">
+                    <StackPanel IsEnabled="{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}" Spacing="10">
                         <TextBlock Style="{StaticResource SectionTitleStyle}" Text="目录" />
                         <Grid ColumnSpacing="8">
                             <Grid.ColumnDefinitions>
@@ -128,8 +128,8 @@
                     </StackPanel>
                 </Border>
 
-                <Border Grid.Row="1" IsEnabled="{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}" Style="{StaticResource WorkbenchCardStyle}">
-                    <StackPanel Spacing="10">
+                <Border Grid.Row="1" Style="{StaticResource WorkbenchCardStyle}">
+                    <StackPanel IsEnabled="{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}" Spacing="10">
                         <TextBlock Style="{StaticResource SectionTitleStyle}" Text="采集行为" />
                         <ComboBox Header="默认采集模式" SelectedIndex="{x:Bind ViewModel.DefaultCollectionModeIndex, Mode=TwoWay}">
                             <ComboBoxItem Content="Edge CDP" />
