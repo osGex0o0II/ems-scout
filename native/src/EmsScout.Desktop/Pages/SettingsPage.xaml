@@ -70,78 +70,90 @@
                 </Grid.RowDefinitions>
 
                 <Border Style="{StaticResource WorkbenchCardStyle}">
-                    <StackPanel IsEnabled="{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}" Spacing="10">
-                        <TextBlock Style="{StaticResource SectionTitleStyle}" Text="EMS 连接" />
-                        <TextBox Header="EMS 地址" Text="{x:Bind ViewModel.EmsUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                        <NumberBox
-                            Header="Edge CDP 端口"
-                            LargeChange="100"
-                            Minimum="1"
-                            Maximum="65535"
-                            SmallChange="1"
-                            SpinButtonPlacementMode="Inline"
-                            Value="{x:Bind ViewModel.EdgeCdpPort, Mode=TwoWay}" />
-                        <ToggleSwitch Header="启动采集前检查登录态" IsOn="{x:Bind ViewModel.CheckLoginBeforeCollection, Mode=TwoWay}" />
-                    </StackPanel>
+                    <ContentControl
+                        HorizontalContentAlignment="Stretch"
+                        IsEnabled="{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}">
+                        <StackPanel Spacing="10">
+                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="EMS 连接" />
+                            <TextBox Header="EMS 地址" Text="{x:Bind ViewModel.EmsUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                            <NumberBox
+                                Header="Edge CDP 端口"
+                                LargeChange="100"
+                                Minimum="1"
+                                Maximum="65535"
+                                SmallChange="1"
+                                SpinButtonPlacementMode="Inline"
+                                Value="{x:Bind ViewModel.EdgeCdpPort, Mode=TwoWay}" />
+                            <ToggleSwitch Header="启动采集前检查登录态" IsOn="{x:Bind ViewModel.CheckLoginBeforeCollection, Mode=TwoWay}" />
+                        </StackPanel>
+                    </ContentControl>
                 </Border>
 
                 <Border Grid.Column="1" Style="{StaticResource WorkbenchCardStyle}">
-                    <StackPanel IsEnabled="{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}" Spacing="10">
-                        <TextBlock Style="{StaticResource SectionTitleStyle}" Text="目录" />
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <TextBox Header="数据目录" Text="{x:Bind ViewModel.DataDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                            <Button
-                                Grid.Column="1"
-                                VerticalAlignment="Bottom"
-                                Click="PickDataDirectory_Click"
-                                Style="{StaticResource ToolbarButtonStyle}"
-                                ToolTipService.ToolTip="选择数据目录">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <SymbolIcon Symbol="OpenFile" />
-                                    <TextBlock Text="选择" />
-                                </StackPanel>
-                            </Button>
-                        </Grid>
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <TextBox Header="导出目录" Text="{x:Bind ViewModel.ExportDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                            <Button
-                                Grid.Column="1"
-                                VerticalAlignment="Bottom"
-                                Click="PickExportDirectory_Click"
-                                Style="{StaticResource ToolbarButtonStyle}"
-                                ToolTipService.ToolTip="选择导出目录">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <SymbolIcon Symbol="OpenFile" />
-                                    <TextBlock Text="选择" />
-                                </StackPanel>
-                            </Button>
-                        </Grid>
-                        <ToggleSwitch Header="跟踪最近 Excel 导出" IsOn="{x:Bind ViewModel.TrackRecentExports, Mode=TwoWay}" />
-                    </StackPanel>
+                    <ContentControl
+                        HorizontalContentAlignment="Stretch"
+                        IsEnabled="{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}">
+                        <StackPanel Spacing="10">
+                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="目录" />
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox Header="数据目录" Text="{x:Bind ViewModel.DataDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <Button
+                                    Grid.Column="1"
+                                    VerticalAlignment="Bottom"
+                                    Click="PickDataDirectory_Click"
+                                    Style="{StaticResource ToolbarButtonStyle}"
+                                    ToolTipService.ToolTip="选择数据目录">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <SymbolIcon Symbol="OpenFile" />
+                                        <TextBlock Text="选择" />
+                                    </StackPanel>
+                                </Button>
+                            </Grid>
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox Header="导出目录" Text="{x:Bind ViewModel.ExportDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <Button
+                                    Grid.Column="1"
+                                    VerticalAlignment="Bottom"
+                                    Click="PickExportDirectory_Click"
+                                    Style="{StaticResource ToolbarButtonStyle}"
+                                    ToolTipService.ToolTip="选择导出目录">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <SymbolIcon Symbol="OpenFile" />
+                                        <TextBlock Text="选择" />
+                                    </StackPanel>
+                                </Button>
+                            </Grid>
+                            <ToggleSwitch Header="跟踪最近 Excel 导出" IsOn="{x:Bind ViewModel.TrackRecentExports, Mode=TwoWay}" />
+                        </StackPanel>
+                    </ContentControl>
                 </Border>
 
                 <Border Grid.Row="1" Style="{StaticResource WorkbenchCardStyle}">
-                    <StackPanel IsEnabled="{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}" Spacing="10">
-                        <TextBlock Style="{StaticResource SectionTitleStyle}" Text="采集行为" />
-                        <ComboBox Header="默认采集模式" SelectedIndex="{x:Bind ViewModel.DefaultCollectionModeIndex, Mode=TwoWay}">
-                            <ComboBoxItem Content="Edge CDP" />
-                            <ComboBoxItem Content="自动启动 Edge" />
-                        </ComboBox>
-                        <ComboBox Header="日志级别" SelectedIndex="{x:Bind ViewModel.LogLevelIndex, Mode=TwoWay}">
-                            <ComboBoxItem Content="ERROR" />
-                            <ComboBoxItem Content="INFO" />
-                            <ComboBoxItem Content="DEBUG" />
-                        </ComboBox>
-                        <ToggleSwitch Header="保存 NDJSON 日志" IsOn="{x:Bind ViewModel.SaveNdjsonLog, Mode=TwoWay}" />
-                    </StackPanel>
+                    <ContentControl
+                        HorizontalContentAlignment="Stretch"
+                        IsEnabled="{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}">
+                        <StackPanel Spacing="10">
+                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="采集行为" />
+                            <ComboBox Header="默认采集模式" SelectedIndex="{x:Bind ViewModel.DefaultCollectionModeIndex, Mode=TwoWay}">
+                                <ComboBoxItem Content="Edge CDP" />
+                                <ComboBoxItem Content="自动启动 Edge" />
+                            </ComboBox>
+                            <ComboBox Header="日志级别" SelectedIndex="{x:Bind ViewModel.LogLevelIndex, Mode=TwoWay}">
+                                <ComboBoxItem Content="ERROR" />
+                                <ComboBoxItem Content="INFO" />
+                                <ComboBoxItem Content="DEBUG" />
+                            </ComboBox>
+                            <ToggleSwitch Header="保存 NDJSON 日志" IsOn="{x:Bind ViewModel.SaveNdjsonLog, Mode=TwoWay}" />
+                        </StackPanel>
+                    </ContentControl>
                 </Border>
 
                 <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource WorkbenchCardStyle}">
