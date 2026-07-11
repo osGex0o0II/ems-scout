@@ -1,4 +1,86 @@
 ================================================================================
+修改记录 — 2026-07-11 16:04
+===============================================================================
+
+一、Excel 与生产数据隔离
+
+- Excel 测试增加工作表名、12 列标题与顺序、筛选行数、中文、XML 转义、公式文本、空值、`2.5F`/`B1F`/`BM`、空结果和 50,000 行上限。
+- 新增 `ProductionDataSnapshot`，仓储、实时、对账和 Excel 基线测试只通过 SQLite 打开生产库的字节副本。
+- 临时 DB ExportSmoke 与 `xlsx` 内容读取通过；生产 DB/WAL/SHM 哈希未变化。
+
+二、采集任务拆分
+
+- `CollectionTaskViewModel` 从 2011 行降到 1703 行。
+- Node/Playwright/CDP 环境探测移到 `CollectionEnvironmentProbe`。
+- NDJSON 进度解析移到 `CollectionProgressPresenter`，实时对账展示行移到独立文件。
+- 新增架构守卫，禁止环境探测和进度解析回流 ViewModel。
+
+三、错误与日志
+
+- 新增 9 类应用错误、稳定错误码、安全用户文案、建议操作和可重试标记。
+- Desktop 异常边界不再直接展示 `ex.Message`；Sidecar 非成功终态使用专用 `WorkflowExecutionException`。
+- 新增原生 NDJSON logger，记录时间、级别、类别、事件、工作流、阶段、错误码、重试性和异常。
+- 日志支持用户目录、Bearer token、敏感查询参数/字段脱敏，超长截断和并发写入；诊断页可发现原生日志。
+- 修复 Windows Sidecar payload 漏打包枚举拆分模块的问题，smoke 现在实际加载全部新模块，并由架构测试守卫。
+
+四、文档与验证
+
+- 重写架构、状态、交接和上下文快照，删除 2026-06-07 的 6685 卡旧口径及多数派通讯推断。
+- 当前通讯状态文档与 `IND_MAP` 一致：绿色关机、红色开机、灰色离线，未知不猜测。
+- .NET 208/208、Node 73/73、`npm run self-test` 通过；Infrastructure 0 warning/0 error。
+- macOS 仍不能执行 Windows XamlCompiler，WinUI/MSIX/真实 EMS 验收保持未完成。
+
+================================================================================
+================================================================================
+修改记录 — 2026-07-11 13:50
+===============================================================================
+
+一、数据库结构所有权收口
+
+- 删除 `SqliteAreaGroupRepository`、`SqliteDeviceAnnotationService`、`SqliteDeviceWatchRepository` 的运行时建表，以及 `SqliteCollectionRunRepository` 的运行时加列。
+- 新增 `SqliteSchemaGuard`：未迁移数据库会明确失败并提示先运行版本迁移，不再由业务操作静默改变 schema。
+- 新增架构测试，禁止 `EmsScout.Infrastructure/Migrations` 之外的 C# 出现 `CREATE TABLE` / `ALTER TABLE`。
+- 修正此前运行时 `floor_catalog.floor_value REAL NOT NULL` 与 v1 迁移 `REAL` 不一致导致的结构分叉。
+
+二、路径和时间语义修正
+
+- 总览数据时间优先取最新 completed 采集批次的 `imported_at`/`completed_at`，无批次时才回退主库 mtime，避免 WAL 下显示旧时间。
+- 采集任务开始后冻结数据目录，枚举、CollectionSnapshot、原生导入、质量和实时脚本使用同一绝对路径，避免运行中设置变化造成跨目录读写。
+- 原生质量请求支持显式数据库路径；设置切换到已有 `ac.db` 前先运行版本迁移，迁移失败时不保存新目录。
+
+三、验证
+
+- .NET：160/160 通过。
+- Node Sidecar、契约、架构、field-E2E 静态测试：40/40 通过。
+- DataTool、SchemaTool、ExportSmoke Release：0 warning、0 error。
+- `dotnet format --verify-no-changes` 通过，仅保留既有 workspace-load warning。
+
+================================================================================
+================================================================================
+修改记录 — 2026-07-11 11:35
+===============================================================================
+
+一、产品与数据主干重构
+
+- 确立 C#/.NET 10 为 WinUI、SQLite、质量、对账和 Excel 产品主干；Node 仅保留 Playwright/Edge CDP Sidecar。
+- 新增 CollectionSnapshot、WorkflowEvent、WorkflowControl 三份 v1 契约，Sidecar stdout 使用严格 NDJSON，取消协议拥有唯一 terminal event。
+- 新增 C# v0/v1/v2 SQLite 迁移、fresh DB 创建、稳定 device UID/source key、alias 与 ambiguity ledger；导入支持 shadow、显式 apply、事务回滚和用户数据保全。
+- 原生质量审计取代 Node 基础质量主路径；WinUI 直接读取/导入 CollectionSnapshot，质量已连接 `SqliteQualityAuditService`。
+- 默认数据目录迁至 LocalAppData；首次启动可从 legacy `out` 使用 SQLite Backup API 做 WAL-safe 迁移，不删除旧数据；系统设置提供显式选择旧 `out` 目录的迁移入口。
+
+二、现场与发行链路
+
+- `field-e2e.ps1` 改为 runner NDJSON -> collect -> CollectionSnapshot -> DataTool -> 原生质量 -> 临时 DB Excel 烟测，现场路径不再运行 Node import/quality/validate。
+- 现场始终使用唯一 runDir、随机 loopback CDP、独立 Edge profile 和默认清理；生产 DB/WAL/SHM 仅做 metadata/SHA-256 守护。
+- 新增 Windows x64 CI、Node Sidecar payload 打包、MSIX package 脚本和 Schema/Data CLI。
+
+三、验证与边界
+
+- Node 测试 35/35、.NET 测试 159/159、DataTool/SchemaTool Release 0 warning/0 error、NuGet vulnerability audit 0。
+- run17 临时库 parity：6568 unique cards、373 pages、3 blocking issues、7 nonblocking known findings。
+- 尚未在真实已登录 EMS 或干净 Windows 安装机上跑完整现场/安装包烟测；legacy 代码继续保留，不能据此声称删除条件已满足。
+
+================================================================================
 ================================================================================
 修改记录 — 2026-07-10 15:05
 ===============================================================================
