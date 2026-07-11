@@ -1,0 +1,280 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ems-scout:workflow-event:v1",
+  "title": "EMS Scout WorkflowEvent v1",
+  "description": "One UTF-8 NDJSON workflow event. Standard output contains only these events; human-readable logs belong on standard error.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/started"
+    },
+    {
+      "$ref": "#/$defs/progressEvent"
+    },
+    {
+      "$ref": "#/$defs/actionEvent"
+    },
+    {
+      "$ref": "#/$defs/terminal"
+    }
+  ],
+  "$defs": {
+    "contractVersion": {
+      "const": "ems.workflow-event/v1"
+    },
+    "workflowId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "seq": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$"
+    },
+    "stage": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "started": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "const": "ems.workflow-event/v1"
+        },
+        "workflowId": {
+          "$ref": "#/$defs/workflowId"
+        },
+        "seq": {
+          "$ref": "#/$defs/seq"
+        },
+        "timestamp": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "type": {
+          "const": "started"
+        },
+        "stage": {
+          "$ref": "#/$defs/stage"
+        },
+        "message": {
+          "$ref": "#/$defs/message"
+        }
+      },
+      "required": [
+        "contractVersion",
+        "workflowId",
+        "seq",
+        "timestamp",
+        "type",
+        "stage"
+      ],
+      "additionalProperties": false
+    },
+    "progress": {
+      "type": "object",
+      "properties": {
+        "percent": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "current": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "data": {
+          "type": "object"
+        }
+      },
+      "minProperties": 1,
+      "additionalProperties": false
+    },
+    "progressEvent": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "const": "ems.workflow-event/v1"
+        },
+        "workflowId": {
+          "$ref": "#/$defs/workflowId"
+        },
+        "seq": {
+          "$ref": "#/$defs/seq"
+        },
+        "timestamp": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "type": {
+          "const": "progress"
+        },
+        "stage": {
+          "$ref": "#/$defs/stage"
+        },
+        "message": {
+          "$ref": "#/$defs/message"
+        },
+        "progress": {
+          "$ref": "#/$defs/progress"
+        }
+      },
+      "required": [
+        "contractVersion",
+        "workflowId",
+        "seq",
+        "timestamp",
+        "type",
+        "stage",
+        "progress"
+      ],
+      "additionalProperties": false
+    },
+    "actionEvent": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "const": "ems.workflow-event/v1"
+        },
+        "workflowId": {
+          "$ref": "#/$defs/workflowId"
+        },
+        "seq": {
+          "$ref": "#/$defs/seq"
+        },
+        "timestamp": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "type": {
+          "const": "action"
+        },
+        "stage": {
+          "$ref": "#/$defs/stage"
+        },
+        "message": {
+          "$ref": "#/$defs/message"
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+        }
+      },
+      "required": [
+        "contractVersion",
+        "workflowId",
+        "seq",
+        "timestamp",
+        "type",
+        "stage",
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "terminal": {
+      "type": "object",
+      "properties": {
+        "contractVersion": {
+          "const": "ems.workflow-event/v1"
+        },
+        "workflowId": {
+          "$ref": "#/$defs/workflowId"
+        },
+        "seq": {
+          "$ref": "#/$defs/seq"
+        },
+        "timestamp": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "type": {
+          "const": "terminal"
+        },
+        "stage": {
+          "$ref": "#/$defs/stage"
+        },
+        "message": {
+          "$ref": "#/$defs/message"
+        },
+        "outcome": {
+          "enum": [
+            "succeeded",
+            "succeeded_with_findings",
+            "rejected",
+            "auth_required",
+            "cancelled",
+            "internal_error"
+          ]
+        },
+        "exitCode": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 255
+        }
+      },
+      "required": [
+        "contractVersion",
+        "workflowId",
+        "seq",
+        "timestamp",
+        "type",
+        "stage",
+        "outcome",
+        "exitCode"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "outcome": {
+                "const": "succeeded"
+              }
+            },
+            "required": [
+              "outcome"
+            ]
+          },
+          "then": {
+            "properties": {
+              "exitCode": {
+                "type": "integer",
+                "const": 0
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "exitCode": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

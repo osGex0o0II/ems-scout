@@ -10,7 +10,7 @@
     "enum:edge:append": "node src/enumerate.js --edge --append",
     "enum:edge:dry": "node src/enumerate.js --edge --dry",
     "collect": "node src/collect.js",
-    "quality": "node scripts/quality-report.js",
+    "legacy:quality": "node scripts/quality-report.js",
     "legacy:panel": "node scripts/legacy-gate.js EMS_ENABLE_LEGACY_PANEL legacy-web-panel && node src/panel/server.js",
     "legacy:desktop": "node scripts/legacy-gate.js EMS_ENABLE_LEGACY_PANEL legacy-electron-desktop && electron .",
     "native:run": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-native.ps1",

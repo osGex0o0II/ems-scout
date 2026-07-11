@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "runId": 17,
+  "completedAt": "2026-07-10T06:52:48.242Z",
+  "sources": {
+    "enumerationSha256": "80c5f175b043387beb36fb64e4b0b573c919141ed9a32ef416af174e1d205716",
+    "databaseSha256": "7bf26085ac5d8d0259c29bdcfdaaa72ce6cc4f31bacb478e20f5c72118350cda",
+    "legacyQualityReportSha256": "3c164fa0d0c9aaf3ffbb9e8eb55a4b20c9ee686eeb3543f5879ddcb3641ea2f3"
+  },
+  "snapshotCounts": {
+    "buildingCount": 6,
+    "subAreaCount": 143,
+    "pageCount": 373,
+    "rawCardCount": 6571,
+    "uniqueCardCount": 6568
+  },
+  "status": { "开机": 1843, "关机": 3196, "离线": 1527, "未知": 2 },
+  "qualityReasons": {
+    "quality_pass": 356,
+    "offline_template_stable": 5,
+    "device_anomalies_preserved": 11,
+    "known_source_indicator_missing": 1
+  },
+  "buildings": {
+    "1号": { "subAreas": 30, "pages": 86, "rawCards": 1493, "uniqueCards": 1493, "status": { "开机": 397, "关机": 985, "离线": 111 } },
+    "2号": { "subAreas": 5, "pages": 8, "rawCards": 110, "uniqueCards": 107, "status": { "开机": 43, "关机": 61, "离线": 1, "未知": 2 } },
+    "3号": { "subAreas": 30, "pages": 58, "rawCards": 1106, "uniqueCards": 1106, "status": { "开机": 237, "关机": 436, "离线": 433 } },
+    "4号": { "subAreas": 30, "pages": 57, "rawCards": 1096, "uniqueCards": 1096, "status": { "开机": 132, "关机": 275, "离线": 689 } },
+    "5号": { "subAreas": 17, "pages": 25, "rawCards": 286, "uniqueCards": 286, "status": { "开机": 119, "关机": 144, "离线": 23 } },
+    "6号": { "subAreas": 31, "pages": 139, "rawCards": 2480, "uniqueCards": 2480, "status": { "开机": 915, "关机": 1295, "离线": 270 } }
+  },
+  "nativeAudit": {
+    "totalCards": 6568,
+    "issueCount": 3,
+    "knownFindings": 7,
+    "blockingKnownFindings": 0,
+    "nonBlockingKnownFindings": 7,
+    "unknownCommunication": 2,
+    "missingIndicator": 2,
+    "duplicateRenderedPages": 1,
+    "inlineSubAreas": 1,
+    "uniformResolvedPages": 5,
+    "detectedOfflineTemplateStable": 5,
+    "offlineTemplateStable": 4,
+    "detectedInvalidCardFields": 11,
+    "invalidCardFields": 10,
+    "detectedActiveFieldIncompletePages": 11,
+    "activeFieldIncompletePages": 10,
+    "issues": {
+      "offline_template_stable": 4,
+      "invalid_card_fields": 10,
+      "active_field_incomplete_pages": 10
+    }
+  }
+}

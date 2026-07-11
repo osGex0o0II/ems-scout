@@ -82,6 +82,7 @@ function testRules() {
   assert(!checkCardQuality(missingActiveFields).ok, '开机/关机设备字段缺失应失败');
   assert(!checkCardQuality(offlineTemplate).ok, '全离线默认模板不应作为 quality_pass 通过');
   assert(isAcceptedCaptureQualityReason('offline_template_stable'), '稳定全离线模板应通过最终采集门槛');
+  assert(!isAcceptedCaptureQualityReason('all_offline'), '全离线不能绕过页面质量证据');
   assert(!isAcceptedCaptureQualityReason('stable_partial'), '通讯状态缺失的稳定部分页必须继续阻断');
   assert(isAcceptedCaptureQualityReason('device_anomalies_preserved'), '稳定的有界设备异常应通过最终采集门槛');
   assert(isAcceptedCaptureQualityReason('known_source_indicator_missing'), '精确登记的 EMS indicator 缺失设备应通过最终采集门槛');
