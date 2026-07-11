@@ -1,0 +1,116 @@
+{
+  "contractVersion": "ems-schema-fixture-manifest/v1",
+  "recordedAt": "2026-07-11",
+  "artifacts": [
+    {
+      "id": "legacy-four-table-building-1",
+      "path": "data/1号楼/ac.db",
+      "kind": "sqlite",
+      "size": 675840,
+      "sha256": "ae816210142c02c69434c57268b68f892ad6c7a1010767b444d94b653c59a7ec",
+      "schema": {
+        "userVersion": 0,
+        "tableCount": 4,
+        "shape": "legacy-core-v0"
+      },
+      "expected": {
+        "cardCount": 1493,
+        "foreignKeyViolations": 30
+      }
+    },
+    {
+      "id": "legacy-four-table-building-2",
+      "path": "data/2号楼/ac.db",
+      "kind": "sqlite",
+      "size": 675840,
+      "sha256": "2a8883f5bd2cc424d3cba1e695b58c452d30c38cb34311c355eeec5a2480c0e2",
+      "schema": {
+        "userVersion": 0,
+        "tableCount": 4,
+        "shape": "legacy-core-v0"
+      },
+      "expected": {
+        "cardCount": 1603,
+        "foreignKeyViolations": 35
+      }
+    },
+    {
+      "id": "field-e2e-nineteen-table",
+      "path": "out/e2e_tmp_ac.db",
+      "kind": "sqlite",
+      "size": 2191360,
+      "sha256": "fad02c882ee077831e15c9bcde4ce9de74db9d6a6f046b8b1df2d30de732e83d",
+      "schema": {
+        "userVersion": 0,
+        "tableCount": 19,
+        "shape": "node-history-v0"
+      },
+      "expected": {
+        "cardCount": 6568,
+        "foreignKeyViolations": 0
+      }
+    },
+    {
+      "id": "pre-import-twenty-table",
+      "path": "out/ac_before_full_import_20260710_144208.db",
+      "kind": "sqlite",
+      "size": 13406208,
+      "sha256": "372d7dc7adeb3bc94a8226976d1256c9f0dd33727fde35b02fc9e6cba54d37af",
+      "schema": {
+        "userVersion": 0,
+        "tableCount": 20,
+        "shape": "native-watch-v0-pre-quality"
+      },
+      "expected": {
+        "cardCount": 6568,
+        "foreignKeyViolations": 0
+      }
+    },
+    {
+      "id": "production-run-17",
+      "path": "out/ac.db",
+      "kind": "sqlite",
+      "size": 17272832,
+      "sha256": "7bf26085ac5d8d0259c29bdcfdaaa72ce6cc4f31bacb478e20f5c72118350cda",
+      "schema": {
+        "userVersion": 0,
+        "tableCount": 20,
+        "shape": "production-run17-v0"
+      },
+      "expected": {
+        "latestRunId": 17,
+        "cardCount": 6568,
+        "foreignKeyViolations": 0,
+        "deviceNotes": 1,
+        "customGroups": 1,
+        "customGroupMembers": 3,
+        "realtimeOverrides": 7,
+        "danglingTargetCardIds": 5
+      }
+    },
+    {
+      "id": "collection-snapshot-run-17",
+      "path": "out/enum_full_v5.json",
+      "kind": "collection-json",
+      "size": 2625217,
+      "sha256": "80c5f175b043387beb36fb64e4b0b573c919141ed9a32ef416af174e1d205716",
+      "expected": {
+        "buildingCount": 6,
+        "cardCount": 6568,
+        "internalNameFloorFields": 2664
+      }
+    },
+    {
+      "id": "quality-report-run-17",
+      "path": "out/quality_report_run17.json",
+      "kind": "quality-json",
+      "size": 30845,
+      "sha256": "3c164fa0d0c9aaf3ffbb9e8eb55a4b20c9ee686eeb3543f5879ddcb3641ea2f3",
+      "expected": {
+        "runId": 17,
+        "cardCount": 6568,
+        "blockingIssueKinds": 3
+      }
+    }
+  ]
+}
