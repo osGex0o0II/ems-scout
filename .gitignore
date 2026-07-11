@@ -15,3 +15,12 @@ out/
 # Native WinUI rebuild outputs
 native/**/bin/
 native/**/obj/
+native/**/TestResults/
+
+# Local dependency and package outputs
+node_modules/
+dist/
+artifacts/
+
+# OS/editor metadata
+.DS_Store

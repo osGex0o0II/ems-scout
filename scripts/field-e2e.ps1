@@ -52,6 +52,7 @@ function Get-FileSnapshot {
         FullName = Resolve-FullPath $Path
         Length = $item.Length
         LastWriteTimeUtc = $item.LastWriteTimeUtc.ToString("o")
+        Sha256 = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
     }
 }
 
@@ -74,8 +75,10 @@ function Assert-FileSnapshotUnchanged {
     }
 
     $after = Get-FileSnapshot $Path
-    if ($Before.Length -ne $after.Length -or $Before.LastWriteTimeUtc -ne $after.LastWriteTimeUtc) {
-        throw "$Label changed during field E2E. Before length=$($Before.Length) mtime=$($Before.LastWriteTimeUtc); after length=$($after.Length) mtime=$($after.LastWriteTimeUtc)"
+    if ($Before.Length -ne $after.Length -or
+        $Before.LastWriteTimeUtc -ne $after.LastWriteTimeUtc -or
+        $Before.Sha256 -ne $after.Sha256) {
+        throw "$Label changed during field E2E. Before length=$($Before.Length) mtime=$($Before.LastWriteTimeUtc) sha256=$($Before.Sha256); after length=$($after.Length) mtime=$($after.LastWriteTimeUtc) sha256=$($after.Sha256)"
     }
 }
 
@@ -85,6 +88,7 @@ function Invoke-Checked {
         [string]$FileName,
         [string[]]$Arguments,
         [hashtable]$Environment = @{},
+        [string]$OutputPath = "",
         [switch]$AllowFailure
     )
 
@@ -99,7 +103,26 @@ function Invoke-Checked {
 
     try {
         Write-Host ("> " + $FileName + " " + ($Arguments -join " "))
-        & $FileName @Arguments
+        if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+            & $FileName @Arguments
+        }
+        else {
+            $outputFullPath = Resolve-FullPath $OutputPath
+            $outputParent = Split-Path -Parent $outputFullPath
+            New-Item -ItemType Directory -Force -Path $outputParent | Out-Null
+            $capturedOutput = @(& $FileName @Arguments)
+            $outputText = $capturedOutput -join [Environment]::NewLine
+            if ($capturedOutput.Count -gt 0) {
+                $outputText += [Environment]::NewLine
+            }
+            [System.IO.File]::WriteAllText(
+                $outputFullPath,
+                $outputText,
+                [System.Text.UTF8Encoding]::new($false))
+            foreach ($line in $capturedOutput) {
+                Write-Host ([string]$line)
+            }
+        }
         $code = $LASTEXITCODE
         if ($null -eq $code) { $code = 0 }
         if ($script:FieldE2EManifestPath) {
@@ -111,6 +134,7 @@ function Invoke-Checked {
                 ended_at = (Get-Date).ToUniversalTime().ToString("o")
                 exit_code = $code
                 allow_failure = $AllowFailure.IsPresent
+                output_path = $(if ([string]::IsNullOrWhiteSpace($OutputPath)) { $null } else { Resolve-FullPath $OutputPath })
             }
         }
         if ($code -ne 0 -and -not $AllowFailure) {
@@ -176,6 +200,59 @@ function Add-RunManifestStage {
     $stages += [pscustomobject]$Stage
     $manifest["stages"] = $stages
     $manifest | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
+function Assert-WorkflowEventStream {
+    param(
+        [string]$Path,
+        [string]$WorkflowId
+    )
+
+    if (-not (Test-Path $Path)) {
+        throw "WorkflowEvent stream was not created: $Path"
+    }
+    $lines = @(Get-Content -LiteralPath $Path | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($lines.Count -lt 2) {
+        throw "WorkflowEvent stream must contain started and terminal events: $Path"
+    }
+
+    $startedCount = 0
+    $terminalCount = 0
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        try {
+            $event = $lines[$index] | ConvertFrom-Json
+        }
+        catch {
+            throw "WorkflowEvent line $($index + 1) is not valid JSON: $($_.Exception.Message)"
+        }
+        if ($event.contractVersion -ne "ems.workflow-event/v1") {
+            throw "WorkflowEvent line $($index + 1) has unsupported contractVersion."
+        }
+        if ($event.workflowId -ne $WorkflowId) {
+            throw "WorkflowEvent line $($index + 1) does not match workflow $WorkflowId."
+        }
+        if ([int]$event.seq -ne ($index + 1)) {
+            throw "WorkflowEvent sequence is not contiguous at line $($index + 1)."
+        }
+        if ($event.type -eq "started") {
+            $startedCount++
+            if ($index -ne 0) {
+                throw "WorkflowEvent started must be the first event."
+            }
+        }
+        if ($event.type -eq "terminal") {
+            $terminalCount++
+            if ($index -ne ($lines.Count - 1)) {
+                throw "WorkflowEvent terminal must be the final event."
+            }
+            if ($event.outcome -ne "succeeded") {
+                throw "Collection workflow terminal outcome is $($event.outcome)."
+            }
+        }
+    }
+    if ($startedCount -ne 1 -or $terminalCount -ne 1) {
+        throw "WorkflowEvent stream must start once and end with exactly one terminal event."
+    }
 }
 
 function Test-CdpEndpoint {
@@ -463,8 +540,14 @@ $qualityDir = Join-Path $runDir "quality"
 $exportDir = Join-Path $runDir "export"
 $edgeProfileDir = Join-Path $runDir ".edge_profile"
 $jsonPath = Join-Path $runDir "enum_full_v5.json"
+$snapshotPath = Join-Path $runDir "collection_snapshot_v1.json"
 $dbPath = Join-Path $runDir "ac.db"
+$validateReportPath = Join-Path $runDir "snapshot-validation.json"
+$importReportPath = Join-Path $runDir "snapshot-import.json"
+$qualityReportPath = Join-Path $qualityDir "native-quality-audit.json"
+$workflowEventsPath = Join-Path $runDir "collection-workflow-events.ndjson"
 $manifestPath = Join-Path $runDir "manifest.json"
+$workflowId = "field-e2e-$stamp-$runSuffix"
 $script:FieldE2EManifestPath = $manifestPath
 $productionDb = Join-Path $root "out\ac.db"
 $productionDbSnapshots = @(
@@ -476,6 +559,7 @@ $productionDbSnapshots = @(
 New-Item -ItemType Directory -Force -Path $runDir, $qualityDir, $exportDir | Out-Null
 Assert-NotProductionPath $dbPath $productionDb "EMS_DB_PATH"
 Assert-NotProductionPath $jsonPath (Join-Path $root "out\enum_full_v5.json") "EMS_JSON_PATH"
+Assert-NotProductionPath $snapshotPath (Join-Path $root "out\collection_snapshot_v1.json") "EMS_SNAPSHOT_PATH"
 
 Write-Host "Field E2E run dir: $runDir"
 if ($PrepareLoginSession -and -not $LaunchEdge) {
@@ -492,6 +576,7 @@ Update-RunManifest $manifestPath @{
     building = $Building
     run_single_building = $RunSingleBuilding.IsPresent
     run_all_buildings = $RunAllBuildings.IsPresent
+    workflow_id = $workflowId
     launch_edge = $LaunchEdge.IsPresent
     prepare_login_session = $PrepareLoginSession.IsPresent
     skip_verify = $SkipVerify.IsPresent
@@ -500,6 +585,7 @@ Update-RunManifest $manifestPath @{
 }
 
 $launchedEdge = $false
+$primaryErrorMessage = $null
 try {
     if ($RunSingleBuilding -and $RunAllBuildings) {
         throw "Choose either -RunSingleBuilding or -RunAllBuildings, not both."
@@ -559,6 +645,8 @@ try {
     $nodeEnv = @{
         EMS_OUT_DIR = $runDir
         EMS_JSON_PATH = $jsonPath
+        EMS_SNAPSHOT_PATH = $snapshotPath
+        EMS_WORKFLOW_ID = $workflowId
         EMS_DB_PATH = $dbPath
         EMS_QUALITY_OUT = $qualityDir
         EMS_URL = $EmsUrl
@@ -590,7 +678,6 @@ try {
     }
 
     $enumArgs = @(
-        "src\enumerate.js",
         "--edge",
         "--out-dir=$runDir",
         "--ems-url=$EmsUrl",
@@ -607,25 +694,75 @@ try {
     if ($RunSingleBuilding) {
         $collectionLabel = "Single-building collection"
     }
-    Invoke-Checked $collectionLabel "node" $enumArgs $nodeEnv
+    $sidecarArgs = @(
+        "sidecar\runner.js",
+        "--workflow-id=$workflowId",
+        "--stage=collect",
+        "--",
+        "node",
+        "sidecar\collect.js"
+    ) + $enumArgs
+    Invoke-Checked "$collectionLabel via CollectionSnapshot sidecar" "node" $sidecarArgs $nodeEnv -OutputPath $workflowEventsPath
+    Assert-WorkflowEventStream $workflowEventsPath $workflowId
     if (-not (Test-Path $jsonPath)) {
-        throw "Collection did not create temp JSON: $jsonPath"
+        throw "Collection did not preserve legacy evidence JSON: $jsonPath"
+    }
+    if (-not (Test-Path $snapshotPath)) {
+        throw "Collection sidecar did not create CollectionSnapshot v1: $snapshotPath"
+    }
+    if (Test-Path $dbPath) {
+        throw "Fresh field E2E database path already exists: $dbPath"
     }
 
-    $validateArgs = @("scripts\validate-enum.js")
-    $importArgs = @("scripts\import.js")
-    if ($RunSingleBuilding) {
-        $validateArgs += "--bldg=$Building"
-        $importArgs += "--bldg=$Building"
+    $dataToolProject = "native\tools\EmsScout.DataTool\EmsScout.DataTool.csproj"
+    $dataToolDll = Join-Path $root "native\tools\EmsScout.DataTool\bin\Debug\net10.0\EmsScout.DataTool.dll"
+    Invoke-Checked "Build native CollectionSnapshot data tool" "dotnet" @(
+        "build",
+        $dataToolProject,
+        "-c",
+        "Debug",
+        "--no-restore",
+        "/p:UseSharedCompilation=false"
+    )
+    if (-not (Test-Path $dataToolDll)) {
+        throw "DataTool build did not create: $dataToolDll"
     }
-    Invoke-Checked "Validate temp enum JSON" "node" $validateArgs $nodeEnv
-    Invoke-Checked "Import into temp SQLite" "node" $importArgs $nodeEnv
+
+    $validateArgs = @(
+        $dataToolDll,
+        "validate",
+        "--snapshot=$snapshotPath",
+        "--json"
+    )
+    $importArgs = @(
+        $dataToolDll,
+        "import",
+        "--snapshot=$snapshotPath",
+        "--db=$dbPath",
+        "--apply",
+        "--json"
+    )
+    if ($RunSingleBuilding) {
+        $validateArgs += "--buildings=$Building"
+        $importArgs += "--buildings=$Building"
+    }
+    Invoke-Checked "Validate CollectionSnapshot v1" "dotnet" $validateArgs -OutputPath $validateReportPath
+    Invoke-Checked "Transactional import into fresh temp SQLite" "dotnet" $importArgs -OutputPath $importReportPath
     if (-not (Test-Path $dbPath)) {
         throw "Import did not create temp DB: $dbPath"
     }
     Assert-NotProductionPath $dbPath $productionDb "EMS_DB_PATH"
 
-    Invoke-Checked "Quality report on temp DB" "node" @("scripts\quality-report.js", "--run-id=latest-run") $nodeEnv
+    $knownFindingsPath = Join-Path $root "config\quality-known-findings.json"
+    $qualityArgs = @(
+        $dataToolDll,
+        "audit",
+        "--db=$dbPath",
+        "--source=latest",
+        "--known-findings=$knownFindingsPath",
+        "--json"
+    )
+    $qualityExitCode = Invoke-Checked "Native SQLite quality audit" "dotnet" $qualityArgs -OutputPath $qualityReportPath -AllowFailure
 
     $exportArgs = @(
         "run",
@@ -645,6 +782,9 @@ try {
         $exportArgs += "--building=$Building"
     }
     Invoke-Checked "Excel export smoke" "dotnet" $exportArgs
+    if ($qualityExitCode -ne 0) {
+        throw "Native SQLite quality audit reported blocking issues (exit code $qualityExitCode). See $qualityReportPath"
+    }
 
     foreach ($snapshot in $productionDbSnapshots) {
         Assert-FileSnapshotUnchanged $snapshot.Snapshot $snapshot.Path $snapshot.Label
@@ -652,14 +792,20 @@ try {
 
     Write-Step "Field E2E complete"
     Write-Host "Run directory: $runDir"
-    Write-Host "Temp JSON: $jsonPath"
+    Write-Host "Legacy evidence: $jsonPath"
+    Write-Host "CollectionSnapshot v1: $snapshotPath"
     Write-Host "Temp DB: $dbPath"
     Write-Host "Quality: $qualityDir"
     Write-Host "Excel export: $exportDir"
     Update-RunManifest $manifestPath @{
         completed_at = (Get-Date).ToUniversalTime().ToString("o")
         status = "complete"
-        json_path = (Resolve-FullPath $jsonPath)
+        legacy_json_path = (Resolve-FullPath $jsonPath)
+        snapshot_path = (Resolve-FullPath $snapshotPath)
+        validation_report_path = (Resolve-FullPath $validateReportPath)
+        import_report_path = (Resolve-FullPath $importReportPath)
+        quality_report_path = (Resolve-FullPath $qualityReportPath)
+        workflow_events_path = (Resolve-FullPath $workflowEventsPath)
         db_path = (Resolve-FullPath $dbPath)
         quality_dir = (Resolve-FullPath $qualityDir)
         export_dir = (Resolve-FullPath $exportDir)
@@ -671,6 +817,7 @@ try {
     }
 }
 catch {
+    $primaryErrorMessage = $_.Exception.Message
     if (Test-Path $manifestPath) {
         Update-RunManifest $manifestPath @{
             failed_at = (Get-Date).ToUniversalTime().ToString("o")
@@ -687,11 +834,39 @@ finally {
     if ($LaunchEdge -and -not $KeepProfile -and (Test-Path $edgeProfileDir)) {
         Remove-ProfileWithRetry $edgeProfileDir
     }
+
+    $productionGuardErrors = @()
+    foreach ($snapshot in $productionDbSnapshots) {
+        try {
+            Assert-FileSnapshotUnchanged $snapshot.Snapshot $snapshot.Path $snapshot.Label
+        }
+        catch {
+            $productionGuardErrors += $_.Exception.Message
+        }
+    }
+    $productionDbSnapshotsAfter = @(
+        @{ Label = "Production DB"; Path = $productionDb; Snapshot = Get-FileSnapshot $productionDb },
+        @{ Label = "Production DB WAL"; Path = "$productionDb-wal"; Snapshot = Get-FileSnapshot "$productionDb-wal" },
+        @{ Label = "Production DB SHM"; Path = "$productionDb-shm"; Snapshot = Get-FileSnapshot "$productionDb-shm" }
+    )
     if (Test-Path $manifestPath) {
         $statusPatch = @{
             finished_at = (Get-Date).ToUniversalTime().ToString("o")
             edge_profile_exists_after_cleanup = (Test-Path $edgeProfileDir)
+            production_db_guard_passed = ($productionGuardErrors.Count -eq 0)
+            production_db_guard_errors = $productionGuardErrors
+            production_db_snapshots_after_cleanup = $productionDbSnapshotsAfter
+        }
+        if ($productionGuardErrors.Count -gt 0) {
+            $statusPatch["status"] = "failed_production_guard"
         }
         Update-RunManifest $manifestPath $statusPatch
+    }
+    if ($productionGuardErrors.Count -gt 0) {
+        $guardMessage = "Production database guard failed: $($productionGuardErrors -join '; ')"
+        if (-not [string]::IsNullOrWhiteSpace($primaryErrorMessage)) {
+            throw "Field E2E failed: $primaryErrorMessage; additionally, $guardMessage"
+        }
+        throw $guardMessage
     }
 }
