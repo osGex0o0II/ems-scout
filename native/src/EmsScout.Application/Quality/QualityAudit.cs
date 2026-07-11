@@ -13,7 +13,10 @@ public sealed record QualityAuditReport(
     QualityAuditSummary Summary,
     IReadOnlyList<QualityAuditIssue> Issues,
     bool IsStale,
-    string StaleReason);
+    string StaleReason)
+{
+    public IReadOnlyList<QualityAuditKnownFindingAnnotation> KnownFindingAnnotations { get; init; } = [];
+}
 
 public sealed record QualityAuditSummary(
     int TotalCards,
@@ -28,7 +31,30 @@ public sealed record QualityAuditSummary(
     int EmptySubAreas,
     int InlineSubAreas,
     int SuspiciousUniformPages,
-    int UniformResolvedPages);
+    int UniformResolvedPages)
+{
+    public int KnownFindings { get; init; }
+
+    public int BlockingKnownFindings { get; init; }
+
+    public int NonBlockingKnownFindings { get; init; }
+
+    public int OfflineTemplateWithoutStability { get; init; }
+
+    public int OfflineTemplateStable { get; init; }
+
+    public int InvalidCardFields { get; init; }
+
+    public int ActiveFieldIncompletePages { get; init; }
+
+    public int DetectedOfflineTemplateWithoutStability { get; init; }
+
+    public int DetectedOfflineTemplateStable { get; init; }
+
+    public int DetectedInvalidCardFields { get; init; }
+
+    public int DetectedActiveFieldIncompletePages { get; init; }
+}
 
 public sealed record QualityAuditIssue(
     string Severity,

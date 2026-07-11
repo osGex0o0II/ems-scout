@@ -159,6 +159,9 @@ public sealed class CollectionRunRepositoryTests
             CREATE TABLE run_pages (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL, run_sub_area_id INTEGER NOT NULL, source_page_id INTEGER, page_name TEXT, count INTEGER, raw_count INTEGER, unique_count INTEGER, duplicate_names TEXT, on_href TEXT, off_href TEXT, layout TEXT, quality_reason TEXT, err TEXT);
             CREATE TABLE run_cards (id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL, run_page_id INTEGER NOT NULL, source_card_id INTEGER, name TEXT, switch TEXT, mode TEXT, indoor TEXT, set_temp TEXT, fan TEXT, indicator TEXT, comm TEXT);
             CREATE TABLE device_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, card_name TEXT NOT NULL, building TEXT, note TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(card_name, building));
+            CREATE INDEX idx_pg_sa ON pages(sub_area_id);
+            CREATE INDEX idx_run_pages_sa ON run_pages(run_sub_area_id);
+            PRAGMA user_version = 2;
             INSERT INTO buildings (building, sub_area_count, menu_clicked, updated_at) VALUES ('1号', 1, 'yes', '2026-07-01T00:00:00Z');
             INSERT INTO sub_areas (id, building, sub_idx, floor, text, x, y) VALUES (1, '1号', 1, 1, '1F A', 10, 20);
             INSERT INTO pages (id, sub_area_id, page_name, count, raw_count, unique_count, duplicate_names, on_href, off_href, layout, quality_reason, err) VALUES (1, 1, '1F', 1, 1, 1, '', '', '', 'grid', 'stale_before_restore', '');

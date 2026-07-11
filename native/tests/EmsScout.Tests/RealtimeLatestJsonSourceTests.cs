@@ -1,5 +1,5 @@
 using EmsScout.Infrastructure.Sqlite;
-using EmsScout.Legacy;
+using EmsScout.Infrastructure.Realtime;
 
 namespace EmsScout.Tests;
 
@@ -26,9 +26,9 @@ public sealed class RealtimeLatestJsonSourceTests
     [Fact]
     public async Task AttachesRealtimeDetailsToCurrentDatabaseRows()
     {
-        var root = LocateRepositoryRoot();
+        var root = ProductionDataSnapshot.RepositoryRoot;
         var repository = new SqliteDeviceReadRepository(
-            Path.Combine(root, "out", "ac.db"),
+            ProductionDataSnapshot.DatabasePath,
             CurrentRealtimeSource());
 
         var result = await repository.SearchAsync(new(Limit: 10));
@@ -51,9 +51,9 @@ public sealed class RealtimeLatestJsonSourceTests
     [Fact]
     public async Task AppliesRealtimeMatchOverridesAndVirtualManagedDevices()
     {
-        var root = LocateRepositoryRoot();
+        var root = ProductionDataSnapshot.RepositoryRoot;
         var repository = new SqliteDeviceReadRepository(
-            Path.Combine(root, "out", "ac.db"),
+            ProductionDataSnapshot.DatabasePath,
             CurrentRealtimeSource());
 
         var virtualDevice = await repository.SearchAsync(new(SearchText: "2F-HTDTT-KT-2", Limit: 5));
@@ -78,9 +78,9 @@ public sealed class RealtimeLatestJsonSourceTests
     [Fact]
     public async Task AppliesNativeDataWorkbenchFilters()
     {
-        var root = LocateRepositoryRoot();
+        var root = ProductionDataSnapshot.RepositoryRoot;
         var repository = new SqliteDeviceReadRepository(
-            Path.Combine(root, "out", "ac.db"),
+            ProductionDataSnapshot.DatabasePath,
             CurrentRealtimeSource());
 
         Assert.Equal(7, (await repository.SearchAsync(new(Floor: "2.5F", Limit: 1))).Total);
@@ -102,24 +102,7 @@ public sealed class RealtimeLatestJsonSourceTests
 
     private static RealtimeLatestJsonSource CurrentRealtimeSource()
     {
-        var root = LocateRepositoryRoot();
+        var root = ProductionDataSnapshot.RepositoryRoot;
         return new RealtimeLatestJsonSource(root, Path.Combine(root, "out"));
-    }
-
-    private static string LocateRepositoryRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            if (File.Exists(Path.Combine(directory.FullName, "package.json")) &&
-                Directory.Exists(Path.Combine(directory.FullName, "out")))
-            {
-                return directory.FullName;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new DirectoryNotFoundException("Cannot locate repository root.");
     }
 }

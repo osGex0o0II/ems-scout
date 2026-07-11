@@ -18,8 +18,7 @@ public sealed class SqliteDeviceAnnotationService(Func<string> databasePathResol
         string note,
         CancellationToken cancellationToken = default)
     {
-        EnsureDatabaseExists();
-        await using var connection = OpenConnection();
+        await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadWrite);
         await EnsureAnnotationTablesAsync(connection, cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = """
@@ -40,8 +39,7 @@ public sealed class SqliteDeviceAnnotationService(Func<string> databasePathResol
         CancellationToken cancellationToken = default)
     {
         var normalizedTag = Require(tag, "tag");
-        EnsureDatabaseExists();
-        await using var connection = OpenConnection();
+        await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadWrite);
         await EnsureAnnotationTablesAsync(connection, cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = """
@@ -59,8 +57,7 @@ public sealed class SqliteDeviceAnnotationService(Func<string> databasePathResol
         string tag,
         CancellationToken cancellationToken = default)
     {
-        EnsureDatabaseExists();
-        await using var connection = OpenConnection();
+        await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadWrite);
         await EnsureAnnotationTablesAsync(connection, cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = """
@@ -79,17 +76,19 @@ public sealed class SqliteDeviceAnnotationService(Func<string> databasePathResol
         RealtimeOverrideEdit edit,
         CancellationToken cancellationToken = default)
     {
-        EnsureDatabaseExists();
-        await using var connection = OpenConnection();
+        await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadWrite);
         await EnsureAnnotationTablesAsync(connection, cancellationToken).ConfigureAwait(false);
-        var existing = await LoadExistingRealtimeOverrideAsync(connection, edit, cancellationToken).ConfigureAwait(false);
+        await using var transaction = connection.BeginTransaction(deferred: false);
+        var existing = await LoadExistingRealtimeOverrideAsync(connection, transaction, edit, cancellationToken).ConfigureAwait(false);
         var payload = BuildPayload(edit, existing);
         if (existing is not null && OverrideIsEmpty(payload))
         {
             await using var delete = connection.CreateCommand();
+            delete.Transaction = transaction;
             delete.CommandText = "DELETE FROM realtime_match_overrides WHERE id = $id";
             delete.Parameters.AddWithValue("$id", existing.Id);
             await delete.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return null;
         }
 
@@ -102,6 +101,7 @@ public sealed class SqliteDeviceAnnotationService(Func<string> databasePathResol
         if (existing is not null)
         {
             await using var update = connection.CreateCommand();
+            update.Transaction = transaction;
             update.CommandText = """
                 UPDATE realtime_match_overrides
                 SET building = $building,
@@ -121,10 +121,13 @@ public sealed class SqliteDeviceAnnotationService(Func<string> databasePathResol
             AddOverrideParameters(update, payload, now);
             update.Parameters.AddWithValue("$id", existing.Id);
             await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            return await LoadOverrideByIdAsync(connection, existing.Id, cancellationToken).ConfigureAwait(false);
+            var saved = await LoadOverrideByIdAsync(connection, transaction, existing.Id, cancellationToken).ConfigureAwait(false);
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return saved;
         }
 
         await using var insert = connection.CreateCommand();
+        insert.Transaction = transaction;
         insert.CommandText = """
             INSERT INTO realtime_match_overrides
               (building, dev_id, floor_label, sub_area, page_name, realtime_name, action,
@@ -135,77 +138,32 @@ public sealed class SqliteDeviceAnnotationService(Func<string> databasePathResol
             """;
         AddOverrideParameters(insert, payload, now);
         var id = await insert.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-        return await LoadOverrideByIdAsync(
+        var created = await LoadOverrideByIdAsync(
             connection,
+            transaction,
             Convert.ToInt64(id, System.Globalization.CultureInfo.InvariantCulture),
             cancellationToken).ConfigureAwait(false);
-    }
-
-    private SqliteConnection OpenConnection()
-    {
-        var connection = new SqliteConnection($"Data Source={databasePathResolver()};Mode=ReadWrite");
-        connection.Open();
-        return connection;
-    }
-
-    private void EnsureDatabaseExists()
-    {
-        var databasePath = databasePathResolver();
-        if (!File.Exists(databasePath))
-        {
-            throw new FileNotFoundException("Cannot find EMS SQLite database.", databasePath);
-        }
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return created;
     }
 
     private static async Task EnsureAnnotationTablesAsync(SqliteConnection connection, CancellationToken cancellationToken)
     {
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            CREATE TABLE IF NOT EXISTS device_tags (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                card_name TEXT NOT NULL,
-                building TEXT,
-                tag TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(card_name, building, tag)
-            );
-            CREATE TABLE IF NOT EXISTS device_notes (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                card_name TEXT NOT NULL,
-                building TEXT,
-                note TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(card_name, building)
-            );
-            CREATE TABLE IF NOT EXISTS realtime_match_overrides (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                building TEXT NOT NULL,
-                dev_id TEXT,
-                floor_label TEXT,
-                sub_area TEXT,
-                page_name TEXT,
-                realtime_name TEXT NOT NULL,
-                action TEXT NOT NULL DEFAULT 'classify_only',
-                target_card_id INTEGER,
-                zuo_override TEXT,
-                area_type_override TEXT,
-                note TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE UNIQUE INDEX IF NOT EXISTS ux_realtime_match_overrides_dev
-              ON realtime_match_overrides(building, dev_id)
-              WHERE IFNULL(dev_id, '') <> '';
-            CREATE UNIQUE INDEX IF NOT EXISTS ux_realtime_match_overrides_identity
-              ON realtime_match_overrides(building, floor_label, sub_area, page_name, realtime_name)
-              WHERE IFNULL(dev_id, '') = '';
-            """;
-        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        await SqliteSchemaGuard.RequireCurrentAsync(
+            connection,
+            new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["device_tags"] = ["id", "card_name", "building", "device_uid", "tag", "created_at"],
+                ["device_notes"] = ["id", "card_name", "building", "device_uid", "note", "created_at", "updated_at"],
+                ["realtime_match_overrides"] = ["id", "building", "dev_id", "floor_label", "sub_area", "page_name", "realtime_name", "action", "target_card_id", "device_uid", "zuo_override", "area_type_override", "note", "created_at", "updated_at"],
+            },
+            ["ux_realtime_match_overrides_dev", "ux_realtime_match_overrides_identity"],
+            cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task<RealtimeMatchOverride?> LoadExistingRealtimeOverrideAsync(
         SqliteConnection connection,
+        SqliteTransaction transaction,
         RealtimeOverrideEdit edit,
         CancellationToken cancellationToken)
     {
@@ -214,6 +172,7 @@ public sealed class SqliteDeviceAnnotationService(Func<string> databasePathResol
         if (!string.IsNullOrWhiteSpace(devId))
         {
             await using var byDev = connection.CreateCommand();
+            byDev.Transaction = transaction;
             byDev.CommandText = """
                 SELECT id, building, dev_id, floor_label, sub_area, page_name, realtime_name,
                        action, target_card_id, zuo_override, area_type_override, note
@@ -232,6 +191,7 @@ public sealed class SqliteDeviceAnnotationService(Func<string> databasePathResol
         }
 
         await using var byIdentity = connection.CreateCommand();
+        byIdentity.Transaction = transaction;
         byIdentity.CommandText = """
             SELECT id, building, dev_id, floor_label, sub_area, page_name, realtime_name,
                    action, target_card_id, zuo_override, area_type_override, note
@@ -310,10 +270,12 @@ public sealed class SqliteDeviceAnnotationService(Func<string> databasePathResol
 
     private static async Task<RealtimeMatchOverride?> LoadOverrideByIdAsync(
         SqliteConnection connection,
+        SqliteTransaction transaction,
         long id,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = """
             SELECT id, building, dev_id, floor_label, sub_area, page_name, realtime_name,
                    action, target_card_id, zuo_override, area_type_override, note
@@ -336,17 +298,17 @@ public sealed class SqliteDeviceAnnotationService(Func<string> databasePathResol
 
         return new RealtimeMatchOverride(
             Id: reader.GetInt64(reader.GetOrdinal("id")),
-            Building: ReadString(reader, "building"),
-            DevId: ReadString(reader, "dev_id"),
-            FloorLabel: ReadString(reader, "floor_label"),
-            SubArea: ReadString(reader, "sub_area"),
-            PageName: ReadString(reader, "page_name"),
-            RealtimeName: ReadString(reader, "realtime_name"),
-            Action: ReadString(reader, "action"),
-            TargetCardId: ReadNullableInt64(reader, "target_card_id"),
-            ZuoOverride: ReadString(reader, "zuo_override"),
-            AreaTypeOverride: ReadString(reader, "area_type_override"),
-            Note: ReadString(reader, "note"));
+            Building: SqliteValueReader.ReadString(reader, "building"),
+            DevId: SqliteValueReader.ReadString(reader, "dev_id"),
+            FloorLabel: SqliteValueReader.ReadString(reader, "floor_label"),
+            SubArea: SqliteValueReader.ReadString(reader, "sub_area"),
+            PageName: SqliteValueReader.ReadString(reader, "page_name"),
+            RealtimeName: SqliteValueReader.ReadString(reader, "realtime_name"),
+            Action: SqliteValueReader.ReadString(reader, "action"),
+            TargetCardId: SqliteValueReader.ReadNullableInt64(reader, "target_card_id"),
+            ZuoOverride: SqliteValueReader.ReadString(reader, "zuo_override"),
+            AreaTypeOverride: SqliteValueReader.ReadString(reader, "area_type_override"),
+            Note: SqliteValueReader.ReadString(reader, "note"));
     }
 
     private static string Require(string value, string label)
@@ -397,18 +359,6 @@ public sealed class SqliteDeviceAnnotationService(Func<string> databasePathResol
     private static object NullIfEmpty(string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? DBNull.Value : value.Trim();
-    }
-
-    private static string ReadString(SqliteDataReader reader, string column)
-    {
-        var ordinal = reader.GetOrdinal(column);
-        return reader.IsDBNull(ordinal) ? string.Empty : reader.GetString(ordinal);
-    }
-
-    private static long? ReadNullableInt64(SqliteDataReader reader, string column)
-    {
-        var ordinal = reader.GetOrdinal(column);
-        return reader.IsDBNull(ordinal) ? null : reader.GetInt64(ordinal);
     }
 
     private sealed record RealtimeOverridePayload(

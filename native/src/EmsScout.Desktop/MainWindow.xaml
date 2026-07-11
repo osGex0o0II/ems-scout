@@ -9,8 +9,33 @@
     Title="EMS 空调控制台"
     mc:Ignorable="d">
     <Grid x:Name="RootGrid" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+        <InfoBar
+            x:Name="StartupFailureBar"
+            Grid.Row="0"
+            IsClosable="False"
+            IsOpen="False"
+            Severity="Error"
+            Title="数据库启动迁移失败">
+            <InfoBar.Content>
+                <StackPanel Spacing="8">
+                    <TextBlock x:Name="StartupFailureMessage" TextWrapping="WrapWholeWords" />
+                    <Button
+                        x:Name="RetryStartupMigrationButton"
+                        Click="RetryStartupMigration_Click"
+                        Content="重试数据库迁移" />
+                </StackPanel>
+            </InfoBar.Content>
+            <InfoBar.ActionButton>
+                <Button Click="OpenSettings_Click" Content="打开系统设置" />
+            </InfoBar.ActionButton>
+        </InfoBar>
         <NavigationView
             x:Name="NavView"
+            Grid.Row="1"
             IsBackButtonVisible="Collapsed"
             OpenPaneLength="180"
             IsPaneToggleButtonVisible="True"

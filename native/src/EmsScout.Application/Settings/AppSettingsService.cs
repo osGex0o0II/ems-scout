@@ -10,6 +10,7 @@ public sealed class AppSettingsService
         PropertyNameCaseInsensitive = true,
     };
 
+    private readonly object sync = new();
     private AppSettings _current;
 
     public AppSettingsService()
@@ -28,20 +29,46 @@ public sealed class AppSettingsService
 
     public string SettingsPath { get; }
 
-    public AppSettings Current => _current.Clone();
+    public AppSettings Current
+    {
+        get
+        {
+            lock (sync) return _current.Clone();
+        }
+    }
 
     public AppSettings Load()
     {
-        _current = LoadFromDisk();
-        return Current;
+        lock (sync)
+        {
+            _current = LoadFromDisk();
+            return _current.Clone();
+        }
     }
 
     public void Save(AppSettings settings)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
         var normalized = Normalize(settings);
-        File.WriteAllText(SettingsPath, JsonSerializer.Serialize(normalized, JsonOptions));
-        _current = normalized;
+        lock (sync)
+        {
+            var fullPath = Path.GetFullPath(SettingsPath);
+            var directory = Path.GetDirectoryName(fullPath)
+                            ?? throw new InvalidOperationException("Settings path has no parent directory.");
+            Directory.CreateDirectory(directory);
+            var temporaryPath = Path.Combine(
+                directory,
+                $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
+            try
+            {
+                File.WriteAllText(temporaryPath, JsonSerializer.Serialize(normalized, JsonOptions));
+                File.Move(temporaryPath, fullPath, overwrite: true);
+                _current = normalized;
+            }
+            finally
+            {
+                File.Delete(temporaryPath);
+            }
+        }
     }
 
     public void Reset()
@@ -77,10 +104,10 @@ public sealed class AppSettingsService
             : output.EmsUrl.Trim();
         output.EdgeCdpPort = Math.Clamp(output.EdgeCdpPort, 1, 65535);
         output.DataDirectory = string.IsNullOrWhiteSpace(output.DataDirectory)
-            ? "out"
+            ? AppStorageDefaults.DataDirectory
             : output.DataDirectory.Trim();
         output.ExportDirectory = string.IsNullOrWhiteSpace(output.ExportDirectory)
-            ? "out/data-management-export"
+            ? AppStorageDefaults.ExportDirectory
             : output.ExportDirectory.Trim();
         output.DefaultCollectionMode = NormalizeOption(output.DefaultCollectionMode, "edge-cdp", "edge-cdp", "auto-launch");
         output.LogLevel = NormalizeOption(output.LogLevel, "INFO", "ERROR", "INFO", "DEBUG");

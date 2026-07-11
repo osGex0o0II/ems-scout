@@ -105,8 +105,7 @@ public sealed class DataManagementUiContractTests
         var viewModelPath = Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs");
         var source = File.ReadAllText(viewModelPath);
         var applyFilters = source[
-            source.IndexOf("public async Task ApplyFiltersAsync", StringComparison.Ordinal)..
-            source.IndexOf("public async Task MovePreviousAsync", StringComparison.Ordinal)];
+            source.IndexOf("public async Task ApplyFiltersAsync", StringComparison.Ordinal)..source.IndexOf("public async Task MovePreviousAsync", StringComparison.Ordinal)];
 
         Assert.Contains("ReloadFilterOptionsAsync(cancellationToken)", applyFilters);
         Assert.Contains("LoadPageCoreAsync(cancellationToken)", applyFilters);
@@ -123,16 +122,14 @@ public sealed class DataManagementUiContractTests
         Assert.Contains("SelectionChanged=\"FloorFilter_SelectionChanged\"", xaml);
 
         var buildingSelection = viewModel[
-            viewModel.IndexOf("public async Task ApplyBuildingSelectionAsync", StringComparison.Ordinal)..
-            viewModel.IndexOf("public async Task ApplyFloorSelectionAsync", StringComparison.Ordinal)];
+            viewModel.IndexOf("public async Task ApplyBuildingSelectionAsync", StringComparison.Ordinal)..viewModel.IndexOf("public async Task ApplyFloorSelectionAsync", StringComparison.Ordinal)];
         Assert.Contains("SelectedZuo = ZuoOptions.FirstOrDefault()", buildingSelection);
         Assert.Contains("SelectedFloor = FloorOptions.FirstOrDefault()", buildingSelection);
         Assert.Contains("SelectedPageName = PageNameOptions.FirstOrDefault()", buildingSelection);
         Assert.Contains("ApplyFiltersAsync(cancellationToken)", buildingSelection);
 
         var floorSelection = viewModel[
-            viewModel.IndexOf("public async Task ApplyFloorSelectionAsync", StringComparison.Ordinal)..
-            viewModel.IndexOf("public async Task MovePreviousAsync", StringComparison.Ordinal)];
+            viewModel.IndexOf("public async Task ApplyFloorSelectionAsync", StringComparison.Ordinal)..viewModel.IndexOf("public async Task MovePreviousAsync", StringComparison.Ordinal)];
         Assert.Contains("SelectedPageName = PageNameOptions.FirstOrDefault()", floorSelection);
         Assert.Contains("ApplyFiltersAsync(cancellationToken)", floorSelection);
     }

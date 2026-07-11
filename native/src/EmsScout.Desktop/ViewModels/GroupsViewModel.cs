@@ -3,8 +3,10 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EmsScout.Application.Devices;
 using EmsScout.Application.Groups;
+using EmsScout.Application.Logging;
 using EmsScout.Application.Watch;
 using EmsScout.Desktop.Services;
+using EmsScout.Infrastructure.Logging;
 using Microsoft.UI.Xaml;
 
 namespace EmsScout.Desktop.ViewModels;
@@ -13,7 +15,8 @@ public sealed partial class GroupsViewModel(
     IDeviceReadRepository repository,
     IAreaGroupRepository areaGroupRepository,
     IDeviceWatchRepository watchRepository,
-    INavigationService navigationService) : ObservableObject
+    INavigationService navigationService,
+    IApplicationLogger applicationLogger) : ObservableObject
 {
     private string _statusText = "正在读取当前分组规则";
     private bool _isLoading;
@@ -654,7 +657,7 @@ public sealed partial class GroupsViewModel(
             Items.Clear();
             TargetOptions.Clear();
             SelectedGroup = null;
-            StatusText = ex.Message;
+            StatusText = applicationLogger.WriteFailure(ex, "groups").DisplayText;
         }
         finally
         {
@@ -690,7 +693,7 @@ public sealed partial class GroupsViewModel(
         }
         catch (Exception ex)
         {
-            StatusText = "保存区域组失败：" + ex.Message;
+            StatusText = "保存区域组失败：" + applicationLogger.WriteFailure(ex, "groups").DisplayText;
         }
         finally
         {
@@ -735,7 +738,7 @@ public sealed partial class GroupsViewModel(
         }
         catch (Exception ex)
         {
-            StatusText = "删除区域组失败：" + ex.Message;
+            StatusText = "删除区域组失败：" + applicationLogger.WriteFailure(ex, "groups").DisplayText;
         }
         finally
         {
@@ -766,7 +769,7 @@ public sealed partial class GroupsViewModel(
         }
         catch (Exception ex)
         {
-            StatusText = "保存楼层目录失败：" + ex.Message;
+            StatusText = "保存楼层目录失败：" + applicationLogger.WriteFailure(ex, "groups").DisplayText;
         }
         finally
         {
@@ -793,7 +796,7 @@ public sealed partial class GroupsViewModel(
         }
         catch (Exception ex)
         {
-            StatusText = "删除楼层目录失败：" + ex.Message;
+            StatusText = "删除楼层目录失败：" + applicationLogger.WriteFailure(ex, "groups").DisplayText;
         }
         finally
         {
@@ -821,7 +824,7 @@ public sealed partial class GroupsViewModel(
         catch (Exception ex)
         {
             ClearTargetOptions(clearSearch: false);
-            StatusText = "读取成员候选失败：" + ex.Message;
+            StatusText = "读取成员候选失败：" + applicationLogger.WriteFailure(ex, "groups").DisplayText;
         }
         finally
         {
@@ -867,7 +870,7 @@ public sealed partial class GroupsViewModel(
         }
         catch (Exception ex)
         {
-            StatusText = "保存关注规则失败：" + ex.Message;
+            StatusText = "保存关注规则失败：" + applicationLogger.WriteFailure(ex, "groups").DisplayText;
         }
         finally
         {
@@ -902,7 +905,7 @@ public sealed partial class GroupsViewModel(
         }
         catch (Exception ex)
         {
-            StatusText = "删除关注规则失败：" + ex.Message;
+            StatusText = "删除关注规则失败：" + applicationLogger.WriteFailure(ex, "groups").DisplayText;
         }
         finally
         {
@@ -1020,7 +1023,7 @@ public sealed partial class GroupsViewModel(
         }
         catch (Exception ex)
         {
-            StatusText = "保存成员失败：" + ex.Message;
+            StatusText = "保存成员失败：" + applicationLogger.WriteFailure(ex, "groups").DisplayText;
         }
         finally
         {
@@ -1065,7 +1068,7 @@ public sealed partial class GroupsViewModel(
         }
         catch (Exception ex)
         {
-            StatusText = "删除成员失败：" + ex.Message;
+            StatusText = "删除成员失败：" + applicationLogger.WriteFailure(ex, "groups").DisplayText;
         }
         finally
         {
@@ -1164,7 +1167,7 @@ public sealed partial class GroupsViewModel(
             if (IsCurrentWatchGroup(groupId, watchLoadVersion))
             {
                 ReplaceWatchIncidents([]);
-                WatchSummaryText = "关注规则读取失败：" + ex.Message;
+                WatchSummaryText = "关注规则读取失败：" + applicationLogger.WriteFailure(ex, "groups").DisplayText;
             }
         }
         finally

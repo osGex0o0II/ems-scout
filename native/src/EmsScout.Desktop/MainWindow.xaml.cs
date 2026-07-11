@@ -3,12 +3,13 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.Extensions.DependencyInjection;
 using EmsScout.Desktop.Pages;
 using EmsScout.Desktop.Services;
+using EmsScout.Infrastructure.Errors;
 
 namespace EmsScout.Desktop;
 
 public sealed partial class MainWindow : Window
 {
-    public MainWindow()
+    public MainWindow(string? startupFailure = null)
     {
         InitializeComponent();
 
@@ -17,6 +18,45 @@ public sealed partial class MainWindow : Window
         App.Services.GetRequiredService<AppUiSettingsService>().ApplyTheme(RootGrid);
         App.Services.GetRequiredService<NavigationService>().Attach(NavigateToData);
         NavFrame.Navigate(typeof(HomePage));
+        if (!string.IsNullOrWhiteSpace(startupFailure))
+        {
+            ShowStartupFailure(startupFailure);
+        }
+    }
+
+    private async void RetryStartupMigration_Click(object sender, RoutedEventArgs e)
+    {
+        RetryStartupMigrationButton.IsEnabled = false;
+        StartupFailureMessage.Text = "正在重新迁移数据库...";
+        try
+        {
+            await App.Services.GetRequiredService<StartupDatabaseInitializer>()
+                .InitializeAsync()
+                .ConfigureAwait(true);
+            StartupFailureBar.IsOpen = false;
+            NavFrame.Navigate(typeof(HomePage));
+        }
+        catch (Exception ex)
+        {
+            ShowStartupFailure(ApplicationFailureClassifier.Classify(ex).DisplayText);
+        }
+        finally
+        {
+            RetryStartupMigrationButton.IsEnabled = true;
+        }
+    }
+
+    private void OpenSettings_Click(object sender, RoutedEventArgs e)
+    {
+        SelectNavigationItem("settings");
+        NavFrame.Navigate(typeof(SettingsPage));
+    }
+
+    private void ShowStartupFailure(string message)
+    {
+        var initializer = App.Services.GetRequiredService<StartupDatabaseInitializer>();
+        StartupFailureMessage.Text = $"{message}\n\n错误日志：{initializer.LogPath}";
+        StartupFailureBar.IsOpen = true;
     }
 
     private void NavView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)

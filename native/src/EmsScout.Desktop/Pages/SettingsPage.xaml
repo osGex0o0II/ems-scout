@@ -69,7 +69,7 @@
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <Border Style="{StaticResource WorkbenchCardStyle}">
+                <Border IsEnabled="{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}" Style="{StaticResource WorkbenchCardStyle}">
                     <StackPanel Spacing="10">
                         <TextBlock Style="{StaticResource SectionTitleStyle}" Text="EMS 连接" />
                         <TextBox Header="EMS 地址" Text="{x:Bind ViewModel.EmsUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
@@ -85,7 +85,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border Grid.Column="1" Style="{StaticResource WorkbenchCardStyle}">
+                <Border Grid.Column="1" IsEnabled="{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}" Style="{StaticResource WorkbenchCardStyle}">
                     <StackPanel Spacing="10">
                         <TextBlock Style="{StaticResource SectionTitleStyle}" Text="目录" />
                         <Grid ColumnSpacing="8">
@@ -128,7 +128,7 @@
                     </StackPanel>
                 </Border>
 
-                <Border Grid.Row="1" Style="{StaticResource WorkbenchCardStyle}">
+                <Border Grid.Row="1" IsEnabled="{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}" Style="{StaticResource WorkbenchCardStyle}">
                     <StackPanel Spacing="10">
                         <TextBlock Style="{StaticResource SectionTitleStyle}" Text="采集行为" />
                         <ComboBox Header="默认采集模式" SelectedIndex="{x:Bind ViewModel.DefaultCollectionModeIndex, Mode=TwoWay}">
@@ -161,6 +161,17 @@
                         <StackPanel Spacing="4">
                             <TextBlock Style="{StaticResource SectionTitleStyle}" Text="高级" />
                             <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.SettingsPath, Mode=OneWay}" TextWrapping="WrapWholeWords" />
+                            <Button
+                                HorizontalAlignment="Left"
+                                Click="MigrateLegacyOut_Click"
+                                IsEnabled="{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                ToolTipService.ToolTip="选择旧 out 目录并迁移数据库和兼容数据">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <SymbolIcon Symbol="Upload" />
+                                    <TextBlock Text="迁移旧数据" />
+                                </StackPanel>
+                            </Button>
                         </StackPanel>
                     </Grid>
                 </Border>

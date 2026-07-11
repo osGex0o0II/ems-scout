@@ -57,6 +57,64 @@ public sealed class DeviceAnnotationServiceTests
         Assert.Equal(0L, ScalarLong(connection, "SELECT COUNT(*) FROM realtime_match_overrides"));
     }
 
+    [Fact]
+    public async Task IncompleteSchemaIsReportedWithoutRepairingTheDatabase()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-annotation-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var databasePath = Path.Combine(root, "ac.db");
+        await using (var setup = new SqliteConnection($"Data Source={databasePath};Mode=ReadWriteCreate"))
+        {
+            await setup.OpenAsync();
+            await using var command = setup.CreateCommand();
+            command.CommandText = "CREATE TABLE device_tags (id INTEGER PRIMARY KEY, card_name TEXT);";
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var service = new SqliteDeviceAnnotationService(() => databasePath);
+        var error = await Assert.ThrowsAsync<InvalidDataException>(() =>
+            service.SaveNoteAsync(new DeviceAnnotationKey("1号", "1-0101-KT"), "不得写入"));
+
+        Assert.Contains("user_version=0", error.Message);
+        Assert.Contains("column device_tags.building", error.Message);
+        Assert.Contains("table device_notes", error.Message);
+        Assert.Contains("index ux_realtime_match_overrides_dev", error.Message);
+        Assert.Contains("EmsScout.SchemaTool", error.Message);
+        await using var verify = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+        await verify.OpenAsync();
+        Assert.Equal(1L, ScalarLong(verify, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"));
+    }
+
+    [Fact]
+    public async Task ConcurrentRealtimeOverrideSavesRemainSingleRow()
+    {
+        var databasePath = CreateDatabase();
+        var service = new SqliteDeviceAnnotationService(() => databasePath);
+        var edit = new RealtimeOverrideEdit(
+            Building: "1号",
+            DevId: "concurrent-dev",
+            FloorLabel: "2.5F",
+            SubArea: "2.5F",
+            PageName: "default",
+            RealtimeName: "2-2BC-2M001-KT-1",
+            Action: "classify_only",
+            ZuoOverride: "A座",
+            AreaTypeOverride: "非公区",
+            Note: "first");
+
+        var saved = await Task.WhenAll(
+            service.SaveRealtimeOverrideAsync(edit),
+            service.SaveRealtimeOverrideAsync(edit with { Note = "second" }));
+
+        Assert.All(saved, Assert.NotNull);
+        await using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+        await connection.OpenAsync();
+        Assert.Equal(1L, ScalarLong(connection, "SELECT COUNT(*) FROM realtime_match_overrides WHERE dev_id = 'concurrent-dev'"));
+        Assert.Contains(
+            Convert.ToString(Scalar(connection, "SELECT note FROM realtime_match_overrides WHERE dev_id = 'concurrent-dev'")),
+            new[] { "first", "second" });
+    }
+
     private static string CreateDatabase()
     {
         var root = Path.Combine(Path.GetTempPath(), "ems-scout-annotation-tests", Guid.NewGuid().ToString("N"));
@@ -70,6 +128,7 @@ public sealed class DeviceAnnotationServiceTests
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 card_name TEXT NOT NULL,
                 building TEXT,
+                device_uid TEXT,
                 tag TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(card_name, building, tag)
@@ -78,6 +137,7 @@ public sealed class DeviceAnnotationServiceTests
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 card_name TEXT NOT NULL,
                 building TEXT,
+                device_uid TEXT,
                 note TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -93,12 +153,20 @@ public sealed class DeviceAnnotationServiceTests
                 realtime_name TEXT NOT NULL,
                 action TEXT NOT NULL DEFAULT 'classify_only',
                 target_card_id INTEGER,
+                device_uid TEXT,
                 zuo_override TEXT,
                 area_type_override TEXT,
                 note TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE UNIQUE INDEX ux_realtime_match_overrides_dev
+              ON realtime_match_overrides(building, dev_id)
+              WHERE IFNULL(dev_id, '') <> '';
+            CREATE UNIQUE INDEX ux_realtime_match_overrides_identity
+              ON realtime_match_overrides(building, floor_label, sub_area, page_name, realtime_name)
+              WHERE IFNULL(dev_id, '') = '';
+            PRAGMA user_version = 2;
             """;
         command.ExecuteNonQuery();
         return path;

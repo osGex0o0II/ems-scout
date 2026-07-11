@@ -9,8 +9,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
 
     public async Task<AreaGroupSet> LoadAsync(CancellationToken cancellationToken = default)
     {
-        EnsureDatabaseExists();
-        await using var connection = OpenConnection(readOnly: false);
+        await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadWrite);
         await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
         var groups = await LoadGroupsAsync(connection, cancellationToken).ConfigureAwait(false);
         var items = await LoadItemsAsync(connection, null, cancellationToken).ConfigureAwait(false);
@@ -22,8 +21,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         string floorLabel,
         CancellationToken cancellationToken = default)
     {
-        EnsureDatabaseExists();
-        await using var connection = OpenConnection(readOnly: true);
+        await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadOnly);
         var floorValue = string.IsNullOrWhiteSpace(floorLabel) ? null : ParseFloorValue(floorLabel);
         var subAreas = new List<AreaGroupTargetOption>();
         var devices = new List<AreaGroupTargetOption>();
@@ -55,15 +53,15 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
-                var optionFloor = ReadNullableDouble(reader, "floor");
+                var optionFloor = SqliteValueReader.ReadNullableDouble(reader, "floor");
                 subAreas.Add(new AreaGroupTargetOption(
                     Type: "sub_area",
-                    Building: ReadString(reader, "building"),
+                    Building: SqliteValueReader.ReadString(reader, "building"),
                     FloorLabel: FloorLabelFromValue(optionFloor),
                     FloorValue: optionFloor,
-                    SubAreaText: ReadString(reader, "sub_area_text"),
+                    SubAreaText: SqliteValueReader.ReadString(reader, "sub_area_text"),
                     CardName: string.Empty,
-                    Count: ReadInt32(reader, "count")));
+                    Count: SqliteValueReader.ReadInt32(reader, "count")));
             }
         }
 
@@ -95,15 +93,15 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
-                var optionFloor = ReadNullableDouble(reader, "floor");
+                var optionFloor = SqliteValueReader.ReadNullableDouble(reader, "floor");
                 devices.Add(new AreaGroupTargetOption(
                     Type: "device",
-                    Building: ReadString(reader, "building"),
+                    Building: SqliteValueReader.ReadString(reader, "building"),
                     FloorLabel: FloorLabelFromValue(optionFloor),
                     FloorValue: optionFloor,
-                    SubAreaText: ReadString(reader, "sub_area_text"),
-                    CardName: ReadString(reader, "card_name"),
-                    Count: ReadInt32(reader, "count")));
+                    SubAreaText: SqliteValueReader.ReadString(reader, "sub_area_text"),
+                    CardName: SqliteValueReader.ReadString(reader, "card_name"),
+                    Count: SqliteValueReader.ReadInt32(reader, "count")));
             }
         }
 
@@ -115,8 +113,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         bool includeDisabled = false,
         CancellationToken cancellationToken = default)
     {
-        EnsureDatabaseExists();
-        await using var connection = OpenConnection(readOnly: false);
+        await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadWrite);
         await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
         await SyncFloorCatalogFromCurrentAsync(connection, cancellationToken).ConfigureAwait(false);
 
@@ -146,12 +143,12 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         {
             rows.Add(new FloorCatalogRecord(
                 Id: reader.GetInt64(reader.GetOrdinal("id")),
-                Building: ReadString(reader, "building"),
-                FloorLabel: ReadString(reader, "floor_label"),
+                Building: SqliteValueReader.ReadString(reader, "building"),
+                FloorLabel: SqliteValueReader.ReadString(reader, "floor_label"),
                 FloorValue: ReadDouble(reader, "floor_value"),
-                Source: ReadString(reader, "source"),
-                Enabled: ReadInt32(reader, "enabled") != 0,
-                Note: ReadString(reader, "note")));
+                Source: SqliteValueReader.ReadString(reader, "source"),
+                Enabled: SqliteValueReader.ReadInt32(reader, "enabled") != 0,
+                Note: SqliteValueReader.ReadString(reader, "note")));
         }
 
         return rows;
@@ -161,8 +158,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         FloorCatalogEdit edit,
         CancellationToken cancellationToken = default)
     {
-        EnsureDatabaseExists();
-        await using var connection = OpenConnection(readOnly: false);
+        await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadWrite);
         await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
         var building = Require(edit.Building, "building");
         if (!Buildings.Contains(building, StringComparer.OrdinalIgnoreCase))
@@ -204,8 +200,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
 
     public async Task DeleteFloorAsync(long id, CancellationToken cancellationToken = default)
     {
-        EnsureDatabaseExists();
-        await using var connection = OpenConnection(readOnly: false);
+        await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadWrite);
         await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = """
@@ -222,8 +217,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         AreaGroupEdit edit,
         CancellationToken cancellationToken = default)
     {
-        EnsureDatabaseExists();
-        await using var connection = OpenConnection(readOnly: false);
+        await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadWrite);
         await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
         var name = Require(edit.Name, "group name");
         var priority = NormalizePriority(edit.Priority);
@@ -300,8 +294,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
 
     public async Task DeleteGroupAsync(long id, CancellationToken cancellationToken = default)
     {
-        EnsureDatabaseExists();
-        await using var connection = OpenConnection(readOnly: false);
+        await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadWrite);
         await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
         var current = await LoadGroupRawAsync(connection, id, cancellationToken).ConfigureAwait(false)
                       ?? throw new InvalidOperationException($"Group not found: {id}");
@@ -311,7 +304,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         }
 
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-        if (await TableExistsAsync(connection, "device_watch_rules", cancellationToken).ConfigureAwait(false))
+        if (await SqliteSchemaGuard.TableExistsAsync(connection, "device_watch_rules", cancellationToken).ConfigureAwait(false))
         {
             await using var deleteWatchRules = connection.CreateCommand();
             deleteWatchRules.Transaction = (SqliteTransaction)transaction;
@@ -343,8 +336,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         AreaGroupItemEdit edit,
         CancellationToken cancellationToken = default)
     {
-        EnsureDatabaseExists();
-        await using var connection = OpenConnection(readOnly: false);
+        await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadWrite);
         await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
         var group = await LoadGroupRawAsync(connection, edit.GroupId, cancellationToken).ConfigureAwait(false)
                     ?? throw new InvalidOperationException($"Group not found: {edit.GroupId}");
@@ -498,8 +490,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
 
     public async Task DeleteItemAsync(long id, CancellationToken cancellationToken = default)
     {
-        EnsureDatabaseExists();
-        await using var connection = OpenConnection(readOnly: false);
+        await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadWrite);
         await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM monitor_group_items WHERE id = $id";
@@ -520,77 +511,29 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    private SqliteConnection OpenConnection(bool readOnly)
-    {
-        var mode = readOnly ? "ReadOnly" : "ReadWrite";
-        var connection = new SqliteConnection($"Data Source={databasePathResolver()};Mode={mode}");
-        connection.Open();
-        return connection;
-    }
-
-    private void EnsureDatabaseExists()
-    {
-        var databasePath = databasePathResolver();
-        if (!File.Exists(databasePath))
-        {
-            throw new FileNotFoundException("Cannot find EMS SQLite database.", databasePath);
-        }
-    }
-
     private static async Task EnsureSchemaAsync(SqliteConnection connection, CancellationToken cancellationToken)
     {
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            CREATE TABLE IF NOT EXISTS monitor_groups (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                area_label TEXT NOT NULL DEFAULT '',
-                description TEXT NOT NULL DEFAULT '',
-                priority TEXT NOT NULL DEFAULT '重点',
-                group_kind TEXT NOT NULL DEFAULT 'custom',
-                system_key TEXT,
-                locked INTEGER NOT NULL DEFAULT 0,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE TABLE IF NOT EXISTS monitor_group_items (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                group_id INTEGER NOT NULL,
-                target_type TEXT NOT NULL DEFAULT 'floor',
-                building TEXT NOT NULL,
-                floor_label TEXT,
-                floor_value REAL,
-                sub_area_text TEXT,
-                card_name TEXT,
-                note TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE TABLE IF NOT EXISTS floor_catalog (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                building TEXT NOT NULL,
-                floor_label TEXT NOT NULL,
-                floor_value REAL NOT NULL,
-                source TEXT NOT NULL DEFAULT 'manual',
-                enabled INTEGER NOT NULL DEFAULT 1,
-                note TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_floor_catalog_key
-                ON floor_catalog(building, floor_label);
-            """;
-        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        await SqliteSchemaGuard.RequireCurrentAsync(
+            connection,
+            new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["monitor_groups"] = ["id", "name", "area_label", "description", "priority", "group_kind", "system_key", "locked", "enabled", "created_at", "updated_at"],
+                ["monitor_group_items"] = ["id", "group_id", "target_type", "building", "floor_label", "floor_value", "sub_area_text", "card_name", "device_uid", "note", "created_at", "updated_at"],
+                ["floor_catalog"] = ["id", "building", "floor_label", "floor_value", "source", "enabled", "note", "created_at", "updated_at"],
+            },
+            ["idx_floor_catalog_key", "idx_monitor_group_items_group", "idx_monitor_group_items_target"],
+            cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task SyncFloorCatalogFromCurrentAsync(
         SqliteConnection connection,
         CancellationToken cancellationToken)
     {
+        await using var transaction = connection.BeginTransaction(deferred: false);
         var rows = new List<(string Building, double Floor)>();
         await using (var select = connection.CreateCommand())
         {
+            select.Transaction = transaction;
             select.CommandText = """
                 SELECT building, floor
                 FROM sub_areas
@@ -601,7 +544,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             await using var reader = await select.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
-                rows.Add((ReadString(reader, "building"), ReadDouble(reader, "floor")));
+                rows.Add((SqliteValueReader.ReadString(reader, "building"), ReadDouble(reader, "floor")));
             }
         }
 
@@ -609,6 +552,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         foreach (var row in rows)
         {
             await using var upsert = connection.CreateCommand();
+            upsert.Transaction = transaction;
             upsert.CommandText = """
                 INSERT INTO floor_catalog (building, floor_label, floor_value, source, enabled, note, created_at, updated_at)
                 VALUES ($building, $floor_label, $floor_value, 'discovered', 1, '', $created_at, $updated_at)
@@ -629,6 +573,8 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             upsert.Parameters.AddWithValue("$updated_at", now);
             await upsert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task<FloorCatalogRecord?> LoadFloorByIdAsync(
@@ -647,12 +593,12 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
             ? new FloorCatalogRecord(
                 Id: reader.GetInt64(reader.GetOrdinal("id")),
-                Building: ReadString(reader, "building"),
-                FloorLabel: ReadString(reader, "floor_label"),
+                Building: SqliteValueReader.ReadString(reader, "building"),
+                FloorLabel: SqliteValueReader.ReadString(reader, "floor_label"),
                 FloorValue: ReadDouble(reader, "floor_value"),
-                Source: ReadString(reader, "source"),
-                Enabled: ReadInt32(reader, "enabled") != 0,
-                Note: ReadString(reader, "note"))
+                Source: SqliteValueReader.ReadString(reader, "source"),
+                Enabled: SqliteValueReader.ReadInt32(reader, "enabled") != 0,
+                Note: SqliteValueReader.ReadString(reader, "note"))
             : null;
     }
 
@@ -728,14 +674,14 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             rows.Add(new AreaGroupItemRecord(
                 Id: reader.GetInt64(reader.GetOrdinal("id")),
                 GroupId: reader.GetInt64(reader.GetOrdinal("group_id")),
-                GroupName: ReadString(reader, "group_name"),
-                TargetType: ReadString(reader, "target_type"),
-                Building: ReadString(reader, "building"),
-                FloorLabel: ReadString(reader, "floor_label"),
-                FloorValue: ReadNullableDouble(reader, "floor_value"),
-                SubAreaText: ReadString(reader, "sub_area_text"),
-                CardName: ReadString(reader, "card_name"),
-                Note: ReadString(reader, "note")));
+                GroupName: SqliteValueReader.ReadString(reader, "group_name"),
+                TargetType: SqliteValueReader.ReadString(reader, "target_type"),
+                Building: SqliteValueReader.ReadString(reader, "building"),
+                FloorLabel: SqliteValueReader.ReadString(reader, "floor_label"),
+                FloorValue: SqliteValueReader.ReadNullableDouble(reader, "floor_value"),
+                SubAreaText: SqliteValueReader.ReadString(reader, "sub_area_text"),
+                CardName: SqliteValueReader.ReadString(reader, "card_name"),
+                Note: SqliteValueReader.ReadString(reader, "note")));
         }
 
         return rows;
@@ -805,12 +751,12 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
 
         return new GroupStats(
             ItemCount: (int)itemCount,
-            Total: ReadInt32(reader, "total"),
-            OnCount: ReadInt32(reader, "on_count"),
-            OffCount: ReadInt32(reader, "off_count"),
-            OfflineCount: ReadInt32(reader, "offline_count"),
-            UnknownCount: ReadInt32(reader, "unknown_count"),
-            CoveredAreas: ReadInt32(reader, "covered_areas"));
+            Total: SqliteValueReader.ReadInt32(reader, "total"),
+            OnCount: SqliteValueReader.ReadInt32(reader, "on_count"),
+            OffCount: SqliteValueReader.ReadInt32(reader, "off_count"),
+            OfflineCount: SqliteValueReader.ReadInt32(reader, "offline_count"),
+            UnknownCount: SqliteValueReader.ReadInt32(reader, "unknown_count"),
+            CoveredAreas: SqliteValueReader.ReadInt32(reader, "covered_areas"));
     }
 
     private static async Task<AreaGroupRaw?> LoadGroupRawAsync(SqliteConnection connection, long id, CancellationToken cancellationToken)
@@ -841,14 +787,6 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
                 Id: reader.GetInt64(reader.GetOrdinal("id")),
                 GroupId: reader.GetInt64(reader.GetOrdinal("group_id")))
             : null;
-    }
-
-    private static async Task<bool> TableExistsAsync(SqliteConnection connection, string tableName, CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $name";
-        command.Parameters.AddWithValue("$name", tableName);
-        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null;
     }
 
     private static async Task<long?> FindGroupIdByNameAsync(SqliteConnection connection, string name, CancellationToken cancellationToken)
@@ -990,14 +928,14 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
     {
         return new AreaGroupRaw(
             Id: reader.GetInt64(reader.GetOrdinal("id")),
-            Name: ReadString(reader, "name"),
-            AreaLabel: ReadString(reader, "area_label"),
-            Description: ReadString(reader, "description"),
-            Priority: ReadString(reader, "priority"),
-            GroupKind: ReadString(reader, "group_kind"),
-            SystemKey: ReadString(reader, "system_key"),
-            Locked: ReadInt32(reader, "locked") != 0,
-            Enabled: ReadInt32(reader, "enabled") != 0);
+            Name: SqliteValueReader.ReadString(reader, "name"),
+            AreaLabel: SqliteValueReader.ReadString(reader, "area_label"),
+            Description: SqliteValueReader.ReadString(reader, "description"),
+            Priority: SqliteValueReader.ReadString(reader, "priority"),
+            GroupKind: SqliteValueReader.ReadString(reader, "group_kind"),
+            SystemKey: SqliteValueReader.ReadString(reader, "system_key"),
+            Locked: SqliteValueReader.ReadInt32(reader, "locked") != 0,
+            Enabled: SqliteValueReader.ReadInt32(reader, "enabled") != 0);
     }
 
     private static string Require(string value, string label)
@@ -1064,26 +1002,6 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
     private static object NullIfEmpty(string value)
     {
         return string.IsNullOrWhiteSpace(value) ? DBNull.Value : value.Trim();
-    }
-
-    private static string ReadString(SqliteDataReader reader, string column)
-    {
-        var ordinal = reader.GetOrdinal(column);
-        return reader.IsDBNull(ordinal) ? string.Empty : reader.GetString(ordinal);
-    }
-
-    private static int ReadInt32(SqliteDataReader reader, string column)
-    {
-        var ordinal = reader.GetOrdinal(column);
-        return reader.IsDBNull(ordinal)
-            ? 0
-            : Convert.ToInt32(reader.GetValue(ordinal), System.Globalization.CultureInfo.InvariantCulture);
-    }
-
-    private static double? ReadNullableDouble(SqliteDataReader reader, string column)
-    {
-        var ordinal = reader.GetOrdinal(column);
-        return reader.IsDBNull(ordinal) ? null : reader.GetDouble(ordinal);
     }
 
     private sealed record AreaGroupRaw(

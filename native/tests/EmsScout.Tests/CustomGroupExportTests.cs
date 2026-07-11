@@ -267,10 +267,26 @@ public sealed class CustomGroupExportTests
                 floor_value REAL,
                 sub_area_text TEXT,
                 card_name TEXT,
+                device_uid TEXT,
                 note TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE TABLE floor_catalog (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                building TEXT NOT NULL,
+                floor_label TEXT NOT NULL,
+                floor_value REAL,
+                source TEXT NOT NULL DEFAULT 'manual',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX idx_floor_catalog_key ON floor_catalog(building, floor_label);
+            CREATE INDEX idx_monitor_group_items_group ON monitor_group_items(group_id);
+            CREATE INDEX idx_monitor_group_items_target ON monitor_group_items(building, floor_value, sub_area_text, card_name);
+            PRAGMA user_version = 2;
 
             INSERT INTO sub_areas (id, building, floor, text, sub_idx, x, y) VALUES
                 (1, '1号', 1, '1F A', 1, 100, 100),

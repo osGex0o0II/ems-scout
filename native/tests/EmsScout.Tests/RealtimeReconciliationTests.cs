@@ -1,6 +1,6 @@
 using EmsScout.Application.Devices;
 using EmsScout.Infrastructure.Sqlite;
-using EmsScout.Legacy;
+using EmsScout.Infrastructure.Realtime;
 using System.IO.Compression;
 
 namespace EmsScout.Tests;
@@ -82,9 +82,9 @@ public sealed class RealtimeReconciliationTests
     [Fact]
     public async Task NavigationTargetFindsDeviceInDataWorkbench()
     {
-        var root = LocateRepositoryRoot();
+        var root = ProductionDataSnapshot.RepositoryRoot;
         var repository = new SqliteDeviceReadRepository(
-            Path.Combine(root, "out", "ac.db"),
+            ProductionDataSnapshot.DatabasePath,
             new RealtimeLatestJsonSource(root, Path.Combine(root, "out")));
         var search = await CurrentService().AnalyzeAsync(new(SearchText: "20009772", Limit: 10));
         var target = DeviceNavigationTargetFactory.FromReconciliationItem(search.Items.Single());
@@ -100,27 +100,10 @@ public sealed class RealtimeReconciliationTests
 
     private static SqliteRealtimeReconciliationService CurrentService()
     {
-        var root = LocateRepositoryRoot();
+        var root = ProductionDataSnapshot.RepositoryRoot;
         return new SqliteRealtimeReconciliationService(
-            Path.Combine(root, "out", "ac.db"),
+            ProductionDataSnapshot.DatabasePath,
             new RealtimeLatestJsonSource(root, Path.Combine(root, "out")));
-    }
-
-    private static string LocateRepositoryRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            if (File.Exists(Path.Combine(directory.FullName, "package.json")) &&
-                Directory.Exists(Path.Combine(directory.FullName, "out")))
-            {
-                return directory.FullName;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new DirectoryNotFoundException("Cannot locate repository root.");
     }
 
 }
