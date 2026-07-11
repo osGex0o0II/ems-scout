@@ -56,6 +56,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\field-e2e.ps1 -Build
 The field command writes only to a unique `out\field-e2e-*` directory and never
 opens the production database through SQLite.
 
+The x64 package is self-contained and ReadyToRun, but intentionally not trimmed.
+WinUI/WinRT and the current versioned JSON, migration, settings, and logging paths
+require reflection metadata; enabling trimming without source-generated coverage is unsupported.
+
 ## Database Lifecycle
 
 - `EmsScout.Infrastructure.Migrations` is the only code allowed to create or alter SQLite schema.

@@ -145,9 +145,12 @@ test('Windows x64 packaging inputs are available in a clean clone', () => {
   const profile = fs.readFileSync(profilePath, 'utf8');
   const packageScript = read('scripts/package-native.ps1');
   const projectIgnore = read('native/src/EmsScout.Desktop/.gitignore');
+  const desktopProject = read('native/src/EmsScout.Desktop/EmsScout.Desktop.csproj');
 
   assert.match(profile, /<RuntimeIdentifier>win-x64<\/RuntimeIdentifier>/);
   assert.match(profile, /<SelfContained>true<\/SelfContained>/);
   assert.match(packageScript, /Fixture!=ProductionEvidence/);
   assert.match(projectIgnore, /!Properties\/PublishProfiles\/win-x64\.pubxml/);
+  assert.match(desktopProject, /<PublishTrimmed>false<\/PublishTrimmed>/);
+  assert.doesNotMatch(desktopProject, /<PublishTrimmed[^>]*>True<\/PublishTrimmed>/i);
 });
