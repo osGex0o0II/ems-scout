@@ -19,6 +19,7 @@ public sealed class SettingsTaskLockContractTests
         Assert.Contains("RelayCommand(CanExecute = nameof(CanChangeSettings))", settings);
         Assert.Contains("采集任务运行中，不能迁移或切换数据目录", settings);
         Assert.True(Count(xaml, "IsEnabled=\"{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}\"") >= 4);
+        Assert.DoesNotMatch(@"<Border\b[^>]*\bIsEnabled=", xaml);
         Assert.Contains("Interlocked.Exchange(ref _owner, null)", state);
         Assert.Contains("Interlocked.CompareExchange(ref _activeCollectionTasks, 1, 0)", state);
     }
