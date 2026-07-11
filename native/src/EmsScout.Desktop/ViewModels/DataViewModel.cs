@@ -2,8 +2,10 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using CommunityToolkit.Mvvm.ComponentModel;
 using EmsScout.Application.Devices;
+using EmsScout.Application.Logging;
 using EmsScout.Application.Settings;
 using EmsScout.Desktop.Services;
+using EmsScout.Infrastructure.Logging;
 using Microsoft.UI.Xaml;
 using System.Text.RegularExpressions;
 
@@ -13,7 +15,8 @@ public sealed class DataViewModel(
     IDeviceReadRepository repository,
     IDeviceExportService exportService,
     AppDataPathService pathService,
-    AppUiSettingsService uiSettingsService) : ObservableObject
+    AppUiSettingsService uiSettingsService,
+    IApplicationLogger applicationLogger) : ObservableObject
 {
     private const int PageSize = 500;
     private const int ExportLimit = 50000;
@@ -328,7 +331,7 @@ public sealed class DataViewModel(
             TotalRows = 0;
             ResultSummary = "--";
             PageSummary = "--";
-            StatusText = ex.Message;
+            StatusText = applicationLogger.WriteFailure(ex, "data").DisplayText;
             OnPropertyChanged(nameof(EmptyStateVisibility));
             OnPropertyChanged(nameof(LoadingStateVisibility));
             RefreshRecentExports();
@@ -419,7 +422,7 @@ public sealed class DataViewModel(
             TotalRows = 0;
             ResultSummary = "--";
             PageSummary = "--";
-            StatusText = ex.Message;
+            StatusText = applicationLogger.WriteFailure(ex, "data").DisplayText;
             OnPropertyChanged(nameof(EmptyStateVisibility));
             OnPropertyChanged(nameof(LoadingStateVisibility));
         }
@@ -493,7 +496,7 @@ public sealed class DataViewModel(
             TotalRows = 0;
             ResultSummary = "--";
             PageSummary = "--";
-            StatusText = ex.Message;
+            StatusText = applicationLogger.WriteFailure(ex, "data").DisplayText;
             OnPropertyChanged(nameof(EmptyStateVisibility));
             OnPropertyChanged(nameof(LoadingStateVisibility));
         }
@@ -591,7 +594,7 @@ public sealed class DataViewModel(
         }
         catch (Exception ex)
         {
-            StatusText = ex.Message;
+            StatusText = applicationLogger.WriteFailure(ex, "data").DisplayText;
         }
         finally
         {
@@ -634,7 +637,7 @@ public sealed class DataViewModel(
         }
         catch (Exception ex)
         {
-            StatusText = "无法打开导出位置：" + ex.Message;
+            StatusText = "无法打开导出位置：" + applicationLogger.WriteFailure(ex, "data").DisplayText;
         }
     }
 

@@ -30,7 +30,7 @@ public sealed class AppSettingsServiceTests
         Assert.Equal("http://example.local/ui", loaded.EmsUrl);
         Assert.Equal(65535, loaded.EdgeCdpPort);
         Assert.Equal("data-out", loaded.DataDirectory);
-        Assert.Equal("out/data-management-export", loaded.ExportDirectory);
+        Assert.Equal(AppStorageDefaults.ExportDirectory, loaded.ExportDirectory);
         Assert.Equal("auto-launch", loaded.DefaultCollectionMode);
         Assert.Equal("DEBUG", loaded.LogLevel);
         Assert.Equal("dark", loaded.Theme);
@@ -54,6 +54,46 @@ public sealed class AppSettingsServiceTests
         Assert.Equal(9222, loaded.EdgeCdpPort);
         Assert.Equal("system", loaded.Theme);
 
+        Directory.Delete(tempDir, recursive: true);
+    }
+
+    [Fact]
+    public void NewSettingsUseWritableLocalApplicationDataDirectories()
+    {
+        var settings = new AppSettings();
+
+        Assert.True(Path.IsPathRooted(settings.DataDirectory));
+        Assert.Equal(AppStorageDefaults.DataDirectory, settings.DataDirectory);
+        Assert.Equal(AppStorageDefaults.ExportDirectory, settings.ExportDirectory);
+        Assert.StartsWith(AppStorageDefaults.ProductDirectory, settings.DataDirectory, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ConcurrentSavesAlwaysPublishACompleteJsonDocument()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ems-scout-settings-tests", Guid.NewGuid().ToString("N"));
+        var settingsPath = Path.Combine(tempDir, "settings.json");
+        var service = new AppSettingsService(settingsPath);
+
+        var writers = Enumerable.Range(0, 4).Select(writer => Task.Run(() =>
+        {
+            for (var index = 0; index < 75; index++)
+            {
+                service.Save(new AppSettings
+                {
+                    EmsUrl = $"http://writer-{writer}.local/ui/{index}",
+                    DataDirectory = $"data-{writer}",
+                    ExportDirectory = $"export-{writer}",
+                });
+            }
+        }));
+
+        await Task.WhenAll(writers);
+        var loaded = new AppSettingsService(settingsPath).Load();
+        var suffix = loaded.DataDirectory["data-".Length..];
+        Assert.Equal("export-" + suffix, loaded.ExportDirectory);
+        Assert.StartsWith("http://writer-" + suffix + ".local/", loaded.EmsUrl, StringComparison.Ordinal);
+        Assert.Empty(Directory.EnumerateFiles(tempDir, "*.tmp", SearchOption.AllDirectories));
         Directory.Delete(tempDir, recursive: true);
     }
 }

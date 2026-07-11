@@ -1,12 +1,23 @@
 using EmsScout.Application.Devices;
 using EmsScout.Domain;
 using EmsScout.Infrastructure.Sqlite;
-using EmsScout.Legacy;
+using EmsScout.Infrastructure.Realtime;
 
 namespace EmsScout.Tests;
 
-public sealed class DeviceExportTests
+public sealed class DeviceExportTests : IDisposable
 {
+    private readonly string temporaryRoot;
+
+    public DeviceExportTests()
+    {
+        temporaryRoot = Path.Combine(
+            Path.GetTempPath(),
+            "ems-scout-device-export-tests",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temporaryRoot);
+    }
+
     [Fact]
     public async Task ExportsCurrentFilteredDeviceWorkbook()
     {
@@ -138,6 +149,58 @@ public sealed class DeviceExportTests
     }
 
     [Fact]
+    public async Task DeviceWorkbookPreservesSpecialFloorsEmptyValuesAndXmlCharactersAsText()
+    {
+        var rows = new[]
+        {
+            Device(1, "2号", "2.5F", "2.5F A&B <东>", "2F-\"A&B<东>\"-KT", "关机", "非公区", "", null),
+            Device(2, "1号", "B1F", "B1F 地下", "B1-001-KT", "离线", "公区", "A座", ""),
+            Device(3, "6号", "BM", "BM C座", "=1+1", "开机", "公区", "C座", "关闭"),
+        };
+        var exportService = new SqliteDeviceExportService(new FakeDeviceReadRepository(rows));
+        var output = Path.Combine(temporaryRoot, "special-values");
+
+        var export = await exportService.ExportAsync(new DeviceQuery(), output);
+
+        UserDeviceWorkbookAssert.AssertShape(export);
+        var exportedRows = UserDeviceWorkbookAssert.ReadRows(export.Path);
+        Assert.Equal(["2.5F", "B1F", "BM"], exportedRows.Skip(1).Select(row => row[2]).ToArray());
+        Assert.Equal("2F-\"A&B<东>\"-KT", exportedRows[1][4]);
+        Assert.Equal(string.Empty, exportedRows[1][1]);
+        Assert.Equal("=1+1", exportedRows[3][4]);
+        Assert.All(UserDeviceWorkbookAssert.ReadCellTypes(export.Path), type => Assert.Equal("inlineStr", type));
+        var worksheetXml = UserDeviceWorkbookAssert.ReadWorksheetXml(export.Path);
+        Assert.Contains("2F-&quot;A&amp;B&lt;东&gt;&quot;-KT", worksheetXml);
+        Assert.DoesNotContain("<f>", worksheetXml, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DeviceWorkbookExportsHeaderOnlyForEmptyFilterResult()
+    {
+        var exportService = new SqliteDeviceExportService(new FakeDeviceReadRepository([]));
+        var output = Path.Combine(temporaryRoot, "empty");
+
+        var export = await exportService.ExportAsync(new DeviceQuery(Building: "不存在"), output);
+
+        Assert.Equal(0, export.RowCount);
+        UserDeviceWorkbookAssert.AssertShape(export);
+        Assert.Single(UserDeviceWorkbookAssert.ReadRows(export.Path));
+    }
+
+    [Fact]
+    public async Task DeviceWorkbookRejectsResultsAboveExportLimit()
+    {
+        var exportService = new SqliteDeviceExportService(new TotalOverrideRepository(50001));
+        var output = Path.Combine(temporaryRoot, "over-limit");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => exportService.ExportAsync(new DeviceQuery(), output));
+
+        Assert.Contains("50,000", error.Message);
+        Assert.Empty(Directory.EnumerateFiles(output, "*.xlsx"));
+    }
+
+    [Fact]
     public async Task DeviceWorkbookUsesSingleRepositorySnapshot()
     {
         var rows = new[]
@@ -178,16 +241,21 @@ public sealed class DeviceExportTests
         Assert.False(Directory.Exists(output));
     }
 
-    private static SqliteDeviceExportService CurrentExportService()
+    public void Dispose()
+    {
+        Directory.Delete(temporaryRoot, recursive: true);
+    }
+
+    private SqliteDeviceExportService CurrentExportService()
     {
         return new SqliteDeviceExportService(CurrentRepository());
     }
 
-    private static SqliteDeviceReadRepository CurrentRepository()
+    private SqliteDeviceReadRepository CurrentRepository()
     {
-        var root = LocateRepositoryRoot();
+        var root = ProductionDataSnapshot.RepositoryRoot;
         return new SqliteDeviceReadRepository(
-            Path.Combine(root, "out", "ac.db"),
+            ProductionDataSnapshot.DatabasePath,
             new RealtimeLatestJsonSource(root, Path.Combine(root, "out")));
     }
 
@@ -297,20 +365,24 @@ public sealed class DeviceExportTests
         }
     }
 
-    private static string LocateRepositoryRoot()
+    private sealed class TotalOverrideRepository(int total) : IDeviceReadRepository
     {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
+        public Task<DeviceListResult> SearchAsync(DeviceQuery query, CancellationToken cancellationToken = default)
         {
-            if (File.Exists(Path.Combine(directory.FullName, "package.json")) &&
-                Directory.Exists(Path.Combine(directory.FullName, "out")))
-            {
-                return directory.FullName;
-            }
-
-            directory = directory.Parent;
+            return Task.FromResult(new DeviceListResult(total, [], DeviceFacets.From([])));
         }
 
-        throw new DirectoryNotFoundException("Cannot locate repository root.");
+        public Task<DeviceFilterOptions> LoadFilterOptionsAsync(CancellationToken cancellationToken = default)
+        {
+            return LoadFilterOptionsAsync(new DeviceQuery(), cancellationToken);
+        }
+
+        public Task<DeviceFilterOptions> LoadFilterOptionsAsync(
+            DeviceQuery query,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new DeviceFilterOptions([], [], [], [], [], [], [], [], [], [], [], []));
+        }
     }
+
 }

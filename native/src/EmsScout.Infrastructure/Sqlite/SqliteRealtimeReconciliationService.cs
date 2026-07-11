@@ -24,9 +24,10 @@ public sealed class SqliteRealtimeReconciliationService(
         RealtimeReconciliationQuery query,
         CancellationToken cancellationToken = default)
     {
-        EnsureDatabaseExists();
-
-        await using var connection = OpenConnection();
+        await using var connection = SqliteDatabase.OpenExisting(
+            DatabasePathResolver,
+            SqliteOpenMode.ReadOnly,
+            SqliteCacheMode.Shared);
         var buildings = ResolveBuildings(query.Building);
         var dbRows = await LoadDbRowsAsync(connection, buildings, cancellationToken).ConfigureAwait(false);
         var realtimeSet = await realtimeDetailSource.LoadAsync(buildings, cancellationToken).ConfigureAwait(false);
@@ -73,22 +74,6 @@ public sealed class SqliteRealtimeReconciliationService(
             filtered.Skip(offset).Take(limit).ToList());
     }
 
-    private SqliteConnection OpenConnection()
-    {
-        var connection = new SqliteConnection($"Data Source={DatabasePathResolver()};Mode=ReadOnly;Cache=Shared");
-        connection.Open();
-        return connection;
-    }
-
-    private void EnsureDatabaseExists()
-    {
-        var databasePath = DatabasePathResolver();
-        if (!File.Exists(databasePath))
-        {
-            throw new FileNotFoundException("Cannot find EMS SQLite database.", databasePath);
-        }
-    }
-
     private static async Task<IReadOnlyList<DbReconcileRow>> LoadDbRowsAsync(
         SqliteConnection connection,
         IReadOnlyList<string> buildings,
@@ -125,18 +110,18 @@ public sealed class SqliteRealtimeReconciliationService(
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            var floor = ReadNullableDouble(reader, "floor");
-            var subArea = ReadString(reader, "sub_area");
+            var floor = SqliteValueReader.ReadNullableDouble(reader, "floor");
+            var subArea = SqliteValueReader.ReadString(reader, "sub_area");
             rows.Add(new DbReconcileRow(
                 Id: reader.GetInt64(reader.GetOrdinal("id")),
-                Building: ReadString(reader, "building"),
+                Building: SqliteValueReader.ReadString(reader, "building"),
                 Floor: floor,
                 FloorLabel: DeviceFloorLabelFormatter.Format(floor, subArea),
                 SubArea: subArea,
-                PageName: NormalizePageName(ReadString(reader, "page_name")),
-                Name: ReadString(reader, "name"),
-                SwitchState: ReadString(reader, "switch"),
-                CommunicationText: ReadString(reader, "comm")));
+                PageName: NormalizePageName(SqliteValueReader.ReadString(reader, "page_name")),
+                Name: SqliteValueReader.ReadString(reader, "name"),
+                SwitchState: SqliteValueReader.ReadString(reader, "switch"),
+                CommunicationText: SqliteValueReader.ReadString(reader, "comm")));
         }
 
         return rows;
@@ -146,7 +131,7 @@ public sealed class SqliteRealtimeReconciliationService(
         SqliteConnection connection,
         CancellationToken cancellationToken)
     {
-        if (!await TableExistsAsync(connection, "realtime_match_overrides", cancellationToken).ConfigureAwait(false))
+        if (!await SqliteSchemaGuard.TableExistsAsync(connection, "realtime_match_overrides", cancellationToken).ConfigureAwait(false))
         {
             return RealtimeMatchOverrideSet.Empty;
         }
@@ -164,32 +149,20 @@ public sealed class SqliteRealtimeReconciliationService(
         {
             rows.Add(new RealtimeMatchOverride(
                 Id: reader.GetInt64(reader.GetOrdinal("id")),
-                Building: ReadString(reader, "building"),
-                DevId: ReadString(reader, "dev_id"),
-                FloorLabel: ReadString(reader, "floor_label"),
-                SubArea: ReadString(reader, "sub_area"),
-                PageName: NormalizePageName(ReadString(reader, "page_name")),
-                RealtimeName: ReadString(reader, "realtime_name"),
-                Action: NormalizeOverrideAction(ReadString(reader, "action")),
-                TargetCardId: ReadNullableInt64(reader, "target_card_id"),
-                ZuoOverride: ReadString(reader, "zuo_override"),
-                AreaTypeOverride: ReadString(reader, "area_type_override"),
-                Note: ReadString(reader, "note")));
+                Building: SqliteValueReader.ReadString(reader, "building"),
+                DevId: SqliteValueReader.ReadString(reader, "dev_id"),
+                FloorLabel: SqliteValueReader.ReadString(reader, "floor_label"),
+                SubArea: SqliteValueReader.ReadString(reader, "sub_area"),
+                PageName: NormalizePageName(SqliteValueReader.ReadString(reader, "page_name")),
+                RealtimeName: SqliteValueReader.ReadString(reader, "realtime_name"),
+                Action: NormalizeOverrideAction(SqliteValueReader.ReadString(reader, "action")),
+                TargetCardId: SqliteValueReader.ReadNullableInt64(reader, "target_card_id"),
+                ZuoOverride: SqliteValueReader.ReadString(reader, "zuo_override"),
+                AreaTypeOverride: SqliteValueReader.ReadString(reader, "area_type_override"),
+                Note: SqliteValueReader.ReadString(reader, "note")));
         }
 
         return new RealtimeMatchOverrideSet(rows);
-    }
-
-    private static async Task<bool> TableExistsAsync(
-        SqliteConnection connection,
-        string tableName,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $name LIMIT 1";
-        command.Parameters.AddWithValue("$name", tableName);
-        var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-        return result is not null;
     }
 
     private static void ConsumeExactMatches(ReconcileState state)
@@ -758,24 +731,6 @@ public sealed class SqliteRealtimeReconciliationService(
             RealtimeReconciliationTypes.DataNoise => 5,
             _ => 99,
         };
-    }
-
-    private static string ReadString(SqliteDataReader reader, string name)
-    {
-        var ordinal = reader.GetOrdinal(name);
-        return reader.IsDBNull(ordinal) ? string.Empty : reader.GetString(ordinal);
-    }
-
-    private static double? ReadNullableDouble(SqliteDataReader reader, string name)
-    {
-        var ordinal = reader.GetOrdinal(name);
-        return reader.IsDBNull(ordinal) ? null : reader.GetDouble(ordinal);
-    }
-
-    private static long? ReadNullableInt64(SqliteDataReader reader, string name)
-    {
-        var ordinal = reader.GetOrdinal(name);
-        return reader.IsDBNull(ordinal) ? null : reader.GetInt64(ordinal);
     }
 
     private static string NormalizePageName(string value)

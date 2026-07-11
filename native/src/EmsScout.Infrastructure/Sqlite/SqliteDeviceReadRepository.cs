@@ -24,14 +24,15 @@ public sealed class SqliteDeviceReadRepository(
 
     public async Task<DeviceListResult> SearchAsync(DeviceQuery query, CancellationToken cancellationToken = default)
     {
-        EnsureDatabaseExists();
-
         var source = DeviceSqlSource.For(query.RunId);
         var (whereSql, parameters) = BuildWhereClause(query, source);
         var limit = Math.Clamp(query.Limit, 1, 50000);
         var offset = Math.Max(0, query.Offset);
 
-        await using var connection = OpenConnection();
+        await using var connection = SqliteDatabase.OpenExisting(
+            DatabasePathResolver,
+            SqliteOpenMode.ReadOnly,
+            SqliteCacheMode.Shared);
         var annotations = source.IsHistory
             ? EmptyAnnotations()
             : await LoadAnnotationMapsAsync(connection, cancellationToken).ConfigureAwait(false);
@@ -97,8 +98,10 @@ public sealed class SqliteDeviceReadRepository(
         DeviceQuery query,
         CancellationToken cancellationToken = default)
     {
-        EnsureDatabaseExists();
-        await using var connection = OpenConnection();
+        await using var connection = SqliteDatabase.OpenExisting(
+            DatabasePathResolver,
+            SqliteOpenMode.ReadOnly,
+            SqliteCacheMode.Shared);
         var source = DeviceSqlSource.For(query.RunId);
         var (runWhereSql, runParameters) = BuildWhereClause(query, source);
 
@@ -150,22 +153,6 @@ public sealed class SqliteDeviceReadRepository(
             RealtimeSystemTypes: CountOptions(filtered, row => row.Realtime?.Field("系统类型") ?? string.Empty));
     }
 
-    private SqliteConnection OpenConnection()
-    {
-        var connection = new SqliteConnection($"Data Source={DatabasePathResolver()};Mode=ReadOnly;Cache=Shared");
-        connection.Open();
-        return connection;
-    }
-
-    private void EnsureDatabaseExists()
-    {
-        var databasePath = DatabasePathResolver();
-        if (!File.Exists(databasePath))
-        {
-            throw new FileNotFoundException("Cannot find EMS SQLite database.", databasePath);
-        }
-    }
-
     private static async Task<List<DeviceRecord>> LoadDeviceRowsAsync(
         SqliteConnection connection,
         DeviceSqlSource source,
@@ -205,13 +192,13 @@ public sealed class SqliteDeviceReadRepository(
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            var floor = ReadNullableDouble(reader, "floor");
-            var building = ReadString(reader, "building");
-            var name = ReadString(reader, "name");
-            var subArea = ReadString(reader, "sub_area");
-            var x = ReadNullableDouble(reader, "x");
-            var y = ReadNullableDouble(reader, "y");
-            var comm = ReadString(reader, "comm");
+            var floor = SqliteValueReader.ReadNullableDouble(reader, "floor");
+            var building = SqliteValueReader.ReadString(reader, "building");
+            var name = SqliteValueReader.ReadString(reader, "name");
+            var subArea = SqliteValueReader.ReadString(reader, "sub_area");
+            var x = SqliteValueReader.ReadNullableDouble(reader, "x");
+            var y = SqliteValueReader.ReadNullableDouble(reader, "y");
+            var comm = SqliteValueReader.ReadString(reader, "comm");
             var zuo = DeviceZuoClassifier.Classify(building, x);
             var annotationKey = AnnotationKey(building, name);
             rows.Add(new DeviceRecord(
@@ -222,15 +209,15 @@ public sealed class SqliteDeviceReadRepository(
                 SubArea: subArea,
                 X: x,
                 Y: y,
-                PageName: ReadString(reader, "page_name"),
+                PageName: SqliteValueReader.ReadString(reader, "page_name"),
                 Name: name,
-                Layout: ReadString(reader, "layout"),
-                SwitchState: ReadString(reader, "switch"),
-                Mode: ReadString(reader, "mode"),
-                IndoorTemperature: ReadString(reader, "indoor"),
-                SetTemperature: ReadString(reader, "set_temp"),
-                Fan: ReadString(reader, "fan"),
-                Indicator: ReadString(reader, "indicator"),
+                Layout: SqliteValueReader.ReadString(reader, "layout"),
+                SwitchState: SqliteValueReader.ReadString(reader, "switch"),
+                Mode: SqliteValueReader.ReadString(reader, "mode"),
+                IndoorTemperature: SqliteValueReader.ReadString(reader, "indoor"),
+                SetTemperature: SqliteValueReader.ReadString(reader, "set_temp"),
+                Fan: SqliteValueReader.ReadString(reader, "fan"),
+                Indicator: SqliteValueReader.ReadString(reader, "indicator"),
                 CommunicationText: comm,
                 CommunicationState: DeviceCommunicationStateParser.Parse(comm),
                 Zuo: zuo,
@@ -483,8 +470,8 @@ public sealed class SqliteDeviceReadRepository(
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             rows.Add(new DeviceFilterOption(
-                Value: ReadString(reader, "value"),
-                Label: ReadString(reader, "label"),
+                Value: SqliteValueReader.ReadString(reader, "value"),
+                Label: SqliteValueReader.ReadString(reader, "label"),
                 Count: Convert.ToInt32(reader.GetInt64(reader.GetOrdinal("count")), CultureInfo.InvariantCulture)));
         }
 
@@ -583,8 +570,8 @@ public sealed class SqliteDeviceReadRepository(
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             var label = DeviceFloorLabelFormatter.Format(
-                ReadNullableDouble(reader, "floor"),
-                ReadString(reader, "sub_area"));
+                SqliteValueReader.ReadNullableDouble(reader, "floor"),
+                SqliteValueReader.ReadString(reader, "sub_area"));
             counts[label] = counts.GetValueOrDefault(label) +
                             Convert.ToInt32(reader.GetInt64(reader.GetOrdinal("count")), CultureInfo.InvariantCulture);
         }
@@ -642,8 +629,8 @@ public sealed class SqliteDeviceReadRepository(
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             var zuo = DeviceZuoClassifier.Classify(
-                ReadString(reader, "building"),
-                ReadNullableDouble(reader, "x"));
+                SqliteValueReader.ReadString(reader, "building"),
+                SqliteValueReader.ReadNullableDouble(reader, "x"));
             if (string.IsNullOrWhiteSpace(zuo))
             {
                 continue;
@@ -663,7 +650,7 @@ public sealed class SqliteDeviceReadRepository(
         SqliteConnection connection,
         CancellationToken cancellationToken)
     {
-        if (!await TableExistsAsync(connection, "device_tags", cancellationToken).ConfigureAwait(false))
+        if (!await SqliteSchemaGuard.TableExistsAsync(connection, "device_tags", cancellationToken).ConfigureAwait(false))
         {
             return [];
         }
@@ -687,8 +674,8 @@ public sealed class SqliteDeviceReadRepository(
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             rows.Add(new DeviceFilterOption(
-                Value: ReadString(reader, "value"),
-                Label: ReadString(reader, "label"),
+                Value: SqliteValueReader.ReadString(reader, "value"),
+                Label: SqliteValueReader.ReadString(reader, "label"),
                 Count: Convert.ToInt32(reader.GetInt64(reader.GetOrdinal("count")), CultureInfo.InvariantCulture)));
         }
 
@@ -702,19 +689,19 @@ public sealed class SqliteDeviceReadRepository(
         var notes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var tags = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
 
-        if (await TableExistsAsync(connection, "device_notes", cancellationToken).ConfigureAwait(false))
+        if (await SqliteSchemaGuard.TableExistsAsync(connection, "device_notes", cancellationToken).ConfigureAwait(false))
         {
             await using var command = connection.CreateCommand();
             command.CommandText = "SELECT building, card_name, note FROM device_notes";
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
-                notes[AnnotationKey(ReadString(reader, "building"), ReadString(reader, "card_name"))] =
-                    ReadString(reader, "note");
+                notes[AnnotationKey(SqliteValueReader.ReadString(reader, "building"), SqliteValueReader.ReadString(reader, "card_name"))] =
+                    SqliteValueReader.ReadString(reader, "note");
             }
         }
 
-        if (await TableExistsAsync(connection, "device_tags", cancellationToken).ConfigureAwait(false))
+        if (await SqliteSchemaGuard.TableExistsAsync(connection, "device_tags", cancellationToken).ConfigureAwait(false))
         {
             var tagLists = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             await using var command = connection.CreateCommand();
@@ -722,13 +709,13 @@ public sealed class SqliteDeviceReadRepository(
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
-                var tag = ReadString(reader, "tag");
+                var tag = SqliteValueReader.ReadString(reader, "tag");
                 if (string.IsNullOrWhiteSpace(tag))
                 {
                     continue;
                 }
 
-                var key = AnnotationKey(ReadString(reader, "building"), ReadString(reader, "card_name"));
+                var key = AnnotationKey(SqliteValueReader.ReadString(reader, "building"), SqliteValueReader.ReadString(reader, "card_name"));
                 if (!tagLists.TryGetValue(key, out var list))
                 {
                     list = [];
@@ -754,7 +741,7 @@ public sealed class SqliteDeviceReadRepository(
         SqliteConnection connection,
         CancellationToken cancellationToken)
     {
-        if (!await TableExistsAsync(connection, "realtime_match_overrides", cancellationToken).ConfigureAwait(false))
+        if (!await SqliteSchemaGuard.TableExistsAsync(connection, "realtime_match_overrides", cancellationToken).ConfigureAwait(false))
         {
             return RealtimeMatchOverrideSet.Empty;
         }
@@ -772,32 +759,20 @@ public sealed class SqliteDeviceReadRepository(
         {
             rows.Add(new RealtimeMatchOverride(
                 Id: reader.GetInt64(reader.GetOrdinal("id")),
-                Building: ReadString(reader, "building"),
-                DevId: ReadString(reader, "dev_id"),
-                FloorLabel: ReadString(reader, "floor_label"),
-                SubArea: ReadString(reader, "sub_area"),
-                PageName: NormalizePageName(ReadString(reader, "page_name")),
-                RealtimeName: ReadString(reader, "realtime_name"),
-                Action: NormalizeOverrideAction(ReadString(reader, "action")),
-                TargetCardId: ReadNullableInt64(reader, "target_card_id"),
-                ZuoOverride: ReadString(reader, "zuo_override"),
-                AreaTypeOverride: NormalizeAreaTypeOverride(ReadString(reader, "area_type_override")),
-                Note: ReadString(reader, "note")));
+                Building: SqliteValueReader.ReadString(reader, "building"),
+                DevId: SqliteValueReader.ReadString(reader, "dev_id"),
+                FloorLabel: SqliteValueReader.ReadString(reader, "floor_label"),
+                SubArea: SqliteValueReader.ReadString(reader, "sub_area"),
+                PageName: NormalizePageName(SqliteValueReader.ReadString(reader, "page_name")),
+                RealtimeName: SqliteValueReader.ReadString(reader, "realtime_name"),
+                Action: NormalizeOverrideAction(SqliteValueReader.ReadString(reader, "action")),
+                TargetCardId: SqliteValueReader.ReadNullableInt64(reader, "target_card_id"),
+                ZuoOverride: SqliteValueReader.ReadString(reader, "zuo_override"),
+                AreaTypeOverride: NormalizeAreaTypeOverride(SqliteValueReader.ReadString(reader, "area_type_override")),
+                Note: SqliteValueReader.ReadString(reader, "note")));
         }
 
         return new RealtimeMatchOverrideSet(rows);
-    }
-
-    private static async Task<bool> TableExistsAsync(
-        SqliteConnection connection,
-        string tableName,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $name LIMIT 1";
-        command.Parameters.AddWithValue("$name", tableName);
-        var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-        return result is not null;
     }
 
     private static void AddParameters(SqliteCommand command, IReadOnlyDictionary<string, object> parameters)
@@ -1063,24 +1038,6 @@ public sealed class SqliteDeviceReadRepository(
         string key)
     {
         return index.TryGetValue(key, out var values) && values.Count == 1 ? values[0] : null;
-    }
-
-    private static string ReadString(SqliteDataReader reader, string name)
-    {
-        var ordinal = reader.GetOrdinal(name);
-        return reader.IsDBNull(ordinal) ? string.Empty : reader.GetString(ordinal);
-    }
-
-    private static double? ReadNullableDouble(SqliteDataReader reader, string name)
-    {
-        var ordinal = reader.GetOrdinal(name);
-        return reader.IsDBNull(ordinal) ? null : reader.GetDouble(ordinal);
-    }
-
-    private static long? ReadNullableInt64(SqliteDataReader reader, string name)
-    {
-        var ordinal = reader.GetOrdinal(name);
-        return reader.IsDBNull(ordinal) ? null : reader.GetInt64(ordinal);
     }
 
     private static string AnnotationKey(string building, string name)

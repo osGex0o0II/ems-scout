@@ -6,25 +6,39 @@ public sealed class AppDataPathService(
 {
     public string WorkspaceRoot { get; } = workspaceRoot;
 
-    public string DataDirectory
+    public string DataDirectory => Capture().DataDirectory;
+
+    public string ExportDirectory => Capture().ExportDirectory;
+
+    public string CollectionSnapshotPath => Capture().CollectionSnapshotPath;
+
+    public string DatabasePath => Capture().DatabasePath;
+
+    public string QualityOutputDirectory => Capture().QualityOutputDirectory;
+
+    public AppDataPathSnapshot Capture() => Capture(settingsService.Load());
+
+    public AppDataPathSnapshot Capture(AppSettings settings)
     {
-        get
-        {
-            var settings = settingsService.Load();
-            return ResolveWorkspacePath(settings.DataDirectory);
-        }
+        ArgumentNullException.ThrowIfNull(settings);
+        return new(
+            Path.GetFullPath(ResolveWorkspacePath(settings.DataDirectory)),
+            Path.GetFullPath(ResolveWorkspacePath(settings.ExportDirectory)));
     }
 
-    public string ExportDirectory
-    {
-        get
-        {
-            var settings = settingsService.Load();
-            return ResolveWorkspacePath(settings.ExportDirectory);
-        }
-    }
+    public IReadOnlyDictionary<string, string> BuildDataEnvironment() => Capture().BuildDataEnvironment();
 
-    public string EnumJsonPath => Path.Combine(DataDirectory, "enum_full_v5.json");
+    public string ResolveWorkspacePath(string path)
+    {
+        return Path.IsPathRooted(path)
+            ? path
+            : Path.Combine(WorkspaceRoot, path);
+    }
+}
+
+public sealed record AppDataPathSnapshot(string DataDirectory, string ExportDirectory)
+{
+    public string CollectionSnapshotPath => Path.Combine(DataDirectory, "collection_snapshot_v1.json");
 
     public string DatabasePath => Path.Combine(DataDirectory, "ac.db");
 
@@ -32,21 +46,14 @@ public sealed class AppDataPathService(
 
     public IReadOnlyDictionary<string, string> BuildDataEnvironment()
     {
-        var dataDirectory = DataDirectory;
-        Directory.CreateDirectory(dataDirectory);
+        Directory.CreateDirectory(DataDirectory);
         return new Dictionary<string, string>
         {
-            ["EMS_OUT_DIR"] = dataDirectory,
-            ["EMS_JSON_PATH"] = Path.Combine(dataDirectory, "enum_full_v5.json"),
-            ["EMS_DB_PATH"] = Path.Combine(dataDirectory, "ac.db"),
-            ["EMS_QUALITY_OUT"] = dataDirectory,
+            ["EMS_OUT_DIR"] = DataDirectory,
+            ["EMS_JSON_PATH"] = Path.Combine(DataDirectory, "enum_full_v5.json"),
+            ["EMS_SNAPSHOT_PATH"] = CollectionSnapshotPath,
+            ["EMS_DB_PATH"] = DatabasePath,
+            ["EMS_QUALITY_OUT"] = QualityOutputDirectory,
         };
-    }
-
-    public string ResolveWorkspacePath(string path)
-    {
-        return Path.IsPathRooted(path)
-            ? path
-            : Path.Combine(WorkspaceRoot, path);
     }
 }

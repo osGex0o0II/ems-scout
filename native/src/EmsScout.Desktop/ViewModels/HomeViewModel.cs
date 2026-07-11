@@ -1,15 +1,18 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using EmsScout.Application;
+using EmsScout.Application.Logging;
 using EmsScout.Domain;
 using EmsScout.Desktop.Services;
+using EmsScout.Infrastructure.Logging;
 using Microsoft.UI.Xaml.Controls;
 
 namespace EmsScout.Desktop.ViewModels;
 
 public sealed partial class HomeViewModel(
     DashboardOverviewService overviewService,
-    INavigationService navigationService) : ObservableObject
+    INavigationService navigationService,
+    IApplicationLogger applicationLogger) : ObservableObject
 {
     private string _pageStatus = "正在读取当前采集数据";
     private string _sourcePath = string.Empty;
@@ -163,10 +166,10 @@ public sealed partial class HomeViewModel(
         catch (Exception ex)
         {
             HasLoadError = true;
-            PageStatus = ex.Message;
+            PageStatus = applicationLogger.WriteFailure(ex, "dashboard").DisplayText;
             OverviewSeverity = InfoBarSeverity.Error;
             OverviewStatusTitle = "总览读取失败";
-            OverviewStatusMessage = ex.Message;
+            OverviewStatusMessage = applicationLogger.WriteFailure(ex, "dashboard").DisplayText;
         }
         finally
         {

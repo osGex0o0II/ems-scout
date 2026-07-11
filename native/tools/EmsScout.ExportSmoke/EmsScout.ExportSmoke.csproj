@@ -10,7 +10,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\EmsScout.Application\EmsScout.Application.csproj" />
     <ProjectReference Include="..\..\src\EmsScout.Infrastructure\EmsScout.Infrastructure.csproj" />
-    <ProjectReference Include="..\..\src\EmsScout.Legacy\EmsScout.Legacy.csproj" />
   </ItemGroup>
 
 </Project>

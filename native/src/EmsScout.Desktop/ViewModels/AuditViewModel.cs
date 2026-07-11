@@ -3,21 +3,26 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EmsScout.Application.Collection;
 using EmsScout.Application.Devices;
+using EmsScout.Application.Logging;
 using EmsScout.Application.Quality;
 using EmsScout.Application.Settings;
+using EmsScout.Application.Workflows;
 using EmsScout.Desktop.Services;
+using EmsScout.Infrastructure.Logging;
+using EmsScout.Infrastructure.Sidecar;
 using Microsoft.UI.Dispatching;
 
 namespace EmsScout.Desktop.ViewModels;
 
 public sealed partial class AuditViewModel(
-    IQualityAuditService qualityAuditService,
+    INativeQualityAuditService qualityAuditService,
     IRealtimeQualityAuditService realtimeQualityAuditService,
     IRealtimeReconciliationService realtimeReconciliationService,
     ICollectionRunRepository collectionRunRepository,
     INavigationService navigationService,
     NodeCollectionTaskRunner runner,
-    AppDataPathService pathService) : ObservableObject
+    AppDataPathService pathService,
+    IApplicationLogger applicationLogger) : ObservableObject
 {
     private readonly DispatcherQueue _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
 
@@ -162,11 +167,30 @@ public sealed partial class AuditViewModel(
     [RelayCommand(CanExecute = nameof(CanRefresh))]
     private async Task RunQualityAuditAsync(CancellationToken cancellationToken = default)
     {
-        await RunAuditScriptAsync(
-            "基础质量审计",
-            Path.Combine("scripts", "quality-report.js"),
-            [],
-            cancellationToken).ConfigureAwait(true);
+        IsBusy = true;
+        StatusText = "正在运行基础质量审计";
+        try
+        {
+            var report = await qualityAuditService
+                .AuditAsync(NativeQualityAuditRequest.LatestCompletedRun, cancellationToken)
+                .ConfigureAwait(true);
+            ApplyQualityReport(report);
+            RefreshFacets();
+            StatusText = report is null
+                ? "没有可审计的已完成采集批次"
+                : report.Summary.IssueCount > 0
+                    ? "基础质量审计已完成，存在待复核项"
+                    : "基础质量审计已完成";
+        }
+        catch (Exception ex)
+        {
+            ApplyQualityError(ex);
+            StatusText = "基础质量审计运行失败：" + applicationLogger.WriteFailure(ex, "audit").DisplayText;
+        }
+        finally
+        {
+            IsBusy = false;
+        }
     }
 
     [RelayCommand(CanExecute = nameof(CanRefresh))]
@@ -189,7 +213,7 @@ public sealed partial class AuditViewModel(
         StatusText = $"正在运行{label}";
         try
         {
-            var exitCode = await runner.RunNodeScriptAsync(
+            var result = await runner.RunWorkflowScriptAsync(
                 script,
                 arguments,
                 line => _dispatcherQueue.TryEnqueue(() =>
@@ -198,21 +222,24 @@ public sealed partial class AuditViewModel(
                         ? $"{label}：{line}"
                         : $"正在运行{label}：{line}";
                 }),
+                _ => { },
                 cancellationToken,
                 pathService.BuildDataEnvironment()).ConfigureAwait(true);
 
-            if (exitCode != 0)
+            if (!result.IsSuccessful)
             {
-                StatusText = $"{label}失败，退出码 {exitCode}";
+                StatusText = $"{label}未完成：{result.Outcome}，退出码 {result.ExitCode}";
                 return;
             }
 
-            StatusText = $"{label}已完成，正在刷新结果";
+            StatusText = result.Outcome == WorkflowTerminalOutcome.SucceededWithFindings
+                ? $"{label}已完成并发现需复核项，正在刷新结果"
+                : $"{label}已完成，正在刷新结果";
             await RefreshAsync(cancellationToken).ConfigureAwait(true);
         }
         catch (Exception ex)
         {
-            StatusText = $"{label}运行失败：" + ex.Message;
+            StatusText = $"{label}运行失败：" + applicationLogger.WriteFailure(ex, "audit").DisplayText;
         }
         finally
         {
@@ -242,40 +269,50 @@ public sealed partial class AuditViewModel(
         try
         {
             var report = await qualityAuditService.LoadLatestAsync(cancellationToken).ConfigureAwait(true);
-            QualityIssues.Clear();
-            if (report is null)
-            {
-                QualityStatusText = "未找到质量审计文件";
-                QualitySummaryText = "采集或手动运行质量审计后显示结果";
-                QualityGeneratedText = "--";
-                return;
-            }
-
-            foreach (var issue in report.Issues)
-            {
-                QualityIssues.Add(new QualityAuditIssueRow(issue));
-            }
-
-            QualityStatusText = report.IsStale
-                ? "质量审计可能过期"
-                : report.Summary.IssueCount > 0 ? "存在待复核质量问题" : "质量审计通过";
-            QualitySummaryText =
-                $"总数 {report.Summary.TotalCards:N0}；问题 {report.Summary.IssueCount:N0}；未知通讯 {report.Summary.UnknownCommunication:N0}；缺 indicator {report.Summary.MissingIndicator:N0}";
-            QualityGeneratedText = string.IsNullOrWhiteSpace(report.GeneratedAtLocal)
-                ? report.SourcePath
-                : $"生成时间 {report.GeneratedAtLocal}";
-            if (report.IsStale)
-            {
-                QualityGeneratedText += "；" + report.StaleReason;
-            }
+            ApplyQualityReport(report);
         }
         catch (Exception ex)
         {
-            QualityIssues.Clear();
-            QualityStatusText = "质量审计读取失败";
-            QualitySummaryText = ex.Message;
-            QualityGeneratedText = "--";
+            ApplyQualityError(ex);
         }
+    }
+
+    private void ApplyQualityReport(QualityAuditReport? report)
+    {
+        QualityIssues.Clear();
+        if (report is null)
+        {
+            QualityStatusText = "没有可审计的已完成采集批次";
+            QualitySummaryText = "导入采集快照后显示结果";
+            QualityGeneratedText = "--";
+            return;
+        }
+
+        foreach (var issue in report.Issues)
+        {
+            QualityIssues.Add(new QualityAuditIssueRow(issue));
+        }
+
+        QualityStatusText = report.IsStale
+            ? "质量审计可能过期"
+            : report.Summary.IssueCount > 0 ? "存在待复核质量问题" : "质量审计通过";
+        QualitySummaryText =
+            $"总数 {report.Summary.TotalCards:N0}；问题 {report.Summary.IssueCount:N0}；未知通讯 {report.Summary.UnknownCommunication:N0}；缺 indicator {report.Summary.MissingIndicator:N0}";
+        QualityGeneratedText = string.IsNullOrWhiteSpace(report.GeneratedAtLocal)
+            ? report.SourcePath
+            : $"生成时间 {report.GeneratedAtLocal}";
+        if (report.IsStale)
+        {
+            QualityGeneratedText += "；" + report.StaleReason;
+        }
+    }
+
+    private void ApplyQualityError(Exception exception)
+    {
+        QualityIssues.Clear();
+        QualityStatusText = "质量审计读取失败";
+        QualitySummaryText = exception.Message;
+        QualityGeneratedText = "--";
     }
 
     private async Task RefreshRealtimeQualityAsync(CancellationToken cancellationToken)
@@ -321,7 +358,7 @@ public sealed partial class AuditViewModel(
             RealtimeQualityCategories.Clear();
             RealtimeQualityBuildings.Clear();
             RealtimeQualityStatusText = "实时审计读取失败";
-            RealtimeQualitySummaryText = ex.Message;
+            RealtimeQualitySummaryText = applicationLogger.WriteFailure(ex, "audit").DisplayText;
             RealtimeQualityGeneratedText = "--";
         }
     }
@@ -369,7 +406,7 @@ public sealed partial class AuditViewModel(
             ReconciliationItems.Clear();
             SelectedReconciliationItem = null;
             ReconciliationStatusText = "实时对账读取失败";
-            ReconciliationSummaryText = ex.Message;
+            ReconciliationSummaryText = applicationLogger.WriteFailure(ex, "audit").DisplayText;
             ReconciliationGeneratedText = "--";
         }
     }
@@ -397,7 +434,7 @@ public sealed partial class AuditViewModel(
         {
             Runs.Clear();
             SelectedRun = null;
-            RunsStatusText = "历史批次读取失败：" + ex.Message;
+            RunsStatusText = "历史批次读取失败：" + applicationLogger.WriteFailure(ex, "audit").DisplayText;
         }
     }
 
@@ -479,7 +516,7 @@ public sealed partial class AuditViewModel(
         }
         catch (Exception ex)
         {
-            StatusText = "历史批次恢复失败：" + ex.Message;
+            StatusText = "历史批次恢复失败：" + applicationLogger.WriteFailure(ex, "audit").DisplayText;
         }
         finally
         {

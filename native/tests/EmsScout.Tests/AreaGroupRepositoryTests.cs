@@ -482,10 +482,38 @@ public sealed class AreaGroupRepositoryTests
                 floor_value REAL,
                 sub_area_text TEXT,
                 card_name TEXT,
+                device_uid TEXT,
                 note TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE TABLE floor_catalog (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                building TEXT NOT NULL,
+                floor_label TEXT NOT NULL,
+                floor_value REAL,
+                source TEXT NOT NULL DEFAULT 'manual',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX idx_floor_catalog_key ON floor_catalog(building, floor_label);
+            CREATE INDEX idx_monitor_group_items_group ON monitor_group_items(group_id);
+            CREATE INDEX idx_monitor_group_items_target ON monitor_group_items(building, floor_value, sub_area_text, card_name);
+            CREATE TABLE device_watch_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id INTEGER NOT NULL UNIQUE,
+                name TEXT NOT NULL DEFAULT '关注设备',
+                start_at TEXT NOT NULL,
+                end_at TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX idx_device_watch_rules_enabled ON device_watch_rules(enabled, start_at, end_at);
+            PRAGMA user_version = 2;
 
             INSERT INTO sub_areas (id, building, floor, text, sub_idx, x, y) VALUES
                 (1, '1号', 1, '1F A', 1, 100, 100),

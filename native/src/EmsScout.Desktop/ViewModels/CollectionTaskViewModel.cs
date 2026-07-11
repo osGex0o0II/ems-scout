@@ -6,9 +6,16 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EmsScout.Application.Collection;
 using EmsScout.Application.Devices;
+using EmsScout.Application.Errors;
+using EmsScout.Application.Logging;
 using EmsScout.Application.Quality;
 using EmsScout.Application.Settings;
+using EmsScout.Application.Workflows;
 using EmsScout.Desktop.Services;
+using EmsScout.Infrastructure.Importing;
+using EmsScout.Infrastructure.Errors;
+using EmsScout.Infrastructure.Logging;
+using EmsScout.Infrastructure.Sidecar;
 using Microsoft.UI.Dispatching;
 
 namespace EmsScout.Desktop.ViewModels;
@@ -21,7 +28,13 @@ public sealed partial class CollectionTaskViewModel(
     IQualityAuditService qualityAuditService,
     IRealtimeQualityAuditService realtimeQualityAuditService,
     IRealtimeReconciliationService realtimeReconciliationService,
-    ICollectionRunRepository collectionRunRepository) : ObservableObject
+    ICollectionRunRepository collectionRunRepository,
+    CollectionSnapshotReader snapshotReader,
+    CollectionSnapshotImporter snapshotImporter,
+    INativeQualityAuditService nativeQualityAuditService,
+    ApplicationOperationState operationState,
+    CollectionEnvironmentProbe environmentProbe,
+    IApplicationLogger applicationLogger) : ObservableObject
 {
     private CancellationTokenSource? _activeTask;
     private bool _stopRequested;
@@ -30,19 +43,18 @@ public sealed partial class CollectionTaskViewModel(
     private double _activeProgressSpan = 100;
     private string _activeProgressLabel = string.Empty;
     private string _activeStageKey = string.Empty;
+    private string? _activeWorkflowId;
     private bool _currentDataUpdatedThisRun;
+    private string? _activeDataDirectory;
     private bool _buildingEventsAttached;
     private bool _environmentChecked;
     private bool _nodeReady;
     private bool _dependenciesReady;
     private bool _enumScriptReady;
-    private bool _validationScriptReady;
-    private bool _importScriptReady;
-    private bool _qualityScriptReady;
     private bool _realtimeScriptReady;
     private bool _realtimeAuditScriptReady;
     private bool _databaseReady;
-    private bool _jsonReady;
+    private bool _snapshotReady;
     private bool _emsUrlReady;
     private bool _cdpReachable;
     private int _emsPageCount;
@@ -242,8 +254,9 @@ public sealed partial class CollectionTaskViewModel(
     [
         PreflightCheckRow.Pending("Node 运行时", "等待检查"),
         PreflightCheckRow.Pending("Node 依赖", "等待检查"),
-        PreflightCheckRow.Pending("采集脚本", "等待检查"),
-        PreflightCheckRow.Pending("数据文件", "等待检查"),
+        PreflightCheckRow.Pending("采集 Sidecar", "等待检查"),
+        PreflightCheckRow.Pending("原生数据流程", "等待检查"),
+        PreflightCheckRow.Pending("当前数据", "等待检查"),
         PreflightCheckRow.Pending("Edge CDP", "等待检查"),
         PreflightCheckRow.Pending("EMS 地址", "等待检查"),
         PreflightCheckRow.Pending("EMS 登录态", "等待检查"),
@@ -507,11 +520,19 @@ public sealed partial class CollectionTaskViewModel(
         await RefreshRunsAsync(cancellationToken).ConfigureAwait(true);
     }
 
-    private async Task RefreshAuditAsync(CancellationToken cancellationToken = default)
+    private async Task RefreshAuditAsync(
+        CancellationToken cancellationToken = default,
+        string? databasePath = null)
     {
         try
         {
-            var report = await qualityAuditService.LoadLatestAsync(cancellationToken).ConfigureAwait(true);
+            var report = databasePath is null
+                ? await qualityAuditService.LoadLatestAsync(cancellationToken).ConfigureAwait(true)
+                : await nativeQualityAuditService
+                    .AuditAsync(
+                        new NativeQualityAuditRequest(QualityAuditSourceKind.LatestCompletedRun, databasePath),
+                        cancellationToken)
+                    .ConfigureAwait(true);
             QualityIssues.Clear();
             if (report is null)
             {
@@ -543,7 +564,7 @@ public sealed partial class CollectionTaskViewModel(
         {
             QualityIssues.Clear();
             QualityStatusText = "质量审计读取失败";
-            QualitySummaryText = ex.Message;
+            QualitySummaryText = applicationLogger.WriteFailure(ex, "collection", "quality_read_failed").DisplayText;
             QualityGeneratedText = "--";
         }
     }
@@ -594,7 +615,7 @@ public sealed partial class CollectionTaskViewModel(
             RealtimeQualityCategories.Clear();
             RealtimeQualityBuildings.Clear();
             RealtimeQualityStatusText = "实时审计读取失败";
-            RealtimeQualitySummaryText = ex.Message;
+            RealtimeQualitySummaryText = applicationLogger.WriteFailure(ex, "collection", "realtime_quality_read_failed").DisplayText;
             RealtimeQualityGeneratedText = "--";
         }
     }
@@ -651,7 +672,7 @@ public sealed partial class CollectionTaskViewModel(
             ReconciliationItems.Clear();
             SelectedReconciliationItem = null;
             ReconciliationStatusText = "实时对账读取失败";
-            ReconciliationSummaryText = ex.Message;
+            ReconciliationSummaryText = applicationLogger.WriteFailure(ex, "collection", "reconciliation_read_failed").DisplayText;
             ReconciliationGeneratedText = "--";
         }
     }
@@ -690,7 +711,7 @@ public sealed partial class CollectionTaskViewModel(
         {
             Runs.Clear();
             SelectedRun = null;
-            RunsStatusText = "历史批次读取失败：" + ex.Message;
+            RunsStatusText = "历史批次读取失败：" + applicationLogger.WriteFailure(ex, "collection", "runs_read_failed").DisplayText;
         }
     }
 
@@ -705,51 +726,47 @@ public sealed partial class CollectionTaskViewModel(
         {
             var settings = settingsService.Load();
             var dataDirectory = pathService.ResolveWorkspacePath(settings.DataDirectory);
-            var nodeModules = Directory.Exists(Path.Combine(runner.WorkspaceRoot, "node_modules"));
-            var enumScript = File.Exists(Path.Combine(runner.WorkspaceRoot, "src", "enumerate.js"));
-            var validationScript = File.Exists(Path.Combine(runner.WorkspaceRoot, "src", "enum-validator.js"));
-            var importScript = File.Exists(Path.Combine(runner.WorkspaceRoot, "scripts", "import.js"));
-            var qualityScript = File.Exists(Path.Combine(runner.WorkspaceRoot, "scripts", "quality-report.js"));
-            var realtimeScript = File.Exists(Path.Combine(runner.WorkspaceRoot, "scripts", "collect-realtime-all-batch.js"));
-            var realtimeAuditScript = File.Exists(Path.Combine(runner.WorkspaceRoot, "scripts", "audit-realtime-data.js"));
-            var dbPath = File.Exists(Path.Combine(dataDirectory, "ac.db"));
-            var jsonPath = File.Exists(Path.Combine(dataDirectory, "enum_full_v5.json"));
-            var nodeVersion = await ReadNodeVersionAsync().ConfigureAwait(true);
-            var nodeDependencies = await CheckNodeDependenciesAsync(runner.WorkspaceRoot).ConfigureAwait(true);
-            var cdpStatus = await CheckEdgeCdpAsync(settings.EdgeCdpPort, settings.EmsUrl).ConfigureAwait(true);
+            var sidecarRoot = runner.ApplicationRoot;
+            var probe = await environmentProbe.ProbeAsync(new CollectionEnvironmentProbeRequest(
+                runner.RuntimePath,
+                sidecarRoot,
+                dataDirectory,
+                settings.EdgeCdpPort,
+                settings.EmsUrl)).ConfigureAwait(true);
+            var cdpStatus = probe.Cdp;
 
             _environmentChecked = true;
-            _nodeReady = nodeVersion != "不可用";
-            _dependenciesReady = nodeModules && nodeDependencies == "可用";
-            _enumScriptReady = enumScript;
-            _validationScriptReady = validationScript;
-            _importScriptReady = importScript;
-            _qualityScriptReady = qualityScript;
-            _realtimeScriptReady = realtimeScript;
-            _realtimeAuditScriptReady = realtimeAuditScript;
-            _databaseReady = dbPath;
-            _jsonReady = jsonPath;
-            _emsUrlReady = Uri.TryCreate(settings.EmsUrl, UriKind.Absolute, out _);
+            _nodeReady = probe.NodeVersion is not "不可用" and not "检查超时";
+            _dependenciesReady = probe.NodeModulesPresent && probe.NodeDependencies == "可用";
+            _enumScriptReady = probe.EnumerationSidecarReady;
+            _realtimeScriptReady = probe.RealtimeScriptReady;
+            _realtimeAuditScriptReady = probe.RealtimeAuditScriptReady;
+            _databaseReady = probe.DatabaseReady;
+            _snapshotReady = probe.SnapshotReady;
+            _emsUrlReady = probe.EmsUrlReady;
             _cdpReachable = cdpStatus.IsReachable;
             _emsPageCount = cdpStatus.EmsPageCount;
 
             PreflightChecks.Clear();
             PreflightChecks.Add(!_nodeReady
                 ? PreflightCheckRow.Warning("Node 运行时", "未检测到 node")
-                : PreflightCheckRow.Ok("Node 运行时", nodeVersion));
+                : PreflightCheckRow.Ok("Node 运行时", runner.UsesBundledRuntime ? $"内置 {probe.NodeVersion}" : probe.NodeVersion));
             PreflightChecks.Add(_dependenciesReady
-                ? PreflightCheckRow.Ok("Node 依赖", "better-sqlite3、playwright 可加载")
+                ? PreflightCheckRow.Ok("Node 依赖", "Playwright 可加载")
                 : PreflightCheckRow.Warning(
                     "Node 依赖",
-                    $"node_modules {(nodeModules ? "存在" : "缺失")}；运行依赖 {nodeDependencies}"));
-            PreflightChecks.Add(enumScript && validationScript && importScript && qualityScript
-                ? PreflightCheckRow.Ok("基础流程", "采集、校验、导入和质量检查可用")
+                    $"node_modules {(probe.NodeModulesPresent ? "存在" : "缺失")}；运行依赖 {probe.NodeDependencies}"));
+            PreflightChecks.Add(_enumScriptReady
+                ? PreflightCheckRow.Ok("采集 Sidecar", "枚举器和快照适配器可用")
                 : PreflightCheckRow.Warning(
-                    "基础流程",
-                    $"采集 {(enumScript ? "可用" : "缺失")}；校验 {(validationScript ? "可用" : "缺失")}；导入 {(importScript ? "可用" : "缺失")}；质量 {(qualityScript ? "可用" : "缺失")}"));
-            PreflightChecks.Add(dbPath
-                ? PreflightCheckRow.Ok("当前数据", "数据库可用")
-                : PreflightCheckRow.Unknown("当前数据", "首次采集后创建数据库"));
+                    "采集 Sidecar",
+                    "缺少枚举器、采集入口或快照适配器"));
+            PreflightChecks.Add(PreflightCheckRow.Ok(
+                "原生数据流程",
+                "CollectionSnapshot 校验、SQLite 导入和基础质量检查可用"));
+            PreflightChecks.Add(probe.DatabaseReady
+                ? PreflightCheckRow.Ok("当前数据", probe.SnapshotReady ? "数据库和采集快照可用" : "数据库可用；尚无采集快照")
+                : PreflightCheckRow.Unknown("当前数据", probe.SnapshotReady ? "采集快照可用；导入时创建数据库" : "首次采集后创建数据库"));
             PreflightChecks.Add(cdpStatus.IsReachable
                 ? PreflightCheckRow.Ok("采集浏览器", cdpStatus.Detail)
                 : settings.DefaultCollectionMode.Equals("auto-launch", StringComparison.OrdinalIgnoreCase)
@@ -760,7 +777,7 @@ public sealed partial class CollectionTaskViewModel(
                     ? PreflightCheckRow.Ok("EMS 页面", cdpStatus.LoginDetail)
                     : PreflightCheckRow.Unknown("EMS 页面", cdpStatus.LoginDetail)
                 : PreflightCheckRow.Warning("EMS 页面", "系统设置中的 EMS 地址无效"));
-            EnvironmentText = $"Node {nodeVersion}；依赖 {nodeDependencies}；浏览器 {cdpStatus.Detail}";
+            EnvironmentText = $"Node {probe.NodeVersion}；依赖 {probe.NodeDependencies}；浏览器 {cdpStatus.Detail}";
             CollectionBrowserActionText = settings.DefaultCollectionMode.Equals("auto-launch", StringComparison.OrdinalIgnoreCase)
                 ? "采集时自动打开 EMS"
                 : "打开采集浏览器";
@@ -770,12 +787,14 @@ public sealed partial class CollectionTaskViewModel(
         }
         catch (Exception ex)
         {
+            var failure = ApplicationFailureClassifier.Classify(ex);
             _environmentChecked = true;
             IsEnvironmentReady = false;
             ReadinessTitle = "采集环境检查失败";
-            ReadinessDetail = ex.Message;
+            ReadinessDetail = failure.UserMessage + "；" + failure.SuggestedAction;
             ReadinessGlyph = "\uE7BA";
-            EnvironmentText = "检查失败：" + ex.Message;
+            EnvironmentText = "检查失败：" + failure.DisplayText;
+            AddFailureLog(failure, ex);
             AddLog(EnvironmentText);
         }
         finally
@@ -799,7 +818,6 @@ public sealed partial class CollectionTaskViewModel(
 
     private void UpdateEnvironmentReadiness()
     {
-        var settings = settingsService.Load();
         var plan = BuildExecutionPlan(SelectedTaskMode);
         var missing = new List<string>();
 
@@ -812,15 +830,13 @@ public sealed partial class CollectionTaskViewModel(
             return;
         }
 
-        if (!_nodeReady) missing.Add("Node 运行时");
-        if (!_dependenciesReady) missing.Add("运行依赖");
+        var usesNode = plan.RunEnumeration || plan.RunRealtimeDetails || plan.RunRealtimeAudit;
+        if (usesNode && !_nodeReady) missing.Add("Node 运行时");
+        if (usesNode && !_dependenciesReady) missing.Add("运行依赖");
         if (plan.RunEnumeration && !_enumScriptReady) missing.Add("采集脚本");
-        if (plan.RunValidation && !_validationScriptReady) missing.Add("校验脚本");
-        if (plan.RunImport && !_importScriptReady) missing.Add("导入脚本");
-        if (plan.RunQuality && !_qualityScriptReady) missing.Add("质量检查脚本");
         if (plan.RunRealtimeDetails && !_realtimeScriptReady) missing.Add("实时详情脚本");
         if (plan.RunRealtimeAudit && !_realtimeAuditScriptReady) missing.Add("实时审计脚本");
-        if (!plan.RunEnumeration && (plan.RunValidation || plan.RunImport) && !_jsonReady) missing.Add("已有采集结果");
+        if (!plan.RunEnumeration && (plan.RunValidation || plan.RunImport) && !_snapshotReady) missing.Add("CollectionSnapshot 采集快照");
         if (!plan.RunImport && (plan.RunQuality || plan.RunRealtimeDetails || plan.RunRealtimeAudit) && !_databaseReady) missing.Add("当前数据库");
         if ((plan.RunEnumeration || plan.RunRealtimeDetails) && !_emsUrlReady) missing.Add("有效 EMS 地址");
 
@@ -879,6 +895,19 @@ public sealed partial class CollectionTaskViewModel(
             return;
         }
 
+        IDisposable operationLease;
+        try
+        {
+            operationLease = operationState.BeginCollectionTask();
+        }
+        catch (InvalidOperationException)
+        {
+            StatusText = "已有采集任务正在运行";
+            AddLog("任务未启动：" + StatusText);
+            return;
+        }
+        using var operationLeaseScope = operationLease;
+
         _activeTask = new CancellationTokenSource();
         _stopRequested = false;
         _currentDataUpdatedThisRun = false;
@@ -889,6 +918,7 @@ public sealed partial class CollectionTaskViewModel(
         ProgressText = "准备采集";
         ResetStages(plan);
         var settings = settingsService.Load();
+        _activeDataDirectory = pathService.Capture(settings).DataDirectory;
         var runEnumeration = plan.RunEnumeration;
         var runValidation = plan.RunValidation;
         var runImportAfterCollect = plan.RunImport;
@@ -910,7 +940,9 @@ public sealed partial class CollectionTaskViewModel(
             settings.CheckLoginBeforeCollection &&
             settings.DefaultCollectionMode.Equals("edge-cdp", StringComparison.OrdinalIgnoreCase))
         {
-            var cdpStatus = await CheckEdgeCdpAsync(settings.EdgeCdpPort, settings.EmsUrl).ConfigureAwait(true);
+            var cdpStatus = await environmentProbe
+                .CheckEdgeCdpAsync(settings.EdgeCdpPort, settings.EmsUrl)
+                .ConfigureAwait(true);
             if (!cdpStatus.IsReachable || cdpStatus.EmsPageCount == 0)
             {
                 StatusText = "采集启动已阻止：未发现可采集 EMS 页面";
@@ -918,6 +950,7 @@ public sealed partial class CollectionTaskViewModel(
                 AddLog(cdpStatus.LoginDetail);
                 _activeTask.Dispose();
                 _activeTask = null;
+                _activeDataDirectory = null;
                 IsRunning = false;
                 StartCommand.NotifyCanExecuteChanged();
                 StopCommand.NotifyCanExecuteChanged();
@@ -970,6 +1003,7 @@ public sealed partial class CollectionTaskViewModel(
                     disableNetworkMonitor,
                     enumProgressCeiling,
                     _activeTask.Token);
+                _snapshotReady = true;
                 SetStageState("collect", "已完成", "所选楼栋采集完成");
                 ProgressValue = Math.Max(ProgressValue, enumProgressCeiling);
                 ProgressText = runValidation
@@ -982,7 +1016,7 @@ public sealed partial class CollectionTaskViewModel(
                 SetStageState("validate", "进行中", "正在检查采集结果完整性");
                 ProgressValue = Math.Max(ProgressValue, runImportAfterCollect ? enumProgressCeiling + 2 : 20);
                 ProgressText = "正在校验采集 JSON";
-                await RunValidationAsync(selectedBuildings, settings, _activeTask.Token);
+                await RunValidationAsync(_activeTask.Token);
                 SetStageState("validate", "已完成", "采集结果校验通过");
                 ProgressValue = Math.Max(ProgressValue, runImportAfterCollect ? enumProgressCeiling + 4 : 100);
                 ProgressText = runImportAfterCollect ? "JSON 校验通过，准备导入 SQLite" : "JSON 校验通过";
@@ -996,7 +1030,7 @@ public sealed partial class CollectionTaskViewModel(
                     : runQualityAfterImport ? 88 : 94;
                 ProgressValue = Math.Max(ProgressValue, importProgress - 2);
                 ProgressText = "正在导入 SQLite";
-                await RunImportAsync(selectedBuildings, settings, _activeTask.Token);
+                await RunImportAsync(selectedBuildings, _activeTask.Token);
                 _currentDataUpdatedThisRun = true;
                 _databaseReady = true;
                 CanOpenDataAfterImport = true;
@@ -1011,9 +1045,9 @@ public sealed partial class CollectionTaskViewModel(
                 var qualityProgress = runRealtimeDetailsAfterImport ? 74 : 96;
                 ProgressValue = Math.Max(ProgressValue, qualityProgress - 2);
                 ProgressText = "正在运行数据质量检查";
-                await RunQualityAsync(settings, _activeTask.Token);
+                await RunQualityAsync(_activeTask.Token);
                 ProgressValue = qualityProgress;
-                await RefreshAuditAsync(_activeTask.Token).ConfigureAwait(true);
+                await RefreshAuditAsync(_activeTask.Token, ActiveDatabasePath).ConfigureAwait(true);
                 SetStageState(
                     "quality",
                     QualityIssues.Count > 0 ? "需复核" : "已完成",
@@ -1085,12 +1119,18 @@ public sealed partial class CollectionTaskViewModel(
         }
         catch (Exception ex)
         {
+            var failure = ApplicationFailureClassifier.Classify(ex);
             IsProgressIndeterminate = false;
-            ProgressText = "任务失败";
-            SetActiveStageTerminalState("失败", ex.Message);
-            StatusText = _currentDataUpdatedThisRun
-                ? "任务失败；当前数据已经更新，后续步骤未完成：" + ex.Message
-                : "任务失败；当前数据未更改：" + ex.Message;
+            var cancelled = failure.Category == ApplicationErrorCategory.Cancelled;
+            ProgressText = cancelled ? "已停止" : "任务失败";
+            SetActiveStageTerminalState(cancelled ? "已停止" : "失败", failure.DisplayText);
+            StatusText = (_currentDataUpdatedThisRun
+                ? cancelled
+                    ? "任务已停止；当前数据已经更新，后续步骤未完成："
+                    : "任务失败；当前数据已经更新，后续步骤未完成："
+                : cancelled ? "任务已停止；当前数据未更改：" : "任务失败；当前数据未更改：") +
+                failure.DisplayText;
+            AddFailureLog(failure, ex);
             AddLog(StatusText);
         }
         finally
@@ -1101,6 +1141,8 @@ public sealed partial class CollectionTaskViewModel(
             _activeProgressBase = 0;
             _activeProgressSpan = 100;
             _activeProgressLabel = string.Empty;
+            _activeWorkflowId = null;
+            _activeDataDirectory = null;
             IsRunning = false;
             _stopRequested = false;
             StartCommand.NotifyCanExecuteChanged();
@@ -1154,7 +1196,9 @@ public sealed partial class CollectionTaskViewModel(
             for (var attempt = 0; attempt < 5; attempt++)
             {
                 await Task.Delay(800).ConfigureAwait(true);
-                var cdpStatus = await CheckEdgeCdpAsync(settings.EdgeCdpPort, settings.EmsUrl).ConfigureAwait(true);
+                var cdpStatus = await environmentProbe
+                    .CheckEdgeCdpAsync(settings.EdgeCdpPort, settings.EmsUrl)
+                    .ConfigureAwait(true);
                 if (cdpStatus.IsReachable)
                 {
                     await CheckEnvironmentAsync().ConfigureAwait(true);
@@ -1164,7 +1208,9 @@ public sealed partial class CollectionTaskViewModel(
         }
         catch (Exception ex)
         {
-            StatusText = "无法打开采集浏览器：" + ex.Message;
+            var failure = ApplicationFailureClassifier.Classify(ex);
+            StatusText = "无法打开采集浏览器：" + failure.DisplayText;
+            AddFailureLog(failure, ex);
             AddLog(StatusText);
         }
     }
@@ -1288,7 +1334,7 @@ public sealed partial class CollectionTaskViewModel(
             "--append",
             "--bldg=" + string.Join(",", buildings),
             "--log-level=" + settings.LogLevel,
-            "--out-dir=" + pathService.ResolveWorkspacePath(settings.DataDirectory),
+            "--out-dir=" + ActiveDataDirectory,
             "--ems-url=" + settings.EmsUrl,
             "--cdp-url=http://127.0.0.1:" + settings.EdgeCdpPort,
         };
@@ -1324,54 +1370,66 @@ public sealed partial class CollectionTaskViewModel(
 
         await RunStepAsync(
             "卡片枚举",
-            Path.Combine("src", "enumerate.js"),
+            Path.Combine("sidecar", "collect.js"),
             args,
             cancellationToken,
-            pathService.BuildDataEnvironment(),
+            BuildDataEnvironment(ActiveDataDirectory),
             progressBase: 0,
             progressSpan: progressSpan);
     }
 
-    private Task RunImportAsync(
+    private async Task RunImportAsync(
         IReadOnlyList<string> buildings,
-        AppSettings settings,
         CancellationToken cancellationToken)
     {
-        return RunStepAsync(
-            "导入数据库",
-            Path.Combine("scripts", "import.js"),
-            ["--bldg=" + string.Join(",", buildings)],
-            cancellationToken,
-            pathService.BuildDataEnvironment());
+        AddLog("开始原生 SQLite 导入");
+        Directory.CreateDirectory(ActiveDataDirectory);
+        var report = await snapshotImporter.ImportAsync(
+            new CollectionImportRequest(
+                ActiveSnapshotPath,
+                ActiveDatabasePath,
+                buildings,
+                Apply: true),
+            cancellationToken).ConfigureAwait(true);
+        AddLog(
+            $"原生导入完成：批次 #{report.RunId?.ToString() ?? "-"}；" +
+            $"楼栋 {report.SnapshotSelected.BuildingCount:N0}；设备 {report.SnapshotSelected.UniqueCardCount:N0}；" +
+            $"去重观察 {report.SnapshotSelected.DeduplicatedObservationCount:N0}");
+        if (!string.IsNullOrWhiteSpace(report.MigrationBackupPath))
+        {
+            AddLog("迁移备份：" + report.MigrationBackupPath);
+        }
     }
 
-    private Task RunValidationAsync(
-        IReadOnlyList<string> buildings,
-        AppSettings settings,
+    private async Task RunValidationAsync(
         CancellationToken cancellationToken)
     {
-        var args = new List<string>();
-        if (buildings.Count > 0)
+        AddLog("开始校验 CollectionSnapshot v1");
+        var result = await snapshotReader
+            .ReadAsync(ActiveSnapshotPath, cancellationToken)
+            .ConfigureAwait(true);
+        AddLog(
+            $"快照校验通过：workflow {result.Snapshot.WorkflowId}；" +
+            $"楼栋 {result.Snapshot.Counts.BuildingCount:N0}；页面 {result.Snapshot.Counts.PageCount:N0}；" +
+            $"原始卡片 {result.Snapshot.Counts.RawCardCount:N0}；唯一卡片 {result.Snapshot.Counts.UniqueCardCount:N0}");
+    }
+
+    private async Task RunQualityAsync(CancellationToken cancellationToken)
+    {
+        AddLog("开始原生 SQLite 质量检查");
+        var report = await nativeQualityAuditService
+            .AuditAsync(
+                new NativeQualityAuditRequest(QualityAuditSourceKind.LatestCompletedRun, ActiveDatabasePath),
+                cancellationToken)
+            .ConfigureAwait(true);
+        if (report is null)
         {
-            args.Add("--bldg=" + string.Join(",", buildings));
+            throw new InvalidOperationException("数据库中没有可审计的已完成采集批次。");
         }
 
-        return RunStepAsync(
-            "采集结果校验",
-            Path.Combine("scripts", "validate-enum.js"),
-            args,
-            cancellationToken,
-            pathService.BuildDataEnvironment());
-    }
-
-    private Task RunQualityAsync(AppSettings settings, CancellationToken cancellationToken)
-    {
-        return RunStepAsync(
-            "数据质量检查",
-            Path.Combine("scripts", "quality-report.js"),
-            [],
-            cancellationToken,
-            BuildTaskEnvironment(settings));
+        AddLog(
+            $"原生质量检查完成：设备 {report.Summary.TotalCards:N0}；" +
+            $"待复核 {report.Summary.IssueCount:N0}；已知问题 {report.Summary.KnownFindings:N0}");
     }
 
     private Task RunRealtimeDetailsAsync(
@@ -1443,7 +1501,7 @@ public sealed partial class CollectionTaskViewModel(
 
     private IReadOnlyDictionary<string, string> BuildTaskEnvironment(AppSettings settings)
     {
-        var environment = new Dictionary<string, string>(pathService.BuildDataEnvironment())
+        var environment = new Dictionary<string, string>(BuildDataEnvironment(ActiveDataDirectory))
         {
             ["EMS_URL"] = settings.EmsUrl,
             ["CDP_URL"] = "http://127.0.0.1:" + settings.EdgeCdpPort,
@@ -1454,6 +1512,26 @@ public sealed partial class CollectionTaskViewModel(
         return environment;
     }
 
+    private string ActiveDataDirectory => _activeDataDirectory
+        ?? throw new InvalidOperationException("The collection task data directory has not been initialized.");
+
+    private string ActiveSnapshotPath => Path.Combine(ActiveDataDirectory, "collection_snapshot_v1.json");
+
+    private string ActiveDatabasePath => Path.Combine(ActiveDataDirectory, "ac.db");
+
+    private static IReadOnlyDictionary<string, string> BuildDataEnvironment(string dataDirectory)
+    {
+        Directory.CreateDirectory(dataDirectory);
+        return new Dictionary<string, string>
+        {
+            ["EMS_OUT_DIR"] = dataDirectory,
+            ["EMS_JSON_PATH"] = Path.Combine(dataDirectory, "enum_full_v5.json"),
+            ["EMS_SNAPSHOT_PATH"] = Path.Combine(dataDirectory, "collection_snapshot_v1.json"),
+            ["EMS_DB_PATH"] = Path.Combine(dataDirectory, "ac.db"),
+            ["EMS_QUALITY_OUT"] = dataDirectory,
+        };
+    }
+
     private async Task RunStepAsync(
         string label,
         string script,
@@ -1461,31 +1539,70 @@ public sealed partial class CollectionTaskViewModel(
         CancellationToken cancellationToken,
         IReadOnlyDictionary<string, string>? environment = null,
         double progressBase = 0,
-        double progressSpan = 100)
+        double progressSpan = 100,
+        bool exitCodeTwoMeansFindings = false)
     {
         _activeProgressBase = progressBase;
         _activeProgressSpan = progressSpan;
         _activeProgressLabel = label;
         StatusText = "正在执行：" + label;
         AddLog("开始 " + label);
-        var exitCode = await runner.RunNodeScriptAsync(
+        var result = await runner.RunWorkflowScriptAsync(
             script,
             args,
             AddLog,
+            AddWorkflowEvent,
             cancellationToken,
-            environment).ConfigureAwait(true);
+            environment,
+            exitCodeTwoMeansFindings).ConfigureAwait(true);
 
-        if (exitCode != 0)
+        if (!result.IsSuccessful)
         {
-            throw new InvalidOperationException($"{label} 失败，退出码 {exitCode}");
+            throw new WorkflowExecutionException(
+                label,
+                result.Outcome,
+                result.ExitCode,
+                result.Message);
         }
 
-        AddLog(label + " 完成");
+        AddLog(result.Outcome == WorkflowTerminalOutcome.SucceededWithFindings
+            ? label + " 完成，但存在需复核项"
+            : label + " 完成");
+    }
+
+    private void AddWorkflowEvent(WorkflowEventV1 workflowEvent)
+    {
+        _activeWorkflowId = workflowEvent.WorkflowId;
+        if (workflowEvent.Type != WorkflowEventType.Progress || workflowEvent.Progress is null)
+        {
+            return;
+        }
+
+        var progressJson = workflowEvent.Progress.Data is { } data
+            ? data.GetRawText()
+            : JsonSerializer.Serialize(new
+            {
+                percent = workflowEvent.Progress.Percent,
+                message = workflowEvent.Progress.Message,
+                current = workflowEvent.Progress.Current,
+                total = workflowEvent.Progress.Total,
+                unit = workflowEvent.Progress.Unit,
+            });
+        AddLog("[PROGRESS]" + progressJson);
     }
 
     private void AddLog(string message)
     {
         var normalized = NormalizeLogMessage(message);
+        var level = message.StartsWith("[stderr]", StringComparison.Ordinal)
+            ? ApplicationLogLevel.Warning
+            : ApplicationLogLevel.Information;
+        applicationLogger.Write(new ApplicationLogEvent(
+            level,
+            "collection",
+            message.StartsWith("[PROGRESS]", StringComparison.Ordinal) ? "workflow_progress" : "task_message",
+            normalized,
+            new ApplicationLogContext(_activeWorkflowId, EmptyToNull(_activeStageKey))));
         var row = new CollectionTaskLogRow(DateTime.Now.ToString("HH:mm:ss"), normalized);
         _dispatcherQueue.TryEnqueue(() =>
         {
@@ -1498,52 +1615,33 @@ public sealed partial class CollectionTaskViewModel(
         });
     }
 
+    private void AddFailureLog(ApplicationFailure failure, Exception exception)
+    {
+        applicationLogger.Write(new ApplicationLogEvent(
+            ApplicationLogLevel.Error,
+            "collection",
+            "operation_failed",
+            failure.Title,
+            new ApplicationLogContext(
+                _activeWorkflowId,
+                EmptyToNull(_activeStageKey),
+                failure.Code,
+                failure.IsRetryable),
+            exception,
+            new Dictionary<string, object?>
+            {
+                ["suggestedAction"] = failure.SuggestedAction,
+            }));
+    }
+
     private static string NormalizeLogMessage(string message)
     {
         if (message.StartsWith("[PROGRESS]", StringComparison.Ordinal))
         {
-            return FormatProgressMessage(message["[PROGRESS]".Length..]);
+            return CollectionProgressPresenter.Parse(message["[PROGRESS]".Length..]).LogText;
         }
 
         return message;
-    }
-
-    private static string FormatProgressMessage(string json)
-    {
-        try
-        {
-            using var document = JsonDocument.Parse(json);
-            var root = document.RootElement;
-            if (root.TryGetProperty("message", out var message))
-            {
-                var text = message.GetString();
-                if (!string.IsNullOrWhiteSpace(text))
-                {
-                    return text;
-                }
-            }
-
-            if (root.TryGetProperty("deviceDone", out var done) &&
-                root.TryGetProperty("deviceTotal", out var deviceTotal) &&
-                deviceTotal.GetInt32() > 0)
-            {
-                var buildingName = root.TryGetProperty("building", out var realtimeBuilding)
-                    ? realtimeBuilding.GetString()
-                    : string.Empty;
-                return $"实时详情：{buildingName} 设备 {done.GetInt32()}/{deviceTotal.GetInt32()}";
-            }
-
-            var building = root.TryGetProperty("bldg", out var bldg) ? bldg.GetString() : string.Empty;
-            var current = root.TryGetProperty("curSa", out var curSa) ? curSa.GetInt32() : 0;
-            var total = root.TryGetProperty("totalSa", out var totalSa) ? totalSa.GetInt32() : 0;
-            var cards = root.TryGetProperty("cards", out var cardCount) ? cardCount.GetInt32() : 0;
-            var accumulated = root.TryGetProperty("acc", out var acc) ? acc.GetInt32() : 0;
-            return $"采集进度：{building} 子区 {current}/{total}，本页 {cards} 张，累计 {accumulated} 张";
-        }
-        catch
-        {
-            return "采集进度 " + json;
-        }
     }
 
     private void ApplyProgressEvent(string message)
@@ -1553,45 +1651,37 @@ public sealed partial class CollectionTaskViewModel(
             return;
         }
 
-        try
-        {
-            using var document = JsonDocument.Parse(message["[PROGRESS]".Length..]);
-            var root = document.RootElement;
-            if (root.TryGetProperty("percent", out var percentProperty) &&
-                percentProperty.TryGetDouble(out var rawPercent))
-            {
-                var percent = Math.Clamp(rawPercent, 0, 100);
-                var value = _activeProgressBase + percent / 100d * _activeProgressSpan;
-                ProgressValue = Math.Clamp(value, 0, 100);
-                var progressMessage = root.TryGetProperty("message", out var msg) ? msg.GetString() : string.Empty;
-                ProgressText = string.IsNullOrWhiteSpace(progressMessage)
-                    ? $"{ProgressValue:0}% · {_activeProgressLabel}"
-                    : $"{ProgressValue:0}% · {progressMessage}";
-                IsProgressIndeterminate = false;
-                return;
-            }
-
-            var building = root.TryGetProperty("bldg", out var bldg) ? bldg.GetString() ?? string.Empty : string.Empty;
-            var current = root.TryGetProperty("curSa", out var curSa) ? curSa.GetInt32() : 0;
-            var total = root.TryGetProperty("totalSa", out var totalSa) ? totalSa.GetInt32() : 0;
-            if (total <= 0)
-            {
-                return;
-            }
-
-            var buildingIndex = FindActiveBuildingIndex(building);
-            var buildingCount = Math.Max(_activeCollectionBuildings.Count, 1);
-            var currentRatio = Math.Clamp(current / (double)total, 0, 1);
-            var collectionRatio = Math.Clamp((buildingIndex + currentRatio) / buildingCount, 0, 1);
-            var enumeratorPercent = _activeProgressBase + collectionRatio * _activeProgressSpan;
-            ProgressValue = enumeratorPercent;
-            ProgressText = $"{enumeratorPercent:0}% · {building} 子区 {current}/{total}";
-            IsProgressIndeterminate = false;
-        }
-        catch
+        var progress = CollectionProgressPresenter.Parse(message["[PROGRESS]".Length..]);
+        if (!progress.IsValid)
         {
             IsProgressIndeterminate = true;
+            return;
         }
+
+        if (progress.Percent is { } percent)
+        {
+            var value = _activeProgressBase + percent / 100d * _activeProgressSpan;
+            ProgressValue = Math.Clamp(value, 0, 100);
+            ProgressText = string.IsNullOrWhiteSpace(progress.ProgressMessage)
+                ? $"{ProgressValue:0}% · {_activeProgressLabel}"
+                : $"{ProgressValue:0}% · {progress.ProgressMessage}";
+            IsProgressIndeterminate = false;
+            return;
+        }
+
+        if (!progress.IsEnumeration || progress.Total <= 0 || string.IsNullOrWhiteSpace(progress.Building))
+        {
+            return;
+        }
+
+        var buildingIndex = FindActiveBuildingIndex(progress.Building);
+        var buildingCount = Math.Max(_activeCollectionBuildings.Count, 1);
+        var currentRatio = Math.Clamp(progress.Current / (double)progress.Total, 0, 1);
+        var collectionRatio = Math.Clamp((buildingIndex + currentRatio) / buildingCount, 0, 1);
+        var enumeratorPercent = _activeProgressBase + collectionRatio * _activeProgressSpan;
+        ProgressValue = enumeratorPercent;
+        ProgressText = $"{enumeratorPercent:0}% · {progress.Building} 子区 {progress.Current}/{progress.Total}";
+        IsProgressIndeterminate = false;
     }
 
     private int FindActiveBuildingIndex(string building)
@@ -1605,81 +1695,6 @@ public sealed partial class CollectionTaskViewModel(
         }
 
         return 0;
-    }
-
-    private static async Task<string> ReadNodeVersionAsync()
-    {
-        try
-        {
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "node",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-            };
-            startInfo.ArgumentList.Add("--version");
-            using var process = Process.Start(startInfo);
-            if (process is null)
-            {
-                return "不可用";
-            }
-
-            var output = await process.StandardOutput.ReadToEndAsync().ConfigureAwait(false);
-            await process.WaitForExitAsync().ConfigureAwait(false);
-            return process.ExitCode == 0 ? output.Trim() : "不可用";
-        }
-        catch
-        {
-            return "不可用";
-        }
-    }
-
-    private static async Task<string> CheckNodeDependenciesAsync(string workspaceRoot)
-    {
-        try
-        {
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = "node",
-                WorkingDirectory = workspaceRoot,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true,
-            };
-            startInfo.ArgumentList.Add("-e");
-            startInfo.ArgumentList.Add("require('better-sqlite3'); require('playwright'); console.log('ok')");
-            using var process = Process.Start(startInfo);
-            if (process is null)
-            {
-                return "不可用";
-            }
-
-            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            try
-            {
-                await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                TryKill(process);
-                return "检查超时";
-            }
-
-            if (process.ExitCode == 0)
-            {
-                return "可用";
-            }
-
-            var error = await process.StandardError.ReadToEndAsync().ConfigureAwait(false);
-            return string.IsNullOrWhiteSpace(error) ? "加载失败" : error.Trim().Split(Environment.NewLine)[0];
-        }
-        catch
-        {
-            return "不可用";
-        }
     }
 
     private static int ClampInt(double value, int min, int max)
@@ -1723,187 +1738,4 @@ public sealed partial class CollectionTaskViewModel(
             : value;
     }
 
-    private static async Task<EdgeCdpCheckResult> CheckEdgeCdpAsync(int port, string emsUrl)
-    {
-        try
-        {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
-            using var response = await client.GetAsync($"http://127.0.0.1:{port}/json/version").ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode)
-            {
-                return new EdgeCdpCheckResult(false, 0, $"{port} 未就绪", "CDP 未就绪，无法核实 EMS 页面");
-            }
-
-            try
-            {
-                using var pagesResponse = await client.GetAsync($"http://127.0.0.1:{port}/json/list").ConfigureAwait(false);
-                if (!pagesResponse.IsSuccessStatusCode)
-                {
-                    return new EdgeCdpCheckResult(true, 0, $"{port} 可访问；页面列表读取失败", "只能证明 CDP 可达，不能证明 EMS 已登录");
-                }
-
-                await using var stream = await pagesResponse.Content.ReadAsStreamAsync().ConfigureAwait(false);
-                using var document = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
-                var pages = document.RootElement.ValueKind == JsonValueKind.Array
-                    ? document.RootElement.EnumerateArray().ToList()
-                    : [];
-                var emsPages = pages
-                    .Select(ReadCdpPage)
-                    .Where(page => IsLikelyEmsPage(page.Url, emsUrl))
-                    .ToList();
-                if (emsPages.Count == 0)
-                {
-                    return new EdgeCdpCheckResult(true, 0, $"{port} 可访问；未发现 EMS 标签页", "未发现 EMS 页面；请先在 Edge 中打开并登录 EMS");
-                }
-
-                var first = emsPages[0];
-                return new EdgeCdpCheckResult(
-                    true,
-                    emsPages.Count,
-                    $"{port} 可访问；发现 {emsPages.Count} 个 EMS 标签页",
-                    $"发现 EMS 页面：{ValueOrDash(first.Title)}。预检不能证明已登录，采集/验证会二次检查登录态");
-            }
-            catch
-            {
-                return new EdgeCdpCheckResult(true, 0, $"{port} 可访问；页面列表读取失败", "只能证明 CDP 可达，不能证明 EMS 已登录");
-            }
-        }
-        catch
-        {
-            return new EdgeCdpCheckResult(false, 0, $"{port} 未就绪", "CDP 未就绪，无法核实 EMS 页面");
-        }
-    }
-
-    private static CdpPageInfo ReadCdpPage(JsonElement element)
-    {
-        return new CdpPageInfo(
-            Url: element.TryGetProperty("url", out var url) ? url.GetString() ?? string.Empty : string.Empty,
-            Title: element.TryGetProperty("title", out var title) ? title.GetString() ?? string.Empty : string.Empty);
-    }
-
-    private static bool IsLikelyEmsPage(string pageUrl, string emsUrl)
-    {
-        if (string.IsNullOrWhiteSpace(pageUrl))
-        {
-            return false;
-        }
-
-        try
-        {
-            var expected = new Uri(emsUrl);
-            var current = new Uri(pageUrl);
-            return string.Equals(current.Host, expected.Host, StringComparison.OrdinalIgnoreCase) &&
-                   (current.AbsolutePath.Contains("/ui", StringComparison.OrdinalIgnoreCase) ||
-                    expected.AbsolutePath.Contains(current.AbsolutePath, StringComparison.OrdinalIgnoreCase));
-        }
-        catch
-        {
-            return pageUrl.Contains("172.29.248.4", StringComparison.OrdinalIgnoreCase) ||
-                   pageUrl.Contains("/ui", StringComparison.OrdinalIgnoreCase);
-        }
-    }
-
-    private static void TryKill(Process process)
-    {
-        try
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-        }
-        catch
-        {
-        }
-    }
-
-    private sealed record EdgeCdpCheckResult(
-        bool IsReachable,
-        int EmsPageCount,
-        string Detail,
-        string LoginDetail);
-
-    private sealed record CdpPageInfo(string Url, string Title);
-}
-
-public sealed record ReconciliationFilterOption(string Value, string Label);
-
-public sealed class ReconciliationTypeCountRow(string type, int count)
-{
-    public string Type { get; } = type;
-
-    public string Label { get; } = ReconciliationLabels.TypeLabel(type);
-
-    public string CountText { get; } = count.ToString("N0");
-}
-
-public sealed class ReconciliationItemRow
-{
-    public ReconciliationItemRow(RealtimeReconciliationItem item)
-    {
-        Source = item;
-        Type = item.Type;
-        TypeLabel = ReconciliationLabels.TypeLabel(item.Type);
-        Severity = item.Severity;
-        Building = item.Building;
-        FloorLabel = string.IsNullOrWhiteSpace(item.FloorLabel) ? "--" : item.FloorLabel;
-        Name = string.IsNullOrWhiteSpace(item.Name) ? "--" : item.Name;
-        Location = $"DB {ValueOrDash(item.DbLocation)} / RT {ValueOrDash(item.RealtimeLocation)}";
-        DevId = string.IsNullOrWhiteSpace(item.DevId) ? "--" : item.DevId;
-        ConfidenceText = item.Confidence.ToString("P0");
-        Reason = item.Reason;
-        RuleDescription = item.RuleDescription;
-        EvidenceSummary = item.EvidenceSummary;
-        DecisionPathText = string.Join(Environment.NewLine, item.DecisionPath.Select(step => "- " + step));
-        NavigationTarget = DeviceNavigationTargetFactory.FromReconciliationItem(item);
-    }
-
-    public RealtimeReconciliationItem Source { get; }
-
-    public string Type { get; }
-
-    public string TypeLabel { get; }
-
-    public string Severity { get; }
-
-    public string Building { get; }
-
-    public string FloorLabel { get; }
-
-    public string Name { get; }
-
-    public string Location { get; }
-
-    public string DevId { get; }
-
-    public string ConfidenceText { get; }
-
-    public string Reason { get; }
-
-    public string RuleDescription { get; }
-
-    public string EvidenceSummary { get; }
-
-    public string DecisionPathText { get; }
-
-    public DeviceNavigationTarget NavigationTarget { get; }
-
-    private static string ValueOrDash(string value) => string.IsNullOrWhiteSpace(value) ? "--" : value;
-}
-
-public static class ReconciliationLabels
-{
-    public static string TypeLabel(string type)
-    {
-        return type switch
-        {
-            RealtimeReconciliationTypes.NewDevice => "新增实时",
-            RealtimeReconciliationTypes.MissingInRealtime => "缺实时",
-            RealtimeReconciliationTypes.MatchFailed => "匹配失败",
-            RealtimeReconciliationTypes.DuplicateRender => "重复渲染",
-            RealtimeReconciliationTypes.VirtualOverride => "虚拟纳管",
-            RealtimeReconciliationTypes.DataNoise => "数据噪声",
-            _ => type,
-        };
-    }
 }

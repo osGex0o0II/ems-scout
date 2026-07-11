@@ -21,7 +21,6 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\EmsScout.Domain\EmsScout.Domain.csproj" />
     <ProjectReference Include="..\..\src\EmsScout.Application\EmsScout.Application.csproj" />
-    <ProjectReference Include="..\..\src\EmsScout.Legacy\EmsScout.Legacy.csproj" />
     <ProjectReference Include="..\..\src\EmsScout.Infrastructure\EmsScout.Infrastructure.csproj" />
   </ItemGroup>
 

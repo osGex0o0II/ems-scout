@@ -38,6 +38,7 @@ internal static class UserDeviceWorkbookAssert
         var rows = ReadRows(archive);
         Assert.NotEmpty(rows);
         Assert.Equal(ExpectedHeader, rows[0]);
+        Assert.Equal(export.RowCount + 1, rows.Count);
         Assert.All(rows, row => Assert.Equal(ExpectedHeader.Length, row.Count));
     }
 
@@ -45,6 +46,23 @@ internal static class UserDeviceWorkbookAssert
     {
         using var archive = ZipFile.OpenRead(path);
         return ReadRows(archive);
+    }
+
+    public static IReadOnlyList<string?> ReadCellTypes(string path)
+    {
+        using var archive = ZipFile.OpenRead(path);
+        var document = XDocument.Parse(ReadEntry(archive, "xl/worksheets/sheet1.xml"));
+        XNamespace ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+        return document
+            .Descendants(ns + "c")
+            .Select(cell => (string?)cell.Attribute("t"))
+            .ToArray();
+    }
+
+    public static string ReadWorksheetXml(string path)
+    {
+        using var archive = ZipFile.OpenRead(path);
+        return ReadEntry(archive, "xl/worksheets/sheet1.xml");
     }
 
     private static IReadOnlyList<IReadOnlyList<string>> ReadRows(ZipArchive archive)

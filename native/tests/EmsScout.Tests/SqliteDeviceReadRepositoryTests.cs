@@ -255,27 +255,7 @@ public sealed class SqliteDeviceReadRepositoryTests
 
     private static string CurrentDatabasePath()
     {
-        var root = LocateRepositoryRoot();
-        var path = Path.Combine(root, "out", "ac.db");
-        Assert.True(File.Exists(path), $"Missing current database: {path}");
-        return path;
-    }
-
-    private static string LocateRepositoryRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            if (File.Exists(Path.Combine(directory.FullName, "package.json")) &&
-                Directory.Exists(Path.Combine(directory.FullName, "out")))
-            {
-                return directory.FullName;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new DirectoryNotFoundException("Cannot locate repository root.");
+        return ProductionDataSnapshot.DatabasePath;
     }
 
     private static async Task<long> LatestRunWithSnapshotAsync()
@@ -301,8 +281,8 @@ public sealed class SqliteDeviceReadRepositoryTests
             IReadOnlyList<string> buildings,
             CancellationToken cancellationToken = default)
         {
-            var root = LocateRepositoryRoot();
-            var source = new EmsScout.Legacy.RealtimeLatestJsonSource(root, Path.Combine(root, "out"));
+            var root = ProductionDataSnapshot.RepositoryRoot;
+            var source = new EmsScout.Infrastructure.Realtime.RealtimeLatestJsonSource(root, Path.Combine(root, "out"));
             return source.LoadAsync(buildings, cancellationToken);
         }
     }

@@ -11,8 +11,7 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
         DeviceWatchQuery query,
         CancellationToken cancellationToken = default)
     {
-        EnsureDatabaseExists();
-        await using var connection = OpenConnection(readOnly: false);
+        await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadWrite);
         await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
         if (!await HasHistoryAsync(connection, cancellationToken).ConfigureAwait(false))
         {
@@ -74,8 +73,7 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
         long groupId,
         CancellationToken cancellationToken = default)
     {
-        EnsureDatabaseExists();
-        await using var connection = OpenConnection(readOnly: false);
+        await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadWrite);
         await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
         var rules = await LoadRulesAsync(
             connection,
@@ -88,8 +86,7 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
         DeviceWatchEdit edit,
         CancellationToken cancellationToken = default)
     {
-        EnsureDatabaseExists();
-        await using var connection = OpenConnection(readOnly: false);
+        await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadWrite);
         await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
         if (edit.GroupId <= 0)
         {
@@ -127,16 +124,18 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
         }
         else
         {
-            await using var deleteExisting = connection.CreateCommand();
-            deleteExisting.CommandText = "DELETE FROM device_watch_rules WHERE group_id = $group_id";
-            deleteExisting.Parameters.AddWithValue("$group_id", edit.GroupId);
-            await deleteExisting.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-
             await using var insert = connection.CreateCommand();
             insert.CommandText = """
                 INSERT INTO device_watch_rules
                   (group_id, name, start_at, end_at, enabled, note, created_at, updated_at)
                 VALUES ($group_id, $name, $start_at, $end_at, $enabled, $note, $created_at, $updated_at)
+                ON CONFLICT(group_id) DO UPDATE SET
+                  name = excluded.name,
+                  start_at = excluded.start_at,
+                  end_at = excluded.end_at,
+                  enabled = excluded.enabled,
+                  note = excluded.note,
+                  updated_at = excluded.updated_at
                 """;
             insert.Parameters.AddWithValue("$group_id", edit.GroupId);
             insert.Parameters.AddWithValue("$name", name);
@@ -149,14 +148,16 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
             await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        return await LoadRuleForGroupAsync(edit.GroupId, cancellationToken).ConfigureAwait(false)
-               ?? throw new InvalidOperationException("关注规则保存后未找到。");
+        var saved = await LoadRulesAsync(
+            connection,
+            new DeviceWatchQuery(GroupId: edit.GroupId, IncludeDisabled: true),
+            cancellationToken).ConfigureAwait(false);
+        return saved.FirstOrDefault() ?? throw new InvalidOperationException("关注规则保存后未找到。");
     }
 
     public async Task DeleteRuleAsync(long id, long groupId, CancellationToken cancellationToken = default)
     {
-        EnsureDatabaseExists();
-        await using var connection = OpenConnection(readOnly: false);
+        await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadWrite);
         await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = "DELETE FROM device_watch_rules WHERE id = $id AND group_id = $group_id";
@@ -187,51 +188,26 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
         }
     }
 
-    private SqliteConnection OpenConnection(bool readOnly)
-    {
-        var mode = readOnly ? "ReadOnly" : "ReadWrite";
-        var connection = new SqliteConnection($"Data Source={databasePathResolver()};Mode={mode}");
-        connection.Open();
-        return connection;
-    }
-
-    private void EnsureDatabaseExists()
-    {
-        var databasePath = databasePathResolver();
-        if (!File.Exists(databasePath))
-        {
-            throw new FileNotFoundException("Cannot find EMS SQLite database.", databasePath);
-        }
-    }
-
     private static async Task EnsureSchemaAsync(SqliteConnection connection, CancellationToken cancellationToken)
     {
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            CREATE TABLE IF NOT EXISTS device_watch_rules (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                group_id INTEGER NOT NULL UNIQUE,
-                name TEXT NOT NULL DEFAULT '关注设备',
-                start_at TEXT NOT NULL,
-                end_at TEXT NOT NULL,
-                enabled INTEGER NOT NULL DEFAULT 1,
-                note TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY(group_id) REFERENCES monitor_groups(id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_device_watch_rules_enabled
-                ON device_watch_rules(enabled, start_at, end_at);
-            """;
-        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        await SqliteSchemaGuard.RequireCurrentAsync(
+            connection,
+            new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["device_watch_rules"] = ["id", "group_id", "name", "start_at", "end_at", "enabled", "note", "created_at", "updated_at"],
+                ["monitor_groups"] = ["id", "name", "enabled", "group_kind", "locked"],
+                ["monitor_group_items"] = ["id", "group_id", "target_type", "building", "floor_value", "sub_area_text", "card_name"],
+            },
+            ["idx_device_watch_rules_enabled", "idx_monitor_group_items_group"],
+            cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task<bool> HasHistoryAsync(SqliteConnection connection, CancellationToken cancellationToken)
     {
-        return await TableExistsAsync(connection, "collection_runs", cancellationToken).ConfigureAwait(false) &&
-               await TableExistsAsync(connection, "run_cards", cancellationToken).ConfigureAwait(false) &&
-               await TableExistsAsync(connection, "run_pages", cancellationToken).ConfigureAwait(false) &&
-               await TableExistsAsync(connection, "run_sub_areas", cancellationToken).ConfigureAwait(false);
+        return await SqliteSchemaGuard.TableExistsAsync(connection, "collection_runs", cancellationToken).ConfigureAwait(false) &&
+               await SqliteSchemaGuard.TableExistsAsync(connection, "run_cards", cancellationToken).ConfigureAwait(false) &&
+               await SqliteSchemaGuard.TableExistsAsync(connection, "run_pages", cancellationToken).ConfigureAwait(false) &&
+               await SqliteSchemaGuard.TableExistsAsync(connection, "run_sub_areas", cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task EnsureCustomGroupAsync(
@@ -239,7 +215,7 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
         long groupId,
         CancellationToken cancellationToken)
     {
-        if (!await TableExistsAsync(connection, "monitor_groups", cancellationToken).ConfigureAwait(false))
+        if (!await SqliteSchemaGuard.TableExistsAsync(connection, "monitor_groups", cancellationToken).ConfigureAwait(false))
         {
             throw new ArgumentException("关注规则必须绑定已存在的自定义区域组。");
         }
@@ -257,8 +233,8 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
             throw new ArgumentException("关注规则必须绑定已存在的自定义区域组。");
         }
 
-        var groupKind = ReadString(reader, "group_kind");
-        var locked = ReadInt32(reader, "locked") != 0;
+        var groupKind = SqliteValueReader.ReadString(reader, "group_kind");
+        var locked = SqliteValueReader.ReadInt32(reader, "locked") != 0;
         if (locked || !groupKind.Equals("custom", StringComparison.OrdinalIgnoreCase))
         {
             throw new ArgumentException("关注规则只能绑定自定义区域组。");
@@ -299,12 +275,12 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
             rows.Add(new DeviceWatchRule(
                 Id: reader.GetInt64(reader.GetOrdinal("id")),
                 GroupId: reader.GetInt64(reader.GetOrdinal("group_id")),
-                GroupName: ReadString(reader, "group_name"),
-                Name: ReadString(reader, "name"),
+                GroupName: SqliteValueReader.ReadString(reader, "group_name"),
+                Name: SqliteValueReader.ReadString(reader, "name"),
                 StartAt: ReadDateTimeOffset(reader, "start_at"),
                 EndAt: ReadDateTimeOffset(reader, "end_at"),
-                Enabled: ReadInt32(reader, "enabled") != 0,
-                Note: ReadString(reader, "note"),
+                Enabled: SqliteValueReader.ReadInt32(reader, "enabled") != 0,
+                Note: SqliteValueReader.ReadString(reader, "note"),
                 WatchedDevices: 0,
                 AbnormalDevices: 0));
         }
@@ -332,13 +308,13 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             var key = new DeviceWatchKey(
-                ReadString(reader, "building"),
+                SqliteValueReader.ReadString(reader, "building"),
                 DeviceFloorLabelFormatter.Format(
-                    ReadNullableDouble(reader, "floor"),
-                    ReadString(reader, "sub_area")),
-                ReadString(reader, "sub_area"),
-                ReadString(reader, "page_name"),
-                ReadString(reader, "name"));
+                    SqliteValueReader.ReadNullableDouble(reader, "floor"),
+                    SqliteValueReader.ReadString(reader, "sub_area")),
+                SqliteValueReader.ReadString(reader, "sub_area"),
+                SqliteValueReader.ReadString(reader, "page_name"),
+                SqliteValueReader.ReadString(reader, "name"));
             rows[key.Key] = key;
         }
 
@@ -395,18 +371,18 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             var key = new DeviceWatchKey(
-                ReadString(reader, "building"),
+                SqliteValueReader.ReadString(reader, "building"),
                 DeviceFloorLabelFormatter.Format(
-                    ReadNullableDouble(reader, "floor"),
-                    ReadString(reader, "sub_area")),
-                ReadString(reader, "sub_area"),
-                ReadString(reader, "page_name"),
-                ReadString(reader, "name"));
+                    SqliteValueReader.ReadNullableDouble(reader, "floor"),
+                    SqliteValueReader.ReadString(reader, "sub_area")),
+                SqliteValueReader.ReadString(reader, "sub_area"),
+                SqliteValueReader.ReadString(reader, "page_name"),
+                SqliteValueReader.ReadString(reader, "name"));
             rows.Add(new WatchSample(
                 RunId: reader.GetInt64(reader.GetOrdinal("run_id")),
                 CompletedAt: ReadDateTimeOffset(reader, "completed_at"),
                 Key: key,
-                State: NormalizePowerState(ReadString(reader, "switch"), ReadString(reader, "comm"))));
+                State: NormalizePowerState(SqliteValueReader.ReadString(reader, "switch"), SqliteValueReader.ReadString(reader, "comm"))));
         }
 
         return rows;
@@ -470,41 +446,9 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
         };
     }
 
-    private static async Task<bool> TableExistsAsync(
-        SqliteConnection connection,
-        string tableName,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $name LIMIT 1";
-        command.Parameters.AddWithValue("$name", tableName);
-        var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-        return result is not null;
-    }
-
-    private static string ReadString(SqliteDataReader reader, string column)
-    {
-        var ordinal = reader.GetOrdinal(column);
-        return reader.IsDBNull(ordinal) ? string.Empty : reader.GetString(ordinal);
-    }
-
-    private static int ReadInt32(SqliteDataReader reader, string column)
-    {
-        var ordinal = reader.GetOrdinal(column);
-        return reader.IsDBNull(ordinal)
-            ? 0
-            : Convert.ToInt32(reader.GetValue(ordinal), CultureInfo.InvariantCulture);
-    }
-
-    private static double? ReadNullableDouble(SqliteDataReader reader, string column)
-    {
-        var ordinal = reader.GetOrdinal(column);
-        return reader.IsDBNull(ordinal) ? null : reader.GetDouble(ordinal);
-    }
-
     private static DateTimeOffset ReadDateTimeOffset(SqliteDataReader reader, string column)
     {
-        var value = ReadString(reader, column);
+        var value = SqliteValueReader.ReadString(reader, column);
         return DateTimeOffset.TryParse(
             value,
             CultureInfo.InvariantCulture,

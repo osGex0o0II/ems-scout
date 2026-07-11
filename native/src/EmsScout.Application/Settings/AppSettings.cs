@@ -8,9 +8,9 @@ public sealed class AppSettings
 
     public bool CheckLoginBeforeCollection { get; set; } = true;
 
-    public string DataDirectory { get; set; } = "out";
+    public string DataDirectory { get; set; } = AppStorageDefaults.DataDirectory;
 
-    public string ExportDirectory { get; set; } = "out/data-management-export";
+    public string ExportDirectory { get; set; } = AppStorageDefaults.ExportDirectory;
 
     public bool TrackRecentExports { get; set; } = true;
 

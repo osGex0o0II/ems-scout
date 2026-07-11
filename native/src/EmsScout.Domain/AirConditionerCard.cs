@@ -3,7 +3,7 @@ namespace EmsScout.Domain;
 public sealed record AirConditionerCard(
     string Building,
     string SubArea,
-    int? Floor,
+    double? Floor,
     string Page,
     string Name,
     string SwitchState,

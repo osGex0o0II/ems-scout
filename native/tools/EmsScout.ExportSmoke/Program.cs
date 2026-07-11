@@ -2,7 +2,7 @@ using System.IO.Compression;
 using System.Xml.Linq;
 using EmsScout.Application.Devices;
 using EmsScout.Infrastructure.Sqlite;
-using EmsScout.Legacy;
+using EmsScout.Infrastructure.Realtime;
 
 var options = ExportSmokeOptions.Parse(args);
 if (options.ShowHelp)

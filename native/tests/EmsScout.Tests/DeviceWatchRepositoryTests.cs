@@ -222,6 +222,51 @@ public sealed class DeviceWatchRepositoryTests
     }
 
     [Fact]
+    public async Task FailedRuleUpsertPreservesTheExistingRule()
+    {
+        var databasePath = CreateDatabase();
+        var groups = new SqliteAreaGroupRepository(() => databasePath);
+        var watch = new SqliteDeviceWatchRepository(() => databasePath);
+        var group = await groups.SaveGroupAsync(new AreaGroupEdit(null, "原子关注", "原子", "事务测试", "重点", true));
+        var original = await watch.SaveRuleAsync(new DeviceWatchEdit(
+            null,
+            group.Id,
+            "原规则",
+            DateTimeOffset.Parse("2026-07-02T00:00:00Z"),
+            DateTimeOffset.Parse("2026-07-02T12:00:00Z"),
+            true,
+            "必须保留"));
+        await using (var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadWrite"))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TRIGGER reject_watch_update
+                BEFORE UPDATE ON device_watch_rules
+                BEGIN
+                  SELECT RAISE(ABORT, 'forced watch update failure');
+                END;
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
+
+        await Assert.ThrowsAsync<SqliteException>(() => watch.SaveRuleAsync(new DeviceWatchEdit(
+            null,
+            group.Id,
+            "不得替换",
+            original.StartAt,
+            original.EndAt,
+            true,
+            "失败")));
+
+        var preserved = await watch.LoadRuleForGroupAsync(group.Id);
+        Assert.NotNull(preserved);
+        Assert.Equal(original.Id, preserved.Id);
+        Assert.Equal("原规则", preserved.Name);
+        Assert.Equal("必须保留", preserved.Note);
+    }
+
+    [Fact]
     public async Task DeleteWatchRuleRequiresMatchingGroup()
     {
         var databasePath = CreateDatabase();
@@ -513,6 +558,60 @@ public sealed class DeviceWatchRepositoryTests
                 indicator TEXT,
                 comm TEXT
             );
+            CREATE TABLE monitor_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                area_label TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                priority TEXT NOT NULL DEFAULT '重点',
+                group_kind TEXT NOT NULL DEFAULT 'custom',
+                system_key TEXT,
+                locked INTEGER NOT NULL DEFAULT 0,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE monitor_group_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id INTEGER NOT NULL,
+                target_type TEXT NOT NULL DEFAULT 'floor',
+                building TEXT NOT NULL,
+                floor_label TEXT,
+                floor_value REAL,
+                sub_area_text TEXT,
+                card_name TEXT,
+                device_uid TEXT,
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE floor_catalog (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                building TEXT NOT NULL,
+                floor_label TEXT NOT NULL,
+                floor_value REAL,
+                source TEXT NOT NULL DEFAULT 'manual',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX idx_floor_catalog_key ON floor_catalog(building, floor_label);
+            CREATE INDEX idx_monitor_group_items_group ON monitor_group_items(group_id);
+            CREATE INDEX idx_monitor_group_items_target ON monitor_group_items(building, floor_value, sub_area_text, card_name);
+            CREATE TABLE device_watch_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                group_id INTEGER NOT NULL UNIQUE,
+                name TEXT NOT NULL DEFAULT '关注设备',
+                start_at TEXT NOT NULL,
+                end_at TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX idx_device_watch_rules_enabled ON device_watch_rules(enabled, start_at, end_at);
+            PRAGMA user_version = 2;
 
             INSERT INTO sub_areas (id, building, floor, text, sub_idx, x, y) VALUES
                 (1, '1号', 1, '1F A', 1, 100, 100),

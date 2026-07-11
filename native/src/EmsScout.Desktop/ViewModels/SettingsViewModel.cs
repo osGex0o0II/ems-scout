@@ -1,11 +1,24 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using EmsScout.Application.Logging;
 using EmsScout.Application.Settings;
+using EmsScout.Application.Workflows;
+using EmsScout.Infrastructure.Logging;
+using EmsScout.Infrastructure.Migrations;
+using EmsScout.Infrastructure.Storage;
 
 namespace EmsScout.Desktop.ViewModels;
 
-public sealed partial class SettingsViewModel(AppSettingsService settingsService) : ObservableObject
+public sealed partial class SettingsViewModel(
+    AppSettingsService settingsService,
+    AppDataPathService pathService,
+    LegacyOutMigrationService legacyOutMigrationService,
+    SqliteSchemaMigrator schemaMigrator,
+    ApplicationOperationState operationState,
+    IApplicationLogger applicationLogger) : ObservableObject
 {
+    private bool _operationStateAttached;
+
     public event EventHandler? SettingsApplied;
 
     [ObservableProperty]
@@ -49,34 +62,120 @@ public sealed partial class SettingsViewModel(AppSettingsService settingsService
 
     public string SettingsPath => settingsService.SettingsPath;
 
-    public void Load()
+    public bool CanEditCriticalSettings => !operationState.IsCollectionTaskRunning;
+
+    public async Task MigrateLegacyOutAsync(
+        string legacyOutDirectory,
+        CancellationToken cancellationToken = default)
     {
-        Apply(settingsService.Load());
-        StatusText = "已加载设置";
+        if (!CanChangeSettings())
+        {
+            StatusText = "采集任务运行中，不能迁移或切换数据目录";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(legacyOutDirectory))
+        {
+            StatusText = "未选择旧数据目录";
+            return;
+        }
+
+        var selectedDataDirectory = Path.GetFullPath(pathService.ResolveWorkspacePath(DataDirectory));
+        var configuredPaths = pathService.Capture();
+        var configuredDataDirectory = configuredPaths.DataDirectory;
+        if (!string.Equals(
+                selectedDataDirectory,
+                configuredDataDirectory,
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+        {
+            StatusText = "请先保存当前数据目录，再迁移旧数据";
+            return;
+        }
+
+        try
+        {
+            var result = await legacyOutMigrationService
+                .MigrateIfNeededAsync(legacyOutDirectory, configuredPaths.DataDirectory, cancellationToken)
+                .ConfigureAwait(true);
+            if (result.Status == LegacyOutMigrationStatus.Migrated)
+            {
+                await schemaMigrator
+                    .MigrateAsync(configuredPaths.DatabasePath, cancellationToken: cancellationToken)
+                    .ConfigureAwait(true);
+            }
+            StatusText = result.Status switch
+            {
+                LegacyOutMigrationStatus.Migrated => "旧数据已迁移，数据库结构已升级",
+                LegacyOutMigrationStatus.DestinationAlreadyInitialized => "当前数据目录已有数据库，未覆盖旧数据",
+                LegacyOutMigrationStatus.SourceMissing => "所选目录不含 ac.db，未迁移",
+                LegacyOutMigrationStatus.SourceAndDestinationAreSame => "所选目录已是当前数据目录",
+                _ => "旧数据迁移未执行",
+            };
+        }
+        catch (Exception ex)
+        {
+            StatusText = "旧数据迁移失败：" + applicationLogger.WriteFailure(ex, "settings").DisplayText;
+        }
     }
 
-    [RelayCommand]
-    private void Save()
+    public void Load()
     {
+        AttachOperationState();
+        Apply(settingsService.Load());
+        StatusText = CanEditCriticalSettings ? "已加载设置" : "采集任务运行中，关键设置已锁定";
+    }
+
+    [RelayCommand(CanExecute = nameof(CanChangeSettings))]
+    private async Task SaveAsync()
+    {
+        if (!CanChangeSettings())
+        {
+            StatusText = "采集任务运行中，不能迁移或切换数据目录";
+            return;
+        }
+
         if (!ValidateBeforeSave())
         {
             return;
         }
 
         var settings = ToSettings();
-        settingsService.Save(settings);
-        Apply(settingsService.Current);
-        StatusText = "设置已保存";
-        SettingsApplied?.Invoke(this, EventArgs.Empty);
+        try
+        {
+            await MigrateExistingDatabaseAsync(settings).ConfigureAwait(true);
+            settingsService.Save(settings);
+            Apply(settingsService.Current);
+            StatusText = "设置已保存";
+            SettingsApplied?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception ex)
+        {
+            StatusText = "设置未保存：" + applicationLogger.WriteFailure(ex, "settings").DisplayText;
+        }
     }
 
-    [RelayCommand]
-    private void Reset()
+    [RelayCommand(CanExecute = nameof(CanChangeSettings))]
+    private async Task ResetAsync()
     {
-        settingsService.Reset();
-        Apply(settingsService.Current);
-        StatusText = "已恢复默认设置";
-        SettingsApplied?.Invoke(this, EventArgs.Empty);
+        if (!CanChangeSettings())
+        {
+            StatusText = "采集任务运行中，不能迁移或切换数据目录";
+            return;
+        }
+
+        try
+        {
+            var defaults = new AppSettings();
+            await MigrateExistingDatabaseAsync(defaults).ConfigureAwait(true);
+            settingsService.Reset();
+            Apply(settingsService.Current);
+            StatusText = "已恢复默认设置";
+            SettingsApplied?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception ex)
+        {
+            StatusText = "未恢复默认设置：" + applicationLogger.WriteFailure(ex, "settings").DisplayText;
+        }
     }
 
     private void Apply(AppSettings settings)
@@ -151,5 +250,37 @@ public sealed partial class SettingsViewModel(AppSettingsService settingsService
         }
 
         return true;
+    }
+
+    private async Task MigrateExistingDatabaseAsync(
+        AppSettings settings,
+        CancellationToken cancellationToken = default)
+    {
+        var paths = pathService.Capture(settings);
+        if (File.Exists(paths.DatabasePath))
+        {
+            await schemaMigrator.MigrateAsync(paths.DatabasePath, cancellationToken: cancellationToken).ConfigureAwait(true);
+        }
+    }
+
+    private bool CanChangeSettings() => CanEditCriticalSettings;
+
+    private void AttachOperationState()
+    {
+        if (_operationStateAttached)
+        {
+            return;
+        }
+
+        operationState.CollectionTaskStateChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(CanEditCriticalSettings));
+            SaveCommand.NotifyCanExecuteChanged();
+            ResetCommand.NotifyCanExecuteChanged();
+            StatusText = CanEditCriticalSettings
+                ? "采集任务已结束，可以修改关键设置"
+                : "采集任务运行中，关键设置已锁定";
+        };
+        _operationStateAttached = true;
     }
 }
