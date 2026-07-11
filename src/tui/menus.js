@@ -6,7 +6,7 @@ const { SETTINGS_SCHEMA, toCliArgs } = require('./settings');
 async function mainMenu({ status, stats, qualityReport, edgeMode }) {
   clearScreen();
   const modeLabel = edgeMode === '--edge' ? 'CDP' : '自动';
-  console.log('\n  AC-Scout v1.0  ' + modeLabel + '模式');
+  console.log('\n  EMS Scout v1.0  ' + modeLabel + '模式');
   const last = loadLastCollect();
   let headerLine = '  数据库为空';
   if (last) {

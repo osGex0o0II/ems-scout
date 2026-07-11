@@ -65,7 +65,7 @@ public sealed partial class DiagnosticsViewModel(
         var settings = settingsService.Load();
         var appVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";
 
-        AppRows.Add(new DiagnosticInfoRow("应用", "EMS 空调控制台", "WinUI 3 / Windows App SDK 原生程序"));
+        AppRows.Add(new DiagnosticInfoRow("应用", "EMS Scout", "WinUI 3 / Windows App SDK 原生程序"));
         AppRows.Add(new DiagnosticInfoRow("版本", appVersion, "程序集版本"));
         AppRows.Add(new DiagnosticInfoRow("运行时", Environment.Version.ToString(), ".NET runtime"));
         AppRows.Add(new DiagnosticInfoRow("进程", Environment.ProcessId.ToString("N0"), Process.GetCurrentProcess().ProcessName));

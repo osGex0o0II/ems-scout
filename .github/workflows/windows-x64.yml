@@ -60,6 +60,7 @@ jobs:
             -c Release `
             --no-restore `
             /p:UseSharedCompilation=false `
+            --filter 'Fixture!=ProductionEvidence' `
             --results-directory artifacts/test-results `
             --logger 'trx;LogFileName=native-release.trx'
           if ($LASTEXITCODE -ne 0) { throw "Native tests failed with exit code $LASTEXITCODE" }

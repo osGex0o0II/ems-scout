@@ -11,7 +11,7 @@ function createMainWindow(options) {
     height: 860,
     minWidth: 1120,
     minHeight: 720,
-    title: 'EMS Legacy Web Panel',
+    title: 'EMS Scout Legacy',
     autoHideMenuBar: true,
     show: false,
     backgroundColor: '#f6f7f9',

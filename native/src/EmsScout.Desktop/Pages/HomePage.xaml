@@ -17,7 +17,7 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel Spacing="3">
-                    <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="EMS 空调运维总览" />
+                    <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="EMS Scout 运维总览" />
                     <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.PageStatus, Mode=OneWay}" />
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">

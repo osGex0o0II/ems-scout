@@ -1,0 +1,186 @@
+# EMS Scout Windows 验证清单
+
+更新时间：2026-07-11
+
+本清单用于在另一台 Windows x64 设备上从干净克隆继续验证。每一步通过后再进入下一步；
+失败时保留命令、完整输出和 `artifacts/`，不要用后续成功掩盖前序失败。
+
+## 1. 环境要求
+
+- Windows 11 x64，系统版本至少 `10.0.26100`（Windows 11 24H2）。
+- Git，且已配置访问 `git@github.com:osGex0o0II/ems-scout.git` 的 SSH key。
+- Node.js `24.18.0` 和配套 npm。
+- .NET SDK `10.0.x`。
+- Microsoft Edge。
+- Windows PowerShell 5.1；建议同时安装 PowerShell 7 和 Windows Terminal。
+- 首次 restore、npm install 和 Sidecar 准备阶段需要访问 NuGet、npm、GitHub 和 nodejs.org。
+
+检查版本：
+
+```powershell
+git --version
+node --version
+npm --version
+dotnet --info
+$PSVersionTable.PSVersion
+(Get-Item "$env:ProgramFiles(x86)\Microsoft\Edge\Application\msedge.exe").VersionInfo.FileVersion
+```
+
+## 2. 克隆
+
+```powershell
+git clone git@github.com:osGex0o0II/ems-scout.git
+Set-Location ems-scout
+git branch --show-current
+git status --short
+git log -1 --oneline
+```
+
+预期：分支为 `main`，工作树为空。不要把旧机器的 `out/`、浏览器 profile、`bin/`、
+`obj/` 或 `node_modules/` 复制进仓库后再做干净克隆门禁。
+
+## 3. 恢复依赖
+
+```powershell
+npm ci
+dotnet restore native\EmsScout.Native.slnx -r win-x64
+```
+
+失败时先记录错误；不要删除 lockfile、升级包或临时更换版本来绕过恢复问题。
+
+## 4. 干净克隆自动化门禁
+
+```powershell
+$tests = @(
+  Get-ChildItem sidecar\test, tests\architecture, tests\contract-audit, tests\enumeration, tests\field-e2e, tests\golden `
+    -Filter '*.test.js' -File -Recurse |
+    Sort-Object FullName |
+    ForEach-Object FullName
+)
+& node --test @tests
+npm run self-test
+npm run native:test
+dotnet format native\EmsScout.Native.slnx --verify-no-changes --no-restore
+```
+
+说明：干净克隆没有 `out/` 生产证据。Node run17 黄金测试会明确 skip；
+`npm run native:test` 会排除 `Fixture=ProductionEvidence`，其余源码、迁移、契约、Excel、
+回滚和架构测试必须通过。
+
+## 5. 原生应用构建与启动
+
+```powershell
+npm run native:build
+npm run native:run
+```
+
+不要直接双击 `bin\...\EmsScout.Desktop.exe`。必须通过带包身份的 `native:run` 或安装后的
+MSIX 启动。
+
+人工检查：
+
+- 窗口、开始菜单和诊断页显示 `EMS Scout`。
+- 七个页面可导航：总览、采集任务、数据管理、审计中心、分组设置、系统设置、诊断。
+- 首次启动能创建默认数据目录和数据库，迁移失败时显示安全错误而不是原始异常。
+- 设置页可保存 EMS 地址、数据目录、导出目录和日志级别。
+- 没有现场数据时显示空状态，不崩溃、不伪造统计。
+
+## 6. Sidecar 打包验证
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\prepare-sidecar.ps1
+Get-Content artifacts\sidecar\win-x64\payload-manifest.json -Raw
+```
+
+预期：
+
+- 下载并校验固定版本 Node `v24.18.0`。
+- payload smoke 成功加载 Playwright、snapshot adapter 和全部枚举拆分模块。
+- `runtime\node.exe`、`app\sidecar`、`app\src`、契约和 manifest 都存在。
+- 不依赖全局 Node 执行打包后的 Sidecar。
+
+## 7. Windows x64 MSIX
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\package-native.ps1 -Configuration Release
+Get-ChildItem artifacts\packages\win-x64 -Recurse
+```
+
+记录实际生成的 MSIX 路径、文件大小和 SHA-256：
+
+```powershell
+Get-ChildItem artifacts\packages\win-x64 -Recurse -File |
+  Select-Object FullName, Length, @{Name='SHA256';Expression={(Get-FileHash $_.FullName -Algorithm SHA256).Hash}}
+```
+
+安装包验收必须覆盖：
+
+1. 当前测试机安装并启动。
+2. 干净 Windows 用户配置下首次启动。
+3. 安装后不依赖源码目录或全局 Node。
+4. 同版本重装和后续版本升级。
+5. 卸载后应用包被移除，用户数据是否保留符合预期并有记录。
+
+如果包未签名或证书不受信任，记录具体错误和使用的测试证书流程；不得关闭系统安全策略后
+把结果描述成正式安装通过。
+
+## 8. 可选生产证据测试
+
+`out/` 不在 Git 中。只有在确认文件来源、权限和哈希后，才把所需 run17 DB、JSON、
+质量报告和实时文件放到本机仓库的 `out/`，然后运行：
+
+```powershell
+npm run native:test:evidence
+```
+
+该测试通过 `ProductionDataSnapshot` 复制数据库后查询，不直接通过 SQLite 打开源 DB。
+不要从聊天、临时网盘或未知备份获取生产证据。
+
+## 9. 真实 EMS 单栋 E2E
+
+先关闭可能占用 Edge/CDP 的旧测试，再运行：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\field-e2e.ps1 `
+  -Building 1号 -LaunchEdge -RunSingleBuilding
+```
+
+在脚本打开的隔离 Edge 中完成 EMS 登录。脚本必须使用：
+
+- 唯一 `out\field-e2e-*` runDir。
+- 随机 loopback CDP 端口。
+- `--remote-debugging-address=127.0.0.1`。
+- 本次 runDir 独立 profile。
+- 临时 CollectionSnapshot、SQLite、质量输出和 Excel。
+- 默认关闭本次 Edge 并清理 profile。
+
+保留 runDir 内的 WorkflowEvent、snapshot、DB、质量、Excel 和 manifest 作为证据。
+任何阶段触碰生产 `out\ac.db`、WAL 或 SHM 都视为失败。
+
+## 10. 六栋 shadow parity
+
+单栋通过后再运行全量采集。将安装产品产生的 CollectionSnapshot 与当前权威口径比较：
+
+- 6 栋。
+- 143 子区。
+- 373 页面。
+- 6571 raw cards。
+- 6568 unique cards。
+- 楼栋唯一卡片：1493、107、1106、1096、286、2480。
+
+通讯状态会随现场变化，不能要求固定开关数量；必须核查卡片唯一性、占位符、indicator、
+质量原因和已知来源缺陷。差异需按楼栋、子区、页面和设备名保留证据。
+
+## 11. 结果记录
+
+每次 Windows 验证至少记录：
+
+- commit SHA、Windows build、Node/.NET/Edge 版本。
+- 执行命令和退出码。
+- 自动化测试通过/失败/skip 数。
+- MSIX 路径、大小、SHA-256、安装方式和证书状态。
+- 现场 runDir 名称、楼栋、耗时、卡片数和质量结论。
+- 失败阶段、错误码、相关 NDJSON 日志和是否可复现。
+
+验证结果应追加到 `CHANGELOG.md` 或独立验收记录后再提交，不提交 `artifacts/`、`out/`、
+浏览器 profile、生产 DB 或日志原件。

@@ -19,6 +19,7 @@ public sealed class DeviceExportTests : IDisposable
     }
 
     [Fact]
+    [Trait("Fixture", "ProductionEvidence")]
     public async Task ExportsCurrentFilteredDeviceWorkbook()
     {
         var exportService = CurrentExportService();
@@ -38,6 +39,7 @@ public sealed class DeviceExportTests : IDisposable
     }
 
     [Fact]
+    [Trait("Fixture", "ProductionEvidence")]
     public async Task DeviceWorkbookHonorsCurrentWorkbenchAreaFilters()
     {
         var exportService = CurrentExportService();
@@ -53,6 +55,7 @@ public sealed class DeviceExportTests : IDisposable
     }
 
     [Fact]
+    [Trait("Fixture", "ProductionEvidence")]
     public async Task DeviceWorkbookMapsAllUserColumnsInOrder()
     {
         var repository = CurrentRepository();
@@ -229,6 +232,7 @@ public sealed class DeviceExportTests : IDisposable
     }
 
     [Fact]
+    [Trait("Fixture", "ProductionEvidence")]
     public async Task RejectsHistoryRunExport()
     {
         var exportService = CurrentExportService();

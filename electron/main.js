@@ -61,7 +61,7 @@ if (!singleInstance) {
 
   app.whenReady().then(bootstrap).catch(err => {
     logger.error('bootstrap failed', err);
-    dialog.showErrorBox('EMS Legacy Web Panel 启动失败', err.message || String(err));
+    dialog.showErrorBox('EMS Scout Legacy 启动失败', err.message || String(err));
     quitRequested = true;
     app.quit();
   });

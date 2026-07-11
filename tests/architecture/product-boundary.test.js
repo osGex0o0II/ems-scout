@@ -137,3 +137,17 @@ test('packaged Sidecar includes every local module required by the enumerator', 
       `${moduleName} must be loaded by the package smoke test`);
   }
 });
+
+test('Windows x64 packaging inputs are available in a clean clone', () => {
+  const profilePath = path.join(
+    root,
+    'native/src/EmsScout.Desktop/Properties/PublishProfiles/win-x64.pubxml');
+  const profile = fs.readFileSync(profilePath, 'utf8');
+  const packageScript = read('scripts/package-native.ps1');
+  const projectIgnore = read('native/src/EmsScout.Desktop/.gitignore');
+
+  assert.match(profile, /<RuntimeIdentifier>win-x64<\/RuntimeIdentifier>/);
+  assert.match(profile, /<SelfContained>true<\/SelfContained>/);
+  assert.match(packageScript, /Fixture!=ProductionEvidence/);
+  assert.match(projectIgnore, /!Properties\/PublishProfiles\/win-x64\.pubxml/);
+});
