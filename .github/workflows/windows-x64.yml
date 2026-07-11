@@ -1,0 +1,125 @@
+name: Windows x64 native gate
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-and-package:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      NUGET_XMLDOC_MODE: skip
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+
+      - name: Install .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore Node dependencies
+        run: npm ci
+
+      - name: Restore native solution
+        run: dotnet restore native/EmsScout.Native.slnx -r win-x64
+
+      - name: Test contracts and Sidecar
+        shell: pwsh
+        run: |
+          $tests = @(
+            Get-ChildItem sidecar/test, tests/architecture, tests/contract-audit, tests/enumeration, tests/field-e2e, tests/golden -Filter '*.test.js' -File -Recurse |
+              Sort-Object FullName |
+              ForEach-Object FullName
+          )
+          & node --test @tests
+          if ($LASTEXITCODE -ne 0) { throw "Node tests failed with exit code $LASTEXITCODE" }
+
+      - name: Test collector rules
+        run: npm run self-test
+
+      - name: Test native core
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/test-results | Out-Null
+          & dotnet test native/tests/EmsScout.Tests/EmsScout.Tests.csproj `
+            -c Release `
+            --no-restore `
+            /p:UseSharedCompilation=false `
+            --results-directory artifacts/test-results `
+            --logger 'trx;LogFileName=native-release.trx'
+          if ($LASTEXITCODE -ne 0) { throw "Native tests failed with exit code $LASTEXITCODE" }
+
+      - name: Verify native formatting
+        run: dotnet format native/EmsScout.Native.slnx --verify-no-changes --no-restore
+
+      - name: Audit vulnerable NuGet packages
+        shell: pwsh
+        run: |
+          & dotnet list native/EmsScout.Native.slnx package --vulnerable --include-transitive 2>&1 |
+            Tee-Object -FilePath artifacts/test-results/nuget-vulnerabilities.txt
+          if ($LASTEXITCODE -ne 0) { throw "NuGet vulnerability audit failed with exit code $LASTEXITCODE" }
+
+      - name: Verify migration and no-op idempotence
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/ci | Out-Null
+          Copy-Item -LiteralPath 'data/1号楼/ac.db' -Destination artifacts/ci/archived-core-v0.db
+          & dotnet run --project native/tools/EmsScout.SchemaTool/EmsScout.SchemaTool.csproj `
+            -c Release --no-restore -- `
+            migrate --db artifacts/ci/archived-core-v0.db --apply `
+            --backup artifacts/ci/archived-core-v0.backup.db --json |
+            Set-Content -LiteralPath artifacts/ci/migration-first.json -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw "First migration failed with exit code $LASTEXITCODE" }
+
+          $before = (Get-FileHash artifacts/ci/archived-core-v0.db -Algorithm SHA256).Hash
+          & dotnet run --project native/tools/EmsScout.SchemaTool/EmsScout.SchemaTool.csproj `
+            -c Release --no-restore -- `
+            migrate --db artifacts/ci/archived-core-v0.db --apply --json |
+            Set-Content -LiteralPath artifacts/ci/migration-second.json -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw "Second migration failed with exit code $LASTEXITCODE" }
+          $after = (Get-FileHash artifacts/ci/archived-core-v0.db -Algorithm SHA256).Hash
+          if ($before -ne $after) { throw 'No-op migration changed the database content hash.' }
+
+          $second = Get-Content -LiteralPath artifacts/ci/migration-second.json -Raw | ConvertFrom-Json
+          if (@($second.appliedVersions).Count -ne 0) { throw 'Second migration was not a no-op.' }
+          if ($null -ne $second.backupPath) { throw 'No-op migration created an unnecessary backup.' }
+
+          & node scripts/audit-contracts.js artifacts/ci/archived-core-v0.db |
+            Set-Content -LiteralPath artifacts/ci/contract-audit-migrated.json -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw "Migrated DB contract audit failed with exit code $LASTEXITCODE" }
+
+      - name: Stage and smoke bundled Sidecar
+        shell: pwsh
+        run: ./scripts/prepare-sidecar.ps1
+
+      - name: Build Windows x64 package
+        shell: pwsh
+        run: ./scripts/package-native.ps1 -Configuration Release -SkipTests -SkipSidecarPrepare
+
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ems-scout-windows-x64-${{ github.run_number }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            artifacts/test-results/**
+            artifacts/ci/**
+            artifacts/sidecar/win-x64/payload-manifest.json
+            artifacts/packages/win-x64/**
