@@ -819,6 +819,7 @@ public sealed partial class CollectionTaskViewModel(
     private void UpdateEnvironmentReadiness()
     {
         var plan = BuildExecutionPlan(SelectedTaskMode);
+        var settings = settingsService.Current;
         var missing = new List<string>();
 
         if (!_environmentChecked)

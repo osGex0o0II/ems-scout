@@ -15,6 +15,7 @@ public sealed class SettingsTaskLockContractTests
         Assert.Contains("AddSingleton<ApplicationOperationState>()", app);
         Assert.Contains("operationLease = operationState.BeginCollectionTask()", collection);
         Assert.Contains("using var operationLeaseScope = operationLease", collection);
+        Assert.Contains("var settings = settingsService.Current;", collection);
         Assert.Contains("CanEditCriticalSettings => !operationState.IsCollectionTaskRunning", settings);
         Assert.Contains("RelayCommand(CanExecute = nameof(CanChangeSettings))", settings);
         Assert.Contains("采集任务运行中，不能迁移或切换数据目录", settings);
