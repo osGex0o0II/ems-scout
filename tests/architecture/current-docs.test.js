@@ -40,6 +40,9 @@ test('architecture and handoff preserve current ownership and external gates', (
   assert.match(architecture, /不能描述成真实 EMS 端到端通过/);
   assert.match(handoff, /不通过 SQLite 打开 `out\/ac\.db`/);
   assert.match(context, /Windows XAML\/MSIX\/内置 Sidecar\/真实 EMS 尚未验证/);
+  assert.match(context, /重构已按四组提交/);
+  assert.doesNotMatch(context, /等待用户确认是否按建议分组暂存和提交/);
+  assert.doesNotMatch(read('docs/状态.md'), /当前没有执行 `git add`、`git commit`/);
   assert.ok(context.split(/\r?\n/).length < 150, 'Context summary must remain concise.');
 });
 
