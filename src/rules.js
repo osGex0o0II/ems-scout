@@ -268,9 +268,31 @@ function classifyKnownMissingIndicatorPage(cards, meta = {}) {
   };
 }
 
+function classifyStableOfflineTemplatePage(cards, meta = {}, quality = null) {
+  if (!Array.isArray(cards) || cards.length < 2) {
+    return { eligible: false, details: 'not enough cards' };
+  }
+  const qc = quality || checkCardQuality(cards, meta);
+  const names = cards.map(card => String(card && card.name || '').trim());
+  const namesComplete = names.every(name => name && name !== '0-0001-KT');
+  const namesUnique = new Set(names).size === cards.length;
+  const indicatorsComplete = cards.every(card => Boolean(String(card.indicator || '').trim()));
+  const offlineStateComplete = cards.every(card => card.comm === '离线' && card.switch === '-');
+  const eligible = qc.uniformTemplate &&
+    qc.allOffline &&
+    !qc.duplicateCollapse &&
+    namesComplete &&
+    namesUnique &&
+    indicatorsComplete &&
+    offlineStateComplete;
+  return {
+    eligible,
+    details: `offline-template=${qc.uniformTemplate ? 'yes' : 'no'} names=${namesComplete && namesUnique ? 'ok' : 'bad'} ind=${indicatorsComplete ? 'ok' : 'bad'} state=${offlineStateComplete ? 'ok' : 'bad'}${qc.duplicateCollapse ? ' duplicate-collapse' : ''}`,
+  };
+}
+
 const ACCEPTED_CAPTURE_QUALITY_REASONS = new Set([
   'quality_pass',
-  'all_offline',
   'offline_template_stable',
   'device_anomalies_preserved',
   'known_source_indicator_missing',
@@ -298,5 +320,6 @@ module.exports = {
   classifyPersistentDeviceAnomalyPage,
   normalizeKnownSourceDefects,
   classifyKnownMissingIndicatorPage,
+  classifyStableOfflineTemplatePage,
   isAcceptedCaptureQualityReason,
 };

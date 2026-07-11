@@ -1,0 +1,697 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.emsscout.invalid/collection-snapshot-v1.schema.json",
+  "title": "EMS Scout CollectionSnapshot v1",
+  "description": "Versioned output of one EMS collection workflow. Missing source values are represented by null, never by empty strings, hyphens, or numeric zero sentinels.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contractVersion",
+    "workflowId",
+    "completedAt",
+    "scope",
+    "lineage",
+    "versions",
+    "counts",
+    "quality",
+    "artifact",
+    "buildings"
+  ],
+  "properties": {
+    "contractVersion": {
+      "const": "ems.collection-snapshot/v1"
+    },
+    "workflowId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "completedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "scope": {
+      "$ref": "#/$defs/scope"
+    },
+    "lineage": {
+      "$ref": "#/$defs/lineage"
+    },
+    "versions": {
+      "$ref": "#/$defs/versions"
+    },
+    "counts": {
+      "$ref": "#/$defs/snapshotCounts"
+    },
+    "quality": {
+      "$ref": "#/$defs/snapshotQuality"
+    },
+    "artifact": {
+      "$ref": "#/$defs/artifact"
+    },
+    "buildings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/building"
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "deviceSourceKey": {
+      "type": "string",
+      "pattern": "^sk1_[a-f0-9]{64}$"
+    },
+    "deviceUid": {
+      "type": "string",
+      "pattern": "^duid1_[a-f0-9]{64}$"
+    },
+    "nullableDeviceUid": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/deviceUid"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "nullableNonEmptyString": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "buildings",
+        "targets"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "full",
+            "building",
+            "sub_area",
+            "recapture",
+            "append"
+          ]
+        },
+        "buildings": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "targets": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        }
+      }
+    },
+    "lineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baseArtifactSha256",
+        "parentWorkflowId"
+      ],
+      "properties": {
+        "baseArtifactSha256": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/sha256"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "parentWorkflowId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "collector",
+        "playwright",
+        "rules",
+        "databaseSchema",
+        "sourceRevision"
+      ],
+      "properties": {
+        "collector": {
+          "type": "string",
+          "minLength": 1
+        },
+        "playwright": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rules": {
+          "type": "string",
+          "minLength": 1
+        },
+        "databaseSchema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceRevision": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "snapshotCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "buildingCount",
+        "subAreaCount",
+        "pageCount",
+        "rawCardCount",
+        "uniqueCardCount"
+      ],
+      "properties": {
+        "buildingCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "subAreaCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pageCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rawCardCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "uniqueCardCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "snapshotQuality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision",
+        "findings",
+        "retries"
+      ],
+      "properties": {
+        "decision": {
+          "enum": [
+            "accepted",
+            "accepted_with_findings",
+            "rejected"
+          ]
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "retries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/retryEvidence"
+          }
+        }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "severity",
+        "message",
+        "sourceKey"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "warning",
+            "error"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceKey": {
+          "$ref": "#/$defs/nullableNonEmptyString"
+        }
+      }
+    },
+    "retryEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceKey",
+        "attempt",
+        "reason",
+        "startedAt",
+        "completedAt",
+        "outcome"
+      ],
+      "properties": {
+        "sourceKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "startedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "outcome": {
+          "enum": [
+            "recovered",
+            "unchanged",
+            "failed"
+          ]
+        }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hashScope",
+        "sha256",
+        "bytes"
+      ],
+      "properties": {
+        "hashScope": {
+          "const": "canonical-buildings-payload"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "building": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceKey",
+        "building",
+        "menuClicked",
+        "subAreaCount",
+        "subAreas"
+      ],
+      "properties": {
+        "sourceKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "building": {
+          "type": "string",
+          "minLength": 1
+        },
+        "menuClicked": {
+          "$ref": "#/$defs/nullableNonEmptyString"
+        },
+        "subAreaCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "subAreas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/subArea"
+          }
+        }
+      }
+    },
+    "subArea": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceKey",
+        "idx",
+        "floor",
+        "floorLabel",
+        "text",
+        "x",
+        "y",
+        "sourceEvidence",
+        "pages"
+      ],
+      "properties": {
+        "sourceKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "idx": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "floor": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "floorLabel": {
+          "$ref": "#/$defs/nullableNonEmptyString"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1
+        },
+        "x": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "y": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "sourceEvidence": {
+          "$ref": "#/$defs/subAreaSourceEvidence"
+        },
+        "pages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/page"
+          }
+        }
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceKey",
+        "page",
+        "rawCount",
+        "uniqueCount",
+        "duplicates",
+        "layout",
+        "quality",
+        "sourceEvidence",
+        "cards"
+      ],
+      "properties": {
+        "sourceKey": {
+          "type": "string",
+          "minLength": 1
+        },
+        "page": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rawCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "uniqueCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "duplicates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/duplicateEvidence"
+          }
+        },
+        "layout": {
+          "$ref": "#/$defs/nullableNonEmptyString"
+        },
+        "quality": {
+          "$ref": "#/$defs/pageQuality"
+        },
+        "sourceEvidence": {
+          "$ref": "#/$defs/pageSourceEvidence"
+        },
+        "cards": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/card"
+          }
+        }
+      }
+    },
+    "subAreaSourceEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "err"
+      ],
+      "properties": {
+        "err": {
+          "$ref": "#/$defs/sourceScalar"
+        }
+      }
+    },
+    "pageSourceEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "count",
+        "onHref",
+        "offHref",
+        "qualityReason",
+        "duplicateNames",
+        "err"
+      ],
+      "properties": {
+        "count": { "$ref": "#/$defs/sourceScalar" },
+        "onHref": { "$ref": "#/$defs/sourceScalar" },
+        "offHref": { "$ref": "#/$defs/sourceScalar" },
+        "qualityReason": { "$ref": "#/$defs/sourceScalar" },
+        "duplicateNames": {},
+        "err": { "$ref": "#/$defs/sourceScalar" }
+      }
+    },
+    "duplicateEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "copies",
+        "sourceKeys"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "copies": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "sourceKeys": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/deviceSourceKey"
+          }
+        }
+      }
+    },
+    "pageQuality": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "decision",
+        "reason",
+        "attempts"
+      ],
+      "properties": {
+        "decision": {
+          "enum": [
+            "accepted",
+            "accepted_with_findings",
+            "rejected"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "attempts": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "card": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sourceKey",
+        "deviceUid",
+        "name",
+        "switch",
+        "mode",
+        "indoor",
+        "setTemp",
+        "fan",
+        "indicator",
+        "comm",
+        "sourceEvidence"
+      ],
+      "properties": {
+        "sourceKey": {
+          "$ref": "#/$defs/deviceSourceKey"
+        },
+        "deviceUid": {
+          "$ref": "#/$defs/nullableDeviceUid"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "switch": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "ON",
+            "OFF",
+            null
+          ]
+        },
+        "mode": {
+          "$ref": "#/$defs/nullableNonEmptyString"
+        },
+        "indoor": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "setTemp": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "fan": {
+          "$ref": "#/$defs/nullableNonEmptyString"
+        },
+        "indicator": {
+          "$ref": "#/$defs/nullableNonEmptyString"
+        },
+        "comm": {
+          "enum": [
+            "开机",
+            "关机",
+            "离线",
+            "未知"
+          ]
+        },
+        "sourceEvidence": {
+          "$ref": "#/$defs/cardSourceEvidence"
+        }
+      }
+    },
+    "sourceScalar": {
+      "type": [
+        "string",
+        "number",
+        "boolean",
+        "null"
+      ]
+    },
+    "cardSourceEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "raw",
+        "nameFloor"
+      ],
+      "properties": {
+        "raw": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "switch",
+            "mode",
+            "indoor",
+            "setTemp",
+            "fan",
+            "indicator",
+            "comm"
+          ],
+          "properties": {
+            "name": { "$ref": "#/$defs/sourceScalar" },
+            "switch": { "$ref": "#/$defs/sourceScalar" },
+            "mode": { "$ref": "#/$defs/sourceScalar" },
+            "indoor": { "$ref": "#/$defs/sourceScalar" },
+            "setTemp": { "$ref": "#/$defs/sourceScalar" },
+            "fan": { "$ref": "#/$defs/sourceScalar" },
+            "indicator": { "$ref": "#/$defs/sourceScalar" },
+            "comm": { "$ref": "#/$defs/sourceScalar" }
+          }
+        },
+        "nameFloor": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

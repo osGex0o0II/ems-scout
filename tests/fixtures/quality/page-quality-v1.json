@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "id": "valid_mixed_active",
+      "cards": [
+        { "name": "A", "switch": "ON", "mode": "制冷", "indoor": "26", "setTemp": "24", "fan": "高", "indicator": "red.png", "comm": "开机" },
+        { "name": "B", "switch": "OFF", "mode": "通风", "indoor": "27", "setTemp": "25", "fan": "低", "indicator": "green.png", "comm": "关机" }
+      ],
+      "expected": { "ok": true, "uniformTemplate": false, "allOffline": false, "duplicateCollapse": false, "placeholderNames": 0, "withResolvedState": 2, "activeFieldOk": true, "invalidIndoor": 0, "invalidSetTemp": 0, "stableOfflineTemplateEligible": false }
+    },
+    {
+      "id": "two_card_zero_template",
+      "cards": [
+        { "name": "A", "switch": "OFF", "mode": "制冷", "indoor": "0", "setTemp": "0", "fan": "中", "indicator": "green.png", "comm": "关机" },
+        { "name": "B", "switch": "OFF", "mode": "制冷", "indoor": "0", "setTemp": "0", "fan": "中", "indicator": "green.png", "comm": "关机" }
+      ],
+      "expected": { "ok": false, "uniformTemplate": true, "allOffline": false, "duplicateCollapse": false, "placeholderNames": 0, "withResolvedState": 2, "activeFieldOk": false, "invalidIndoor": 0, "invalidSetTemp": 0, "stableOfflineTemplateEligible": false }
+    },
+    {
+      "id": "two_card_26_25_template",
+      "cards": [
+        { "name": "A", "switch": "OFF", "mode": "制冷", "indoor": "26", "setTemp": "25", "fan": "中", "indicator": "green.png", "comm": "关机" },
+        { "name": "B", "switch": "OFF", "mode": "制冷", "indoor": "26", "setTemp": "25", "fan": "中", "indicator": "green.png", "comm": "关机" }
+      ],
+      "expected": { "ok": false, "uniformTemplate": true, "allOffline": false, "duplicateCollapse": false, "placeholderNames": 0, "withResolvedState": 2, "activeFieldOk": true, "invalidIndoor": 0, "invalidSetTemp": 0, "stableOfflineTemplateEligible": false }
+    },
+    {
+      "id": "uniform_real_values",
+      "cards": [
+        { "name": "A", "switch": "OFF", "mode": "制冷", "indoor": "22", "setTemp": "20", "fan": "高", "indicator": "green.png", "comm": "关机" },
+        { "name": "B", "switch": "OFF", "mode": "制冷", "indoor": "22", "setTemp": "20", "fan": "高", "indicator": "green.png", "comm": "关机" }
+      ],
+      "expected": { "ok": true, "uniformTemplate": false, "allOffline": false, "duplicateCollapse": false, "placeholderNames": 0, "withResolvedState": 2, "activeFieldOk": true, "invalidIndoor": 0, "invalidSetTemp": 0, "stableOfflineTemplateEligible": false }
+    },
+    {
+      "id": "placeholder_and_unresolved",
+      "cards": [
+        { "name": "0-0001-KT", "switch": "-", "mode": "-", "indoor": "0", "setTemp": "0", "fan": "0", "indicator": "", "comm": "" }
+      ],
+      "expected": { "ok": false, "uniformTemplate": false, "allOffline": false, "duplicateCollapse": false, "placeholderNames": 1, "withResolvedState": 0, "activeFieldOk": true, "invalidIndoor": 0, "invalidSetTemp": 0, "stableOfflineTemplateEligible": false }
+    },
+    {
+      "id": "invalid_active_measurements_parse_float",
+      "cards": [
+        { "name": "A", "switch": "ON", "mode": "-", "indoor": "-1615.5C", "setTemp": "3301.4C", "fan": "-", "indicator": "red.png", "comm": "开机" },
+        { "name": "B", "switch": "OFF", "mode": "制冷", "indoor": "26C", "setTemp": "24C", "fan": "低", "indicator": "green.png", "comm": "关机" }
+      ],
+      "expected": { "ok": false, "uniformTemplate": false, "allOffline": false, "duplicateCollapse": false, "placeholderNames": 0, "withResolvedState": 2, "activeFieldOk": false, "invalidIndoor": 1, "invalidSetTemp": 1, "stableOfflineTemplateEligible": false }
+    },
+    {
+      "id": "duplicate_collapse",
+      "meta": { "rawCount": 20, "uniqueCount": 2 },
+      "cards": [
+        { "name": "A", "switch": "OFF", "mode": "制冷", "indoor": "22", "setTemp": "20", "fan": "高", "indicator": "green.png", "comm": "关机" },
+        { "name": "B", "switch": "OFF", "mode": "制冷", "indoor": "23", "setTemp": "21", "fan": "低", "indicator": "green.png", "comm": "关机" }
+      ],
+      "expected": { "ok": false, "uniformTemplate": false, "allOffline": false, "duplicateCollapse": true, "placeholderNames": 0, "withResolvedState": 2, "activeFieldOk": true, "invalidIndoor": 0, "invalidSetTemp": 0, "stableOfflineTemplateEligible": false }
+    },
+    {
+      "id": "stable_offline_template",
+      "cards": [
+        { "name": "A", "switch": "-", "mode": "通风", "indoor": "0", "setTemp": "0", "fan": "0", "indicator": "gray.png", "comm": "离线" },
+        { "name": "B", "switch": "-", "mode": "通风", "indoor": "0", "setTemp": "0", "fan": "0", "indicator": "gray.png", "comm": "离线" }
+      ],
+      "expected": { "ok": false, "uniformTemplate": true, "allOffline": true, "duplicateCollapse": false, "placeholderNames": 0, "withResolvedState": 2, "activeFieldOk": true, "invalidIndoor": 0, "invalidSetTemp": 0, "stableOfflineTemplateEligible": true }
+    },
+    {
+      "id": "offline_non_template",
+      "cards": [
+        { "name": "A", "switch": "-", "mode": "通风", "indoor": "0", "setTemp": "0", "fan": "0", "indicator": "gray.png", "comm": "离线" },
+        { "name": "B", "switch": "-", "mode": "通风", "indoor": "1", "setTemp": "0", "fan": "0", "indicator": "gray.png", "comm": "离线" }
+      ],
+      "expected": { "ok": true, "uniformTemplate": false, "allOffline": true, "duplicateCollapse": false, "placeholderNames": 0, "withResolvedState": 2, "activeFieldOk": true, "invalidIndoor": 0, "invalidSetTemp": 0, "stableOfflineTemplateEligible": false }
+    }
+  ]
+}

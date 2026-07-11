@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ems-scout:workflow-control:v1",
+  "title": "EMS Scout WorkflowControl v1",
+  "description": "One UTF-8 JSON control command sent to the Node sidecar on standard input.",
+  "type": "object",
+  "properties": {
+    "contractVersion": {
+      "const": "ems.workflow-control/v1"
+    },
+    "workflowId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "type": {
+      "const": "cancel"
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    }
+  },
+  "required": [
+    "contractVersion",
+    "workflowId",
+    "timestamp",
+    "type"
+  ],
+  "additionalProperties": false
+}

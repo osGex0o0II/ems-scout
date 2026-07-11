@@ -1,0 +1,7 @@
+{
+  "contractVersion": "ems.workflow-control/v1",
+  "workflowId": "collect-20260711-001",
+  "timestamp": "2026-07-11T08:00:00.000Z",
+  "type": "cancel",
+  "reason": "user_requested"
+}

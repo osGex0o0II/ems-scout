@@ -4,8 +4,12 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
-const { checkCardQuality, getZone, classifyPersistentDeviceAnomalyPage, normalizeKnownSourceDefects, classifyKnownMissingIndicatorPage, isAcceptedCaptureQualityReason } = require('./rules');
+const { checkCardQuality, getZone } = require('./rules');
+const { createCapturePolling } = require('./capture-polling');
+const { auditCollectedOutput, pageFromData } = require('./capture-result');
 const { validateEnumData, formatValidation } = require('./enum-validator');
+const { matchesEmsPageUrl, parseEnumerateOptions } = require('./enumerate-options');
+const { createEnumerationOutputStore } = require('./enumerate-output');
 const { log: loggerLog, setLevel, setCategories, enableFileLog, close, LEVELS, CATEGORIES } = require('./logger');
 // Compat: old-style log() defaults to INFO+ENUM
 const LOG = { I: m => loggerLog(LEVELS.INFO, 'ENUM', m), D: (c, m, x) => loggerLog(LEVELS.DEBUG, c, m, x), 
@@ -13,37 +17,15 @@ const LOG = { I: m => loggerLog(LEVELS.INFO, 'ENUM', m), D: (c, m, x) => loggerL
 function log(...args) { loggerLog(LEVELS.INFO, 'ENUM', ...args); }
 
 // ===== Configuration =====
-function argValue(name) {
-  const hit = process.argv.find(a => a.startsWith(name + '='));
-  return hit ? hit.slice(name.length + 1) : '';
-}
-const RAW_EMS_URL = argValue('--ems-url') || process.env.EMS_URL || 'http://172.29.248.4:8000/ui';
-function normalizeEmsUrl(value) {
-  try {
-    const url = new URL(value);
-    url.hash = '';
-    return url.toString();
-  } catch {
-    return value;
-  }
-}
-const EMS_URL = normalizeEmsUrl(RAW_EMS_URL);
-const CDP_URL = argValue('--cdp-url') || process.env.CDP_URL || 'http://127.0.0.1:9222';
-function isEmsPageUrl(url) {
-  try {
-    const expected = new URL(EMS_URL);
-    const current = new URL(url);
-    return current.host === expected.host && (current.pathname.includes('/ui') || expected.pathname.includes(current.pathname));
-  } catch {
-    return url.includes('172.29.248.4') || url.includes('localhost') || url.includes('/ui');
-  }
-}
-const OUT_DIR = path.resolve(argValue('--out-dir') || process.env.EMS_OUT_DIR || path.resolve(__dirname, '..', 'out'));
-const OUT_FILE = path.join(OUT_DIR, 'enum_full_v5.json');
+const OPTIONS = parseEnumerateOptions(process.argv.slice(2), process.env, path.resolve(__dirname, '..'));
+const {
+  EMS_URL, CDP_URL, OUT_DIR, OUT_FILE, ENABLE_NETWORK_MONITOR, ENABLE_SELF_DIAGNOSE,
+  USE_CDP, USE_AUTO_LAUNCH, DRY_RUN, APPEND, CHECK_LOGIN, FAIL_IF_NOT_LOGGED_IN,
+  FILTER, RECAPTURE_TARGETS, RECAPTURE_MODE, LOG_LEVEL, LOG_CATEGORIES, LOG_FILE,
+} = OPTIONS;
+const isEmsPageUrl = url => matchesEmsPageUrl(url, EMS_URL);
 
 // Network monitoring & diagnostics
-const ENABLE_NETWORK_MONITOR = !process.argv.includes('--no-net-monitor');
-const ENABLE_SELF_DIAGNOSE = process.argv.includes('--self-diagnose');
 const DIAGNOSE_INTERVAL = 5000; // ms
 const NETWORK_LOG_MAX = 500; // max network entries to keep in memory
 
@@ -58,242 +40,23 @@ const BUILDINGS = [
   { menuMatch: '6号', building: '6号' },
 ];
 
-// ===== Mode selection =====
-const USE_CDP = process.argv.includes('--edge');
-const USE_AUTO_LAUNCH = process.argv.includes('--auto-launch');
-const DRY_RUN = process.argv.includes('--dry');
-const APPEND = process.argv.includes('--append');
-const CHECK_LOGIN = !process.argv.includes('--skip-login-check');
-const FAIL_IF_NOT_LOGGED_IN = process.argv.includes('--fail-if-not-logged-in');
-const BUILDING_FILTER = process.argv.find(a => a.startsWith('--bldg='));
-const FILTER = BUILDING_FILTER ? BUILDING_FILTER.split('=')[1].split(',').map(s => s.trim()).filter(Boolean) : null;
-const RECAPTURE_ARG = process.argv.find(a => a.startsWith('--recapture='));
-// Format: --recapture=3号:1087:144,6号:194:158
-let RECAPTURE_TARGETS = [];
-if (RECAPTURE_ARG) {
-  const val = RECAPTURE_ARG.split('=')[1];
-  RECAPTURE_TARGETS = val.split(',').map(s => {
-    const [b, x, y] = s.split(':');
-    return { building: b, x: parseInt(x), y: parseInt(y) };
-  });
-}
-const RECAPTURE_MODE = RECAPTURE_TARGETS.length > 0;
-
 // Logger configuration
-const LOG_LEVEL_ARG = process.argv.find(a => a.startsWith('--log-level='));
-if (LOG_LEVEL_ARG) setLevel(LOG_LEVEL_ARG.split('=')[1]);
-const LOG_CAT_ARG = process.argv.find(a => a.startsWith('--log-category='));
-if (LOG_CAT_ARG) setCategories(LOG_CAT_ARG.split('=')[1]);
-const LOG_FILE = process.argv.includes('--log-file');
+if (LOG_LEVEL) setLevel(LOG_LEVEL);
+if (LOG_CATEGORIES) setCategories(LOG_CATEGORIES);
 if (LOG_FILE) enableFileLog(OUT_DIR);
 
-// Output: append mode appends each building run to existing file
-let outputInitialized = false;
-function loadExisting() {
-  try { return JSON.parse(fs.readFileSync(OUT_FILE, 'utf-8')); }
-  catch { return { buildings: [] }; }
-}
-function saveOutput(buildingResult) {
-  // Non-append runs start a fresh JSON on first save, then accumulate buildings
-  // captured during this process. Append runs keep old, not-yet-recaptured data.
-  const existing = (APPEND || outputInitialized) ? loadExisting() : { buildings: [] };
-  outputInitialized = true;
-  if (!existing.buildings) existing.buildings = [];
-  // Remove previous data for this building if exists
-  existing.buildings = existing.buildings.filter(b => b.building !== buildingResult.building);
-  // Insert in sorted order (1号→6号)
-  existing.buildings.push(buildingResult);
-  const order = ['1号', '2号', '3号', '4号', '5号', '6号'];
-  existing.buildings.sort((a, b) => order.indexOf(a.building) - order.indexOf(b.building));
-  existing.completedAt = new Date().toISOString();
-  fs.mkdirSync(OUT_DIR, { recursive: true });
-  fs.writeFileSync(OUT_FILE, JSON.stringify(existing, null, 2), 'utf-8');
-}
+// Output: append mode keeps not-yet-recaptured buildings; writes are atomic.
+const outputStore = createEnumerationOutputStore({ outputFile: OUT_FILE, append: APPEND });
+const saveOutput = buildingResult => outputStore.saveBuilding(buildingResult);
 
 // ===== Helpers =====
 function pause(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-// ===== Enhanced Quality Assessment =====
-function assessDataQuality(cards) {
-  const n = cards.length;
-  if (n === 0) return { isGood: false, score: 0, details: 'no cards' };
-
-  const activeCards = cards.filter(c => c.comm === '开机' || c.comm === '关机');
-  const activeN = activeCards.length;
-  const switchRate = activeN > 0 ? activeCards.filter(c => c.switch === 'ON' || c.switch === 'OFF').length / activeN : 1;
-  const tempRate = activeN > 0 ? activeCards.filter(c => {
-    const indoor = parseFloat(c.indoor);
-    const setTemp = parseFloat(c.setTemp);
-    return Number.isFinite(indoor) && indoor > 0 && indoor <= 60 &&
-      Number.isFinite(setTemp) && setTemp >= 5 && setTemp <= 40;
-  }).length / activeN : 1;
-  const commRate = cards.filter(c => c.comm).length / n;
-  const modeRate = activeN > 0 ? activeCards.filter(c => c.mode !== '-' && c.fan !== '-' && c.fan !== '0').length / activeN : 1;
-  const allOffline = cards.every(c => c.comm === '离线');
-  const commComplete = cards.every(c => c.comm === '开机' || c.comm === '关机' || c.comm === '离线');
-  
-  const qualityScore = (switchRate * 0.4 + tempRate * 0.3 + commRate * 0.2 + modeRate * 0.1);
-  
-  return {
-    isGood: (allOffline || commComplete) && qualityScore >= 0.7,
-    score: qualityScore,
-    details: `score=${qualityScore.toFixed(2)} active=${activeN}/${n} switch=${switchRate.toFixed(2)} temp=${tempRate.toFixed(2)} comm=${commRate.toFixed(2)} mode=${modeRate.toFixed(2)}${allOffline ? ' allOffline' : ''}`
-  };
-}
-
-function buildPartialSignature(cards = []) {
-  return cards.map(c => [
-    c.name || '',
-    c.switch || '',
-    c.indoor || '',
-    c.setTemp || '',
-    c.mode || '',
-    c.fan || '',
-    c.indicator || '',
-    c.comm || '',
-  ].join('|')).join('||');
-}
-
-function isOfflineTemplateStable(cards, qc, prev = {}, elapsedMs = 0) {
-  if (!cards || cards.length < 2 || !qc || !qc.uniformTemplate || !qc.allOffline) {
-    return { accept: false, signature: '', rounds: 0 };
-  }
-  const signature = buildPartialSignature(cards);
-  const rounds = signature && signature === prev.signature ? (prev.rounds || 0) + 1 : 1;
-  const accept = rounds >= 3 && elapsedMs >= 600;
-  return { accept, signature, rounds };
-}
-
-function persistentDeviceAnomalyState(cards, meta, prev = {}) {
-  const classification = classifyPersistentDeviceAnomalyPage(cards, meta);
-  const rounds = classification.signature && classification.signature === prev.signature
-    ? (prev.rounds || 0) + 1
-    : (classification.eligible ? 1 : 0);
-  return {
-    ...classification,
-    accept: classification.eligible && rounds >= 3,
-    rounds,
-  };
-}
-
-function isAcceptableCapture(data, qc = null, quality = null) {
-  const cards = data && Array.isArray(data.cards) ? data.cards : [];
-  const currentQc = qc || checkCardQuality(cards, data || {});
-  const currentQuality = quality || assessDataQuality(cards);
-  return currentQc.ok && currentQuality.isGood;
-}
-
-async function qualityCheckWithProgressiveRetry(page, extractCards, description, maxAttempts = 5) {
-  const RETRY_DELAYS = [200, 500, 1000, 2000, 5000];
-  let prevOfflineTemplate = { signature: '', rounds: 0 };
-  let prevDeviceAnomaly = { signature: '', rounds: 0 };
-  const startTime = Date.now();
-  
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const data = await extractCards();
-    const qc = checkCardQuality(data.cards, data);
-    const quality = assessDataQuality(data.cards);
-    const offlineTemplate = isOfflineTemplateStable(data.cards, qc, prevOfflineTemplate, Date.now() - startTime);
-    prevOfflineTemplate = { signature: offlineTemplate.signature, rounds: offlineTemplate.rounds };
-    const deviceAnomaly = persistentDeviceAnomalyState(data.cards, data, prevDeviceAnomaly);
-    prevDeviceAnomaly = { signature: deviceAnomaly.signature, rounds: deviceAnomaly.rounds };
-    
-    if (isAcceptableCapture(data, qc, quality)) {
-      loggerLog(LEVELS.DEBUG, 'QUALITY', `${description} OK on attempt ${attempt + 1}: ${qc.details}`);
-      data.qualityReason = 'quality_pass';
-      return { data, qc, reason: 'quality_pass', attempt: attempt + 1 };
-    }
-
-    if (offlineTemplate.accept) {
-      loggerLog(LEVELS.WARN, 'QUALITY', `${description} offline template stable after attempt ${attempt + 1}: ${qc.details}`);
-      data.qualityReason = 'offline_template_stable';
-      return { data, qc: { ...qc, ok: true, offlineTemplateStable: true }, reason: 'offline_template_stable', attempt: attempt + 1 };
-    }
-
-    if (deviceAnomaly.accept) {
-      loggerLog(LEVELS.WARN, 'QUALITY', `${description} preserving stable device anomalies after attempt ${attempt + 1}: ${deviceAnomaly.details}`);
-      data.qualityReason = 'device_anomalies_preserved';
-      return { data, qc: { ...qc, ok: true, deviceAnomaliesPreserved: true }, reason: 'device_anomalies_preserved', attempt: attempt + 1 };
-    }
-    
-    loggerLog(LEVELS.DEBUG, 'QUALITY', `${description} attempt ${attempt + 1} failed: ${qc.details}`, { n: data.cards.length });
-    
-    if (attempt < maxAttempts - 1) {
-      await pause(RETRY_DELAYS[attempt] || 1000);
-    }
-  }
-  
-  loggerLog(LEVELS.WARN, 'QUALITY', `${description} max attempts reached, using best available data`);
-  return { data: null, qc: null, attempt: maxAttempts };
-}
-
-async function adaptivePolling(page, extractCards, deadline, description) {
-  const startTime = Date.now();
-  const MIN_POLL_INTERVAL = 200;
-  const MAX_POLL_INTERVAL = 3000;
-  const QUALITY_IMPROVEMENT_THRESHOLD = 0.1;
-  
-  let lastQualityScore = 0;
-  let pollInterval = MIN_POLL_INTERVAL;
-  let prevOfflineTemplate = { signature: '', rounds: 0 };
-  let prevDeviceAnomaly = { signature: '', rounds: 0 };
-  
-  while (Date.now() - startTime < deadline) {
-    const data = await extractCards();
-    const qc = checkCardQuality(data.cards, data);
-    const quality = assessDataQuality(data.cards);
-    const offlineTemplate = isOfflineTemplateStable(data.cards, qc, prevOfflineTemplate, Date.now() - startTime);
-    prevOfflineTemplate = { signature: offlineTemplate.signature, rounds: offlineTemplate.rounds };
-    const deviceAnomaly = persistentDeviceAnomalyState(data.cards, data, prevDeviceAnomaly);
-    prevDeviceAnomaly = { signature: deviceAnomaly.signature, rounds: deviceAnomaly.rounds };
-    
-    if (isAcceptableCapture(data, qc, quality)) {
-      loggerLog(LEVELS.DEBUG, 'QUALITY', `${description} OK after ${Date.now()-startTime}ms: ${qc.details}`);
-      data.qualityReason = 'quality_pass';
-      return { data, qc, quality, reason: 'quality_pass' };
-    }
-
-    if (offlineTemplate.accept) {
-      loggerLog(LEVELS.WARN, 'QUALITY', `${description} offline template stable after ${Date.now()-startTime}ms: ${qc.details}`);
-      data.qualityReason = 'offline_template_stable';
-      return { data, qc: { ...qc, ok: true, offlineTemplateStable: true }, quality, reason: 'offline_template_stable' };
-    }
-
-    if (deviceAnomaly.accept) {
-      loggerLog(LEVELS.WARN, 'QUALITY', `${description} preserving stable device anomalies after ${Date.now()-startTime}ms: ${deviceAnomaly.details}`);
-      data.qualityReason = 'device_anomalies_preserved';
-      return { data, qc: { ...qc, ok: true, deviceAnomaliesPreserved: true }, quality, reason: 'device_anomalies_preserved' };
-    }
-    
-    // Accept only when communication state is complete; real temperature alone
-    // is not enough because indicator images can lag behind SVG text.
-    if (data && data.cards && data.cards.length > 0) {
-      const phCount = data.cards.filter(c => !c.name || c.name === '0-0001-KT').length;
-      // Non-template all-offline pages are a genuine comm state. Template-looking
-      // offline pages require the stability window above before acceptance.
-      if (phCount === 0 && data.cards.every(c => c.comm === '离线') && !qc.uniformTemplate) {
-        loggerLog(LEVELS.DEBUG, 'QUALITY', `${description} all offline after ${Date.now()-startTime}ms: ${qc.details}`);
-        data.qualityReason = 'all_offline';
-        return { data, qc, quality, reason: 'all_offline' };
-      }
-    }
-    
-    if (quality.score > lastQualityScore + QUALITY_IMPROVEMENT_THRESHOLD) {
-      lastQualityScore = quality.score;
-      pollInterval = Math.max(MIN_POLL_INTERVAL, pollInterval * 0.8);
-      loggerLog(LEVELS.DEBUG, 'QUALITY', `${description} quality improving, reducing poll interval to ${pollInterval}ms`, { score: quality.score });
-    } else if (quality.score < lastQualityScore - QUALITY_IMPROVEMENT_THRESHOLD) {
-      pollInterval = Math.min(MAX_POLL_INTERVAL, pollInterval * 1.2);
-      loggerLog(LEVELS.DEBUG, 'QUALITY', `${description} quality not improving, increasing poll interval to ${pollInterval}ms`, { score: quality.score });
-    }
-    
-    lastQualityScore = quality.score;
-    await pause(pollInterval);
-  }
-  
-  log(`      ${description} timeout after ${Date.now()-startTime}ms`);
-  return { data: null, qc: null, quality: null, reason: 'timeout' };
-}
+const { adaptivePolling, qualityCheckWithProgressiveRetry } = createCapturePolling({
+  logger: loggerLog,
+  levels: LEVELS,
+  log,
+  sleep: pause,
+});
 
 // ===== Inject DOM helpers into page context =====
 async function injectHelpers(page) {
@@ -910,59 +673,6 @@ async function waitForLoadedCards(page, opts = {}) {
     return true;
   }
   return false;
-}
-
-function pageFromData(pageName, data, extra = {}) {
-  const normalizedCards = normalizeKnownSourceDefects(data.cards || []);
-  const normalizedData = { ...data, cards: normalizedCards };
-  const duplicateNames = Array.isArray(data.duplicateNames) ? data.duplicateNames : [];
-  const qc = checkCardQuality(normalizedCards, normalizedData);
-  const knownMissingIndicator = classifyKnownMissingIndicatorPage(normalizedCards, normalizedData);
-  const qualityReason = knownMissingIndicator.eligible
-    ? 'known_source_indicator_missing'
-    : (extra.qualityReason || data.qualityReason || (qc.ok ? 'quality_pass' : ''));
-  return {
-    page: pageName,
-    count: data.count,
-    rawCount: data.rawCount ?? data.count,
-    uniqueCount: data.uniqueCount ?? data.count,
-    duplicateNames,
-    onHref: data.onHref,
-    offHref: data.offHref,
-    layout: data.layout,
-    qualityReason,
-    cards: normalizedCards,
-    ...extra,
-  };
-}
-
-function auditCollectedOutput(output) {
-  const issues = [];
-  for (const bldg of output.buildings || []) {
-    for (const sa of bldg.subAreas || []) {
-      for (const pageRow of sa.pages || []) {
-        const cards = Array.isArray(pageRow.cards) ? pageRow.cards : [];
-        const qc = checkCardQuality(cards, pageRow);
-        const reason = pageRow.qualityReason || pageRow.quality_reason || '';
-        const allowedNonPass = reason === 'device_anomalies_preserved'
-          ? classifyPersistentDeviceAnomalyPage(cards, pageRow).eligible
-          : reason === 'known_source_indicator_missing'
-            ? classifyKnownMissingIndicatorPage(cards, pageRow).eligible
-            : isAcceptedCaptureQualityReason(reason);
-        if (!qc.ok && !allowedNonPass) {
-          issues.push({
-            building: bldg.building,
-            floor: sa.floor,
-            subArea: sa.text,
-            page: pageRow.page,
-            reason: reason || 'missing_quality_reason',
-            details: qc.details,
-          });
-        }
-      }
-    }
-  }
-  return issues;
 }
 
 // Wait until WebSocket data is sufficiently loaded (>85% of points received)

@@ -1,0 +1,42 @@
+{
+  "buildings": [
+    {
+      "building": "1号",
+      "menuClicked": "1号楼",
+      "subAreaCount": 1,
+      "subAreas": [
+        {
+          "idx": 0,
+          "floor": 1,
+          "text": "1F",
+          "x": 10,
+          "y": 20,
+          "pages": [
+            {
+              "page": "default",
+              "rawCount": 1,
+              "uniqueCount": 1,
+              "duplicateNames": [],
+              "layout": "grid",
+              "qualityReason": "quality_pass",
+              "cards": [
+                {
+                  "name": "1-0101-KT",
+                  "switch": "-",
+                  "mode": "",
+                  "indoor": "0",
+                  "setTemp": 0,
+                  "fan": "自动",
+                  "indicator": "indicator.png",
+                  "comm": "离线",
+                  "_nameFloor": 1
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "completedAt": "2026-07-11T00:00:00.000Z"
+}

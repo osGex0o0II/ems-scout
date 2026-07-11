@@ -1,0 +1,112 @@
+{
+  "contractVersion": "ems.collection-snapshot/v1",
+  "workflowId": "fixture-run-1",
+  "completedAt": "2026-07-11T00:00:00.000Z",
+  "scope": {
+    "mode": "building",
+    "buildings": [
+      "1号"
+    ],
+    "targets": []
+  },
+  "lineage": {
+    "baseArtifactSha256": null,
+    "parentWorkflowId": null
+  },
+  "versions": {
+    "collector": "1.0.0",
+    "playwright": "1.60.0",
+    "rules": "2026-07-11",
+    "databaseSchema": "v1-baseline",
+    "sourceRevision": "fixture"
+  },
+  "counts": {
+    "buildingCount": 1,
+    "subAreaCount": 1,
+    "pageCount": 1,
+    "rawCardCount": 1,
+    "uniqueCardCount": 1
+  },
+  "quality": {
+    "decision": "accepted",
+    "findings": [],
+    "retries": []
+  },
+  "artifact": {
+    "hashScope": "canonical-buildings-payload",
+    "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "bytes": 512
+  },
+  "buildings": [
+    {
+      "sourceKey": "building:1号",
+      "building": "1号",
+      "menuClicked": "1号楼",
+      "subAreaCount": 1,
+      "subAreas": [
+        {
+          "sourceKey": "building:1号/sub-area:0",
+          "idx": 0,
+          "floor": 1,
+          "floorLabel": "1F",
+          "text": "1F",
+          "x": 10,
+          "y": 20,
+          "sourceEvidence": {
+            "err": null
+          },
+          "pages": [
+            {
+              "sourceKey": "building:1号/sub-area:0/page:default",
+              "page": "default",
+              "rawCount": 1,
+              "uniqueCount": 1,
+              "duplicates": [],
+              "layout": "grid",
+              "quality": {
+                "decision": "accepted",
+                "reason": "quality_pass",
+                "attempts": 1
+              },
+              "sourceEvidence": {
+                "count": 1,
+                "onHref": null,
+                "offHref": null,
+                "qualityReason": "quality_pass",
+                "duplicateNames": [],
+                "err": null
+              },
+              "cards": [
+                {
+                  "sourceKey": "sk1_814cbcf0176804c0ef982fd67586e8de27cce8798f705eafbb33c13780fc8111",
+                  "deviceUid": "duid1_36832c6a1a48e8df8e501869a12066216a8fb4f428e0e135b1818613bfb51535",
+                  "name": "1-0101-KT",
+                  "switch": "OFF",
+                  "mode": "制冷",
+                  "indoor": 26.5,
+                  "setTemp": 26,
+                  "fan": "自动",
+                  "indicator": "indicator.png",
+                  "comm": "关机",
+                  "sourceEvidence": {
+                    "raw": {
+                      "name": "1-0101-KT",
+                      "switch": "OFF",
+                      "mode": "制冷",
+                      "indoor": "26.5",
+                      "setTemp": "26",
+                      "fan": "自动",
+                      "indicator": "indicator.png",
+                      "comm": "关机"
+                    },
+                    "nameFloor": 1
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
