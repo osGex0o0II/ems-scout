@@ -3,6 +3,7 @@ using EmsScout.Infrastructure.Sqlite;
 
 namespace EmsScout.Tests;
 
+[Trait("Fixture", "ProductionEvidence")]
 public sealed class SqliteDeviceReadRepositoryTests
 {
     [Fact]

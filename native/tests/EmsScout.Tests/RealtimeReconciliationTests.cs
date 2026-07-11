@@ -5,6 +5,7 @@ using System.IO.Compression;
 
 namespace EmsScout.Tests;
 
+[Trait("Fixture", "ProductionEvidence")]
 public sealed class RealtimeReconciliationTests
 {
     [Fact]

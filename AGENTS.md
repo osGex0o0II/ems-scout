@@ -1,4 +1,4 @@
-# AGENTS.md — EMS 空调枚举项目上下文
+# AGENTS.md — EMS Scout 项目上下文
 
 ## 项目目标
 遍历 6 栋楼全部空调卡片 → SQLite → 数据管理筛选 Excel 导出，区分 开机/关机/离线
@@ -23,6 +23,8 @@
 | `data/2号楼/` | 2号楼当前数据归档 |
 | `CHANGELOG.md` | 修改记录 |
 | `.context-summary.md` | 上下文快照（每次会话更新） |
+| `docs/项目规范.md` | 命名、架构、数据安全、代码、测试和 Git 规范 |
+| `docs/Windows验证清单.md` | 新 Windows 设备的拉取、构建、打包和现场验收顺序 |
 
 ## 运行命令
 

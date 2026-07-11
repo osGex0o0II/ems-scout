@@ -1,7 +1,7 @@
 {
-  "name": "ems-tool",
+  "name": "emsscout",
   "version": "1.0.0",
-  "description": "Playwright + Edge CDP → SmartPiEMS 空调采集与数据管理",
+  "description": "EMS Scout 空调采集、审计与数据管理",
   "main": "electron/main.js",
   "scripts": {
     "enum": "node src/enumerate.js",
@@ -15,7 +15,8 @@
     "legacy:desktop": "node scripts/legacy-gate.js EMS_ENABLE_LEGACY_PANEL legacy-electron-desktop && electron .",
     "native:run": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-native.ps1",
     "native:build": "dotnet build native/EmsScout.Native.slnx -c Debug --no-restore /p:UseSharedCompilation=false",
-    "native:test": "dotnet test native/tests/EmsScout.Tests/EmsScout.Tests.csproj -c Debug --no-restore /p:UseSharedCompilation=false",
+    "native:test": "dotnet test native/tests/EmsScout.Tests/EmsScout.Tests.csproj -c Debug --no-restore /p:UseSharedCompilation=false --filter Fixture!=ProductionEvidence",
+    "native:test:evidence": "dotnet test native/tests/EmsScout.Tests/EmsScout.Tests.csproj -c Debug --no-restore /p:UseSharedCompilation=false --filter Fixture=ProductionEvidence",
     "legacy:restore-node-native": "node scripts/restore-node-native.js",
     "legacy:pack:win": "node scripts/legacy-gate.js EMS_ENABLE_LEGACY_PANEL legacy-electron-pack && electron-builder --win --dir && npm run legacy:restore-node-native",
     "legacy:dist:win": "node scripts/legacy-gate.js EMS_ENABLE_LEGACY_PANEL legacy-electron-dist && electron-builder --win nsis && npm run legacy:restore-node-native",
@@ -37,7 +38,7 @@
   },
   "build": {
     "appId": "com.ems.data.desktop",
-    "productName": "EMS Legacy Web Panel",
+    "productName": "EMS Scout Legacy",
     "asar": false,
     "directories": {
       "output": "dist"
@@ -75,7 +76,7 @@
       "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "EMS Legacy Web Panel"
+      "shortcutName": "EMS Scout Legacy"
     },
     "npmRebuild": true,
     "afterPack": "scripts/electron-after-pack.js"

@@ -3,6 +3,7 @@ using EmsScout.Infrastructure.Realtime;
 
 namespace EmsScout.Tests;
 
+[Trait("Fixture", "ProductionEvidence")]
 public sealed class RealtimeLatestJsonSourceTests
 {
     private static readonly string[] Buildings = ["1号", "2号", "3号", "4号", "5号", "6号"];

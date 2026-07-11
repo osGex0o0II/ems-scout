@@ -41,6 +41,10 @@ dotnet build native\tools\EmsScout.SchemaTool\EmsScout.SchemaTool.csproj -c Rele
 dotnet build native\tools\EmsScout.ExportSmoke\EmsScout.ExportSmoke.csproj -c Release --no-restore
 ```
 
+`native:test` is the clean-clone gate and excludes `Fixture=ProductionEvidence` because
+`out/` is intentionally not committed. After trusted run17 evidence is placed locally,
+run `npm run native:test:evidence` to execute only the production-evidence parity tests.
+
 Windows x64 package preparation and field validation are separate gates:
 
 ```powershell

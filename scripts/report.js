@@ -772,7 +772,7 @@ function genAllMD(data, ts) {
   }
 
   lines.push('---');
-  lines.push(`_共 ${data.length} 台设备，由 ems-tool 自动生成于 ${ts}_`);
+  lines.push(`_共 ${data.length} 台设备，由 EMS Scout 自动生成于 ${ts}_`);
   return lines.join('\n');
 }
 

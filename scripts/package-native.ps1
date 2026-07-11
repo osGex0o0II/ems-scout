@@ -24,7 +24,9 @@ else {
 }
 
 if (-not $SkipTests) {
-  & dotnet test $TestsProject -c $Configuration /p:UseSharedCompilation=false --logger "trx;LogFileName=native-$Configuration.trx"
+  & dotnet test $TestsProject -c $Configuration /p:UseSharedCompilation=false `
+    --filter 'Fixture!=ProductionEvidence' `
+    --logger "trx;LogFileName=native-$Configuration.trx"
   if ($LASTEXITCODE -ne 0) {
     throw "Native tests failed with exit code $LASTEXITCODE."
   }

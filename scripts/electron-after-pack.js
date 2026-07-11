@@ -21,7 +21,7 @@ module.exports = async function afterPack(context) {
   const electronPkg = require(path.join(ROOT, 'node_modules', 'electron', 'package.json'));
   const productFilename = context.packager && context.packager.appInfo && context.packager.appInfo.productFilename
     ? context.packager.appInfo.productFilename
-    : 'EMS Legacy Web Panel';
+    : 'EMS Scout Legacy';
   const appDir = path.join(context.appOutDir, 'resources', 'app');
   const nativeFile = path.join(appDir, 'node_modules', 'better-sqlite3', 'build', 'Release', 'better_sqlite3.node');
   if (!fs.existsSync(nativeFile)) {

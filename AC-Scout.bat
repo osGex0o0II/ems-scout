@@ -7,6 +7,12 @@ if exist "%SCRIPT_DIR%src\collect.js" set "PROJECT_DIR=%SCRIPT_DIR%"
 
 if not defined PROJECT_DIR (
   for %%p in (
+    "%SCRIPT_DIR%EmsScout"
+    "%SCRIPT_DIR%..\EmsScout"
+    "%SCRIPT_DIR%..\..\EmsScout"
+    "D:\Code\EmsScout"
+    "%USERPROFILE%\EmsScout"
+    "%USERPROFILE%\Desktop\EmsScout"
     "%SCRIPT_DIR%ems-tool"
     "%SCRIPT_DIR%..\ems-tool"
     "%SCRIPT_DIR%..\..\ems-tool"
@@ -34,13 +40,13 @@ if defined PROJECT_DIR (
   goto run
 )
 
-echo [ERROR] AC-Scout: Cannot find src/collect.js
-echo         Put this batch file in the ems-tool folder, or keep ems-tool at:
-echo         D:\Code\ems-tool
+echo [ERROR] EMS Scout: Cannot find src/collect.js
+echo         Put this compatibility launcher in the EmsScout folder.
+echo         Legacy ems-tool folder names are also supported.
 pause
 exit /b 1
 :run
-echo AC-Scout v1.0 - EMS collection TUI
+echo EMS Scout v1.0 - EMS collection TUI
 echo [INFO] This entry only starts collection/import/audit flows.
 echo [INFO] Current export path: native app Data Management - Export current filtered Excel.
 node src/collect.js

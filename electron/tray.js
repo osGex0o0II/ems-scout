@@ -25,7 +25,7 @@ async function runAction(label, logger, action) {
     return result;
   } catch (err) {
     logger.error(`tray action failed: ${label}`, err);
-    dialog.showErrorBox('EMS Legacy Web Panel', `${label}失败：${err.message || err}`);
+    dialog.showErrorBox('EMS Scout Legacy', `${label}失败：${err.message || err}`);
     return null;
   }
 }
@@ -51,20 +51,20 @@ function createAppTray(options) {
       logFile: true,
       label: '桌面一键采集',
     }, { port });
-    notify('EMS Legacy Web Panel', '采集任务已启动');
+    notify('EMS Scout Legacy', '采集任务已启动');
     openPanel();
     return task;
   });
   const stopCollect = () => runAction('停止采集', logger, async () => {
     const task = await requestJson('POST', '/api/tasks/stop', {}, { port });
-    notify('EMS Legacy Web Panel', '已发送停止采集命令');
+    notify('EMS Scout Legacy', '已发送停止采集命令');
     return task;
   });
   const runReconcile = () => runAction('运行对账', logger, async () => {
     const diff = await requestJson('GET', '/api/reconcile/diff', undefined, { port });
     const summary = diff && diff.summary || {};
     const total = Number(summary.total_diff || summary.diff_count || summary.total || 0);
-    notify('EMS Legacy Web Panel', `对账完成，差异 ${total} 项`);
+    notify('EMS Scout Legacy', `对账完成，差异 ${total} 项`);
     openPanel();
     return diff;
   });
