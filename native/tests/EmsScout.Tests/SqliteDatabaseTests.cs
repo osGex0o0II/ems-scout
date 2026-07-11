@@ -51,7 +51,10 @@ public sealed class SqliteDatabaseTests
 
         try
         {
-            using var connection = SqliteDatabase.OpenExisting(() => databasePath, SqliteOpenMode.ReadOnly);
+            using var connection = SqliteDatabase.OpenExisting(
+                () => databasePath,
+                SqliteOpenMode.ReadOnly,
+                pooling: false);
             using var command = connection.CreateCommand();
             command.CommandText = "INSERT INTO probe (value) VALUES ('write')";
 

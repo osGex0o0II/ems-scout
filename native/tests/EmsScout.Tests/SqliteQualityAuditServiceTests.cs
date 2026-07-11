@@ -331,7 +331,12 @@ public sealed class SqliteQualityAuditServiceTests
 
         public async Task ExecuteAsync(string sql)
         {
-            await using var connection = new SqliteConnection($"Data Source={DatabasePath}");
+            var connectionString = new SqliteConnectionStringBuilder
+            {
+                DataSource = DatabasePath,
+                Pooling = false,
+            }.ToString();
+            await using var connection = new SqliteConnection(connectionString);
             await connection.OpenAsync();
             await using var command = connection.CreateCommand();
             command.CommandText = sql;
