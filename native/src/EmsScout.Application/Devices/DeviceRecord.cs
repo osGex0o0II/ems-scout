@@ -66,6 +66,10 @@ public sealed record DeviceRecord(
         ? "未知"
         : CommunicationText;
 
+    public string OperatingStatusText => DeviceOperatingStatusResolver.ResolveText(CommunicationText, SwitchState);
+
+    public DeviceCommunicationState EffectiveCommunicationState => DeviceOperatingStatusResolver.ResolveState(CommunicationText, SwitchState);
+
     public string RealtimeLockText => Realtime is null
         ? "无实时数据"
         : string.IsNullOrWhiteSpace(Realtime.LockState) ? "未知" : Realtime.LockState;

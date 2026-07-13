@@ -1,4 +1,4 @@
-param(
+﻿param(
   [ValidateSet('Debug', 'Release')]
   [string]$Configuration = 'Release',
   [switch]$SkipTests,
@@ -7,7 +7,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'windows-sdk-environment.ps1')
+Initialize-WindowsSdkEnvironment
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$Solution = Join-Path $Root 'native\EmsScout.Native.slnx'
 $SidecarOutput = Join-Path $Root 'artifacts\sidecar\win-x64'
 $DesktopProject = Join-Path $Root 'native\src\EmsScout.Desktop\EmsScout.Desktop.csproj'
 $TestsProject = Join-Path $Root 'native\tests\EmsScout.Tests\EmsScout.Tests.csproj'
@@ -30,6 +33,16 @@ if (-not $SkipTests) {
   if ($LASTEXITCODE -ne 0) {
     throw "Native tests failed with exit code $LASTEXITCODE."
   }
+}
+
+& dotnet clean $Solution -c $Configuration -p:UseSharedCompilation=false
+if ($LASTEXITCODE -ne 0) {
+  throw "Native solution clean failed with exit code $LASTEXITCODE."
+}
+
+& dotnet clean $DesktopProject -c $Configuration -p:Platform=x64 -p:UseSharedCompilation=false
+if ($LASTEXITCODE -ne 0) {
+  throw "Native x64 desktop clean failed with exit code $LASTEXITCODE."
 }
 
 New-Item -ItemType Directory -Force -Path $PackageOutput | Out-Null

@@ -28,6 +28,14 @@ const { createMonitorRoutes } = require('./routes/monitor-routes');
 const { createDeviceRoutes } = require('./routes/device-routes');
 const { createRealtimeMatchRoutes } = require('./routes/realtime-match-routes');
 const { createReconcileRoutes } = require('./routes/reconcile-routes');
+const {
+  HttpRequestError,
+  authorizeApiRequest,
+  createSessionToken,
+  isLoopbackHost,
+  readJsonBody,
+  resolveStaticPath,
+} = require('./http-security');
 const realtimeBrowser = require('../../scripts/realtime-browser');
 const {
   REALTIME_NORMAL_VALUES,
@@ -316,6 +324,9 @@ function json(res, status, body) {
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
+    'content-security-policy': "default-src 'none'; frame-ancestors 'none'; base-uri 'none'",
+    'x-content-type-options': 'nosniff',
+    'x-frame-options': 'DENY',
   });
   res.end(JSON.stringify(body));
 }
@@ -341,19 +352,7 @@ function fail(res, status, error) {
 }
 
 function readBody(req) {
-  return new Promise((resolve, reject) => {
-    let body = '';
-    req.on('data', chunk => {
-      body += chunk.toString('utf8');
-      if (body.length > 1024 * 1024) reject(new Error('Request body too large'));
-    });
-    req.on('end', () => {
-      if (!body) return resolve({});
-      try { resolve(JSON.parse(body)); }
-      catch (e) { reject(e); }
-    });
-    req.on('error', reject);
-  });
+  return readJsonBody(req);
 }
 
 function clamp(n, min, max) {
@@ -1944,34 +1943,56 @@ async function handleApi(req, res, url) {
 }
 
 function serveStatic(req, res, url) {
-  let pathname = decodeURIComponent(url.pathname);
-  if (pathname === '/' || pathname === '/panel') pathname = '/index.html';
-  if (pathname.startsWith('/panel/')) pathname = pathname.slice('/panel'.length);
-  const full = path.resolve(path.join(WEB_ROOT, pathname));
-  if (!full.startsWith(path.resolve(WEB_ROOT))) {
-    res.writeHead(403);
-    res.end('Forbidden');
+  if (!['GET', 'HEAD'].includes(req.method || 'GET')) {
+    res.writeHead(405, { allow: 'GET, HEAD' });
+    res.end('Method Not Allowed');
     return;
   }
+  let pathname = url.pathname;
+  if (pathname === '/' || pathname === '/panel') pathname = '/index.html';
+  if (pathname.startsWith('/panel/')) pathname = pathname.slice('/panel'.length);
+  const full = resolveStaticPath(WEB_ROOT, pathname);
   const file = fs.existsSync(full) && fs.statSync(full).isFile() ? full : path.join(WEB_ROOT, 'index.html');
   const ext = path.extname(file).toLowerCase();
-  res.writeHead(200, { 'content-type': MIME[ext] || 'application/octet-stream' });
+  res.writeHead(200, {
+    'content-type': MIME[ext] || 'application/octet-stream',
+    'content-security-policy': "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+    'x-content-type-options': 'nosniff',
+    'x-frame-options': 'DENY',
+  });
+  if (req.method === 'HEAD') return res.end();
   fs.createReadStream(file).pipe(res);
 }
 
 function createServer() {
+  const sessionToken = createSessionToken();
   return http.createServer(async (req, res) => {
-    const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     try {
-      if (url.pathname.startsWith('/api/')) await handleApi(req, res, url);
+      if (!isLoopbackHost(req.headers.host)) throw new HttpRequestError(403, 'Loopback Host required');
+      const url = new URL(req.url || '/', 'http://127.0.0.1');
+      if (url.pathname === '/api/session' && (req.method || 'GET') === 'GET') {
+        json(res, 200, { ok: true, data: { token: sessionToken } });
+      } else if (url.pathname.startsWith('/api/')) {
+        authorizeApiRequest(req, sessionToken);
+        await handleApi(req, res, url);
+      }
       else serveStatic(req, res, url);
     } catch (e) {
-      fail(res, 500, e);
+      if (e instanceof HttpRequestError) fail(res, e.statusCode, e);
+      else {
+        console.error('Panel request failed:', e);
+        fail(res, 500, 'Internal server error');
+      }
     }
   });
 }
 
 function main() {
+  if (process.env.EMS_ENABLE_LEGACY_PANEL !== '1') {
+    console.error('legacy-web-panel is disabled by default. Set EMS_ENABLE_LEGACY_PANEL=1 to run intentionally.');
+    process.exitCode = 2;
+    return;
+  }
   ensurePanelSchemaIfPossible();
   if (process.argv.includes('--check')) {
     console.log(JSON.stringify({ ok: true, root: ROOT, db_path: DB_PATH, web_root: WEB_ROOT }, null, 2));

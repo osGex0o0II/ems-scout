@@ -31,6 +31,12 @@ public sealed class StartupDatabaseInitializer(
                     .MigrateAsync(paths.DatabasePath, cancellationToken: cancellationToken)
                     .ConfigureAwait(true);
             }
+            else
+            {
+                await schemaMigrator
+                    .CreateNewAsync(paths.DatabasePath, cancellationToken)
+                    .ConfigureAwait(true);
+            }
         }
         catch (Exception ex)
         {

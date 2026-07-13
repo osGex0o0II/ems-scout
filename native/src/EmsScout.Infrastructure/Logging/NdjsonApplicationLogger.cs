@@ -105,6 +105,7 @@ public sealed partial class NdjsonApplicationLogger : IApplicationLogger
         }
 
         output = BearerTokenRegex().Replace(output, "$1<redacted>");
+        output = UrlQueryOrFragmentRegex().Replace(output, "$1");
         output = SecretQueryRegex().Replace(output, "$1<redacted>");
         return output.Length <= limit ? output : output[..limit] + "...[truncated]";
     }
@@ -146,4 +147,7 @@ public sealed partial class NdjsonApplicationLogger : IApplicationLogger
 
     [GeneratedRegex(@"(?i)([?&](?:token|access_token|password|session|secret)=)[^&#\s]+")]
     private static partial Regex SecretQueryRegex();
+
+    [GeneratedRegex("""(?i)(https?://[^\s?#"']+)[?#][^\s"'<>]*""")]
+    private static partial Regex UrlQueryOrFragmentRegex();
 }

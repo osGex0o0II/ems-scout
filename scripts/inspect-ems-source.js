@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
+const { sanitizeErrorForDisplay, sanitizeUrlForDisplay } = require('../src/url-sanitizer');
 
 function argValue(name, fallback = '') {
   const hit = process.argv.find(a => a.startsWith(name + '='));
@@ -15,7 +16,7 @@ function pause(ms) {
 }
 
 const CDP_URL = argValue('--cdp-url', process.env.CDP_URL || 'http://127.0.0.1:9222');
-const EMS_URL = argValue('--ems-url', process.env.EMS_URL || 'http://172.29.248.4:8000/ui');
+const EMS_URL = process.env.EMS_URL || 'http://172.29.248.4:8000/ui';
 const BUILDING = argValue('--building', '1号');
 const FLOOR_TEXT = argValue('--floor-text', '17F');
 const PAGE_TEXT = argValue('--page', '二页');
@@ -357,7 +358,7 @@ async function main() {
   await waitForSvgSettled(page);
 
   const evidence = await collectEvidence(page, DEVICE);
-  evidence.request = { cdpUrl: CDP_URL, emsUrl: EMS_URL, building: BUILDING, floorText: FLOOR_TEXT, pageText: PAGE_TEXT, device: DEVICE };
+  evidence.request = { cdpUrl: CDP_URL, emsUrl: sanitizeUrlForDisplay(EMS_URL), building: BUILDING, floorText: FLOOR_TEXT, pageText: PAGE_TEXT, device: DEVICE };
   evidence.capturedAt = new Date().toISOString();
   const jsonPath = path.join(OUT_DIR, `${DEVICE.replace(/[^\w.-]+/g, '_')}_source_evidence.json`);
   fs.writeFileSync(jsonPath, JSON.stringify(evidence, null, 2), 'utf8');
@@ -378,6 +379,6 @@ async function main() {
 }
 
 main().catch(err => {
-  console.error(err && err.stack ? err.stack : err);
+  console.error(sanitizeErrorForDisplay(err, [EMS_URL]));
   process.exit(1);
 });

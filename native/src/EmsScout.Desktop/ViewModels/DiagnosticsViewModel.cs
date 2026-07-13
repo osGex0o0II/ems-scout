@@ -17,7 +17,7 @@ public sealed partial class DiagnosticsViewModel(
 {
     private const int PreviewMaxLines = 160;
     private static readonly Regex NativeExportFileNamePattern =
-        new(@"^数据管理筛选结果_\d{8}_\d{6}\.xlsx$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        new(@"^数据管理筛选结果_\d{8}_\d{6}_\d{3}(?:_\d+)?\.xlsx$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     [ObservableProperty]
     public partial string StatusText { get; private set; } = "诊断信息尚未加载";
@@ -80,7 +80,7 @@ public sealed partial class DiagnosticsViewModel(
         WorkflowRows.Add(new DiagnosticInfoRow("主流程", "采集任务 -> 数据管理 -> 导出当前筛选 Excel", "原生 UI 唯一用户导出路径"));
         WorkflowRows.Add(new DiagnosticInfoRow("旧 Web 面板", "legacy", "legacy:panel / EMS-Panel.bat 仅作兼容诊断，不作为当前 UI 主入口"));
         WorkflowRows.Add(new DiagnosticInfoRow("旧多格式报表", "legacy", "scripts/report.js、dump-aircons.js、dump-public.js 默认禁用，不接入原生 UI"));
-        WorkflowRows.Add(new DiagnosticInfoRow("默认采集模式", settings.DefaultCollectionMode, $"日志级别 {settings.LogLevel}"));
+        WorkflowRows.Add(new DiagnosticInfoRow("采集浏览器", "由采集页手动管理", $"日志级别 {settings.LogLevel}"));
 
         foreach (var row in EnumerateLogs())
         {

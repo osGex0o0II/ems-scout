@@ -14,11 +14,11 @@ public static class DeviceHealthRules
             issues.Add("设备名占位");
         }
 
-        if (record.CommunicationState == DeviceCommunicationState.Offline)
+        if (record.EffectiveCommunicationState == DeviceCommunicationState.Offline)
         {
             issues.Add("通讯离线");
         }
-        else if (record.CommunicationState == DeviceCommunicationState.Unknown)
+        else if (record.EffectiveCommunicationState == DeviceCommunicationState.Unknown)
         {
             issues.Add("通讯未知");
         }
@@ -28,7 +28,7 @@ public static class DeviceHealthRules
             issues.Add("温度异常");
             hasTemperatureIssue = true;
         }
-        else if (record.CommunicationState != DeviceCommunicationState.Offline &&
+        else if (record.EffectiveCommunicationState != DeviceCommunicationState.Offline &&
                  (IsTemperatureMissing(record.IndoorTemperature) || IsTemperatureMissing(record.SetTemperature)))
         {
             issues.Add("温度缺失");
@@ -40,7 +40,7 @@ public static class DeviceHealthRules
             return new DeviceHealthAssessment("normal", "正常", "无排查项", NeedsReview: false, HasTemperatureIssue: false);
         }
 
-        var status = record.CommunicationState == DeviceCommunicationState.Offline
+        var status = record.EffectiveCommunicationState == DeviceCommunicationState.Offline
             ? "offline"
             : "attention";
         return new DeviceHealthAssessment(status, "需排查", string.Join("、", issues), NeedsReview: true, hasTemperatureIssue);
@@ -53,13 +53,13 @@ public static class DeviceHealthRules
             null or "" or "all" => true,
             "normal" => !record.Health.NeedsReview,
             "needs_review" => record.Health.NeedsReview,
-            "offline" => record.CommunicationState == DeviceCommunicationState.Offline,
+            "offline" => record.EffectiveCommunicationState == DeviceCommunicationState.Offline,
             "temp_abnormal" => record.Health.HasTemperatureIssue,
-            "on" => record.CommunicationState == DeviceCommunicationState.Running || record.SwitchState == "ON",
-            "off" => record.CommunicationState == DeviceCommunicationState.Stopped || record.SwitchState == "OFF",
+            "on" => record.EffectiveCommunicationState == DeviceCommunicationState.Running,
+            "off" => record.EffectiveCommunicationState == DeviceCommunicationState.Stopped,
             "public" => record.AreaType == DeviceAreaClassifier.PublicArea,
             "private" => record.AreaType == DeviceAreaClassifier.PrivateArea,
-            "unknown" => record.CommunicationState == DeviceCommunicationState.Unknown,
+            "unknown" => record.EffectiveCommunicationState == DeviceCommunicationState.Unknown,
             "locked" => record.RealtimeLocked,
             "points_incomplete" => record.Realtime is null || !record.RealtimePointsComplete,
             "realtime_missing" => record.Realtime is null,

@@ -29,7 +29,7 @@ function matchesEmsPageUrl(value, expectedValue) {
 }
 
 function parseEnumerateOptions(argv = process.argv.slice(2), env = process.env, root = path.resolve(__dirname, '..')) {
-  const rawEmsUrl = argumentValue(argv, '--ems-url') || env.EMS_URL || 'http://172.29.248.4:8000/ui';
+  const rawEmsUrl = env.EMS_URL || 'http://172.29.248.4:8000/ui';
   const buildingArgument = argv.find(argument => argument.startsWith('--bldg='));
   const recaptureArgument = argv.find(argument => argument.startsWith('--recapture='));
   const recaptureTargets = recaptureArgument

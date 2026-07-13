@@ -13,13 +13,12 @@ test('enumeration options parse paths, buildings, recapture and diagnostics with
     '--bldg=1号, 2号',
     '--recapture=3号:1087:144,6号:194:158',
     '--out-dir=./capture',
-    '--ems-url=http://ems.local:8000/ui/#/home',
     '--cdp-url=http://127.0.0.1:9333',
     '--log-level=DEBUG',
     '--log-category=RULE,VUE',
     '--log-file',
     '--no-net-monitor',
-  ], {}, root);
+  ], { EMS_URL: 'http://ems.local:8000/ui/#/home' }, root);
 
   assert.equal(options.USE_CDP, true);
   assert.equal(options.APPEND, true);

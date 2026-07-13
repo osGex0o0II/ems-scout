@@ -667,6 +667,7 @@ public sealed class DeviceWatchRepositoryTests
                 (9, 3, 9, '2-0101-KT', 'OFF', '制冷', '26', '24', '中', 'green.png', '关机');
             """;
         command.ExecuteNonQuery();
+        TestScheduleSchema.Apply(connection);
         return path;
     }
 

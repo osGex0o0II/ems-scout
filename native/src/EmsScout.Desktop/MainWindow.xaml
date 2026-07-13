@@ -43,33 +43,35 @@
             SelectionChanged="NavView_SelectionChanged">
             <NavigationView.MenuItems>
                 <NavigationViewItem
-                    Content="总览"
+                    Content="工作台"
                     IsSelected="True"
-                    Tag="overview">
+                    Tag="workbench">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE80F;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="采集任务" Tag="tasks">
+                <NavigationViewItem Content="采集" Tag="collection">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE7C1;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="数据管理" Tag="data">
+                <NavigationViewItem Content="设备数据" Tag="devices">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE8A5;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="审计中心" Tag="audit">
-                    <NavigationViewItem.Icon>
-                        <FontIcon Glyph="&#xE9D9;" />
-                    </NavigationViewItem.Icon>
-                </NavigationViewItem>
-                <NavigationViewItem Content="分组设置" Tag="groups">
+                <NavigationViewItem Content="规则与计划" Tag="rules">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE707;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
+                <NavigationViewItem Content="审计" Tag="audit">
+                    <NavigationViewItem.Icon>
+                        <FontIcon Glyph="&#xE9D9;" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.MenuItems>
+            <NavigationView.FooterMenuItems>
                 <NavigationViewItem Content="系统设置" Tag="settings">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE713;" />
@@ -80,7 +82,7 @@
                         <FontIcon Glyph="&#xE946;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
-            </NavigationView.MenuItems>
+            </NavigationView.FooterMenuItems>
             <Frame x:Name="NavFrame" />
         </NavigationView>
     </Grid>

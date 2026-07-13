@@ -145,6 +145,17 @@ public sealed class CollectionEnvironmentProbe
         }
     }
 
+    public static async Task OpenEmsPageAsync(
+        int port,
+        string emsUrl,
+        CancellationToken cancellationToken = default)
+    {
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+        var endpoint = $"http://127.0.0.1:{port}/json/new?{Uri.EscapeDataString(emsUrl)}";
+        using var response = await client.PutAsync(endpoint, content: null, cancellationToken).ConfigureAwait(false);
+        response.EnsureSuccessStatusCode();
+    }
+
     public static bool MatchesEmsPage(string pageUrl, string emsUrl)
     {
         if (string.IsNullOrWhiteSpace(pageUrl))

@@ -95,7 +95,7 @@ public sealed partial class GroupsViewModel(
 
     public bool IsSystemGroupSelected => SelectedGroup is { IsCustom: false };
 
-    public bool CanMaintainMembers => SelectedGroup is { IsCustom: true } && !IsLoading;
+    public bool CanMaintainMembers => SelectedGroup?.GroupId is not null && !IsLoading;
 
     public bool CanLoadMemberOptions => CanMaintainMembers && CanEditMemberTarget && SelectedTargetType?.Value is "sub_area" or "device";
 
@@ -189,15 +189,13 @@ public sealed partial class GroupsViewModel(
         ? "填写名称并保存后，可继续添加楼层、子区或设备成员。"
         : IsEditingCustomGroup
             ? "修改名称、用途、级别和启用状态后保存；自定义成员用于分组统计和关注规则。数据管理仅保留基础筛选，不按自定义成员跳转。"
-            : "系统区域由规则自动计算，不能手动添加成员或删除。";
+            : "公区/非公区的基础分类由规则计算；这里维护人工成员，日期和时段请到独立的日期管理中设置。";
 
     public string MemberEditorTitle => CanMaintainMembers ? "成员维护" : "成员维护（选择自定义区域组后可用）";
 
     public string MemberEditorMessage => SelectedGroup is null
         ? "新建分组保存后即可添加楼层、子区或设备成员。"
-        : IsSystemGroupSelected
-            ? "系统区域按规则自动计算成员，不能手动添加或删除。"
-            : "楼层可直接添加；子区和设备先按楼栋、楼层加载候选。";
+        : "楼层可直接添加；子区和设备先按楼栋、楼层加载候选。系统分类成员是人工维护范围，不会改写基础公区判定。";
 
     public string MemberTargetPreview
     {
@@ -602,18 +600,11 @@ public sealed partial class GroupsViewModel(
             SelectedTargetType ??= TargetTypes.FirstOrDefault();
 
             Groups.Clear();
-            Groups.Add(new GroupSummaryRow(
-                "公区",
-                "系统规则",
-                result.Facets.PublicArea,
-                "layout=group 或命名关键词命中；可跳转到数据管理的公区基础筛选。",
-                DeviceAreaClassifier.PublicArea));
-            Groups.Add(new GroupSummaryRow(
-                "非公区",
-                "系统规则",
-                result.Facets.PrivateArea,
-                "未命中公区规则或被 QL-NNN 房间号保护的设备；用于排除公共区域后的业务筛选。",
-                DeviceAreaClassifier.PrivateArea));
+            foreach (var systemGroup in groupSet.Groups.Where(group =>
+                         group.SystemKey is "public" or "non_public"))
+            {
+                Groups.Add(new GroupSummaryRow(systemGroup));
+            }
             Groups.Add(new GroupSummaryRow(
                 "公区开机",
                 "派生筛选",
@@ -643,7 +634,8 @@ public sealed partial class GroupsViewModel(
                 string.Empty,
                 quickFilter: "temp_abnormal"));
 
-            foreach (var group in groupSet.Groups)
+            foreach (var group in groupSet.Groups.Where(group =>
+                         group.SystemKey is not "public" and not "non_public"))
             {
                 Groups.Add(new GroupSummaryRow(group));
             }
@@ -915,7 +907,7 @@ public sealed partial class GroupsViewModel(
 
     private bool CanAddItem()
     {
-        if (IsLoading || SelectedGroup is not { IsCustom: true } || SelectedTargetType is null || !IsMemberDraftActive)
+        if (IsLoading || SelectedGroup?.GroupId is null || SelectedTargetType is null || !IsMemberDraftActive)
         {
             return false;
         }
@@ -1042,7 +1034,7 @@ public sealed partial class GroupsViewModel(
         NotifyCommands();
     }
 
-    private bool CanDeleteItem() => !IsLoading && SelectedItem is not null && SelectedGroup is { IsCustom: true };
+    private bool CanDeleteItem() => !IsLoading && SelectedItem is not null && SelectedGroup?.GroupId is not null;
 
     [RelayCommand(CanExecute = nameof(CanDeleteItem))]
     public async Task DeleteItemAsync()
@@ -1101,6 +1093,8 @@ public sealed partial class GroupsViewModel(
             CommunicationState: SelectedGroup.CommunicationFilter,
             AreaType: SelectedGroup.AreaFilter));
     }
+
+    public void OpenDateManagement() => navigationService.NavigateToDates();
 
     private void LoadSelectedGroupEdit(GroupSummaryRow? group)
     {

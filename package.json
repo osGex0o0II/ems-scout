@@ -4,6 +4,7 @@
   "description": "EMS Scout 空调采集、审计与数据管理",
   "main": "electron/main.js",
   "scripts": {
+    "test": "node --test sidecar/test/*.test.js tests/**/*.test.js",
     "enum": "node src/enumerate.js",
     "enum:dry": "node src/enumerate.js --dry",
     "enum:edge": "node src/enumerate.js --edge",
@@ -14,7 +15,7 @@
     "legacy:panel": "node scripts/legacy-gate.js EMS_ENABLE_LEGACY_PANEL legacy-web-panel && node src/panel/server.js",
     "legacy:desktop": "node scripts/legacy-gate.js EMS_ENABLE_LEGACY_PANEL legacy-electron-desktop && electron .",
     "native:run": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-native.ps1",
-    "native:build": "dotnet build native/EmsScout.Native.slnx -c Debug --no-restore /p:UseSharedCompilation=false",
+    "native:build": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-native.ps1 -Configuration Debug",
     "native:test": "dotnet test native/tests/EmsScout.Tests/EmsScout.Tests.csproj -c Debug --no-restore /p:UseSharedCompilation=false --filter Fixture!=ProductionEvidence",
     "native:test:evidence": "dotnet test native/tests/EmsScout.Tests/EmsScout.Tests.csproj -c Debug --no-restore /p:UseSharedCompilation=false --filter Fixture=ProductionEvidence",
     "legacy:restore-node-native": "node scripts/restore-node-native.js",
@@ -28,13 +29,13 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
-    "better-sqlite3": "^12.10.0",
-    "playwright": "^1.60.0",
+    "better-sqlite3": "^12.11.1",
+    "playwright": "^1.61.1",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
-    "electron": "^39.2.7",
-    "electron-builder": "^26.0.12"
+    "electron": "^43.1.0",
+    "electron-builder": "^26.15.3"
   },
   "build": {
     "appId": "com.ems.data.desktop",
@@ -48,14 +49,8 @@
       "src/**/*",
       "scripts/**/*",
       "web/**/*",
-      "data/**/*",
       "docs/**/*",
       "examples/**/*",
-      "out/ac.db",
-      "out/enum_full_v5.json",
-      "out/quality_report*.json",
-      "out/quality_report*.txt",
-      "out/realtime_*_latest.json",
       "package.json"
     ],
     "win": {

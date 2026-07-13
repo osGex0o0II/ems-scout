@@ -119,6 +119,8 @@ public sealed partial class AreasPage : Page
         ViewModel.OpenSelectedWatchIncident();
     }
 
+    private void OpenDateManagement_Click(object sender, RoutedEventArgs e) => ViewModel.OpenDateManagement();
+
     private async Task<ContentDialogResult> ConfirmDeleteAsync(string title, string content)
     {
         var dialog = new ContentDialog

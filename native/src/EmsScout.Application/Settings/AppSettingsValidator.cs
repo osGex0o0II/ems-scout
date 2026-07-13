@@ -12,6 +12,11 @@ public static class AppSettingsValidator
             return "EMS 地址必须是 http 或 https 开头的完整地址";
         }
 
+        if (!string.IsNullOrWhiteSpace(uri.UserInfo))
+        {
+            return "EMS 地址不能包含用户信息";
+        }
+
         if (settings.EdgeCdpPort is < 1 or > 65535)
         {
             return InvalidEdgeCdpPortMessage;

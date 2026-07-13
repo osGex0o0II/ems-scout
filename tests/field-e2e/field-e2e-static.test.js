@@ -49,16 +49,25 @@ test('field E2E keeps browser isolation, live verify, and cleanup invariants', (
   assert.match(script, /Remove-ProfileWithRetry/);
   assert.match(script, /KeepBrowser/);
   assert.match(script, /KeepProfile/);
+  assert.match(script, /ConvertTo-WindowsCommandLine/);
+  assert.match(script, /Test-ProfileCommandLine/);
+  assert.doesNotMatch(script, /-like \"\*\$profile\*\"/);
+  assert.doesNotMatch(script, /\$KeepBrowser\s*=\s*\$true/);
+  assert.doesNotMatch(script, /\$KeepProfile\s*=\s*\$true/);
+  assert.match(script, /PrepareLoginSession.*requires explicit -LaunchEdge -KeepBrowser and -KeepProfile/s);
 });
 
 test('field E2E guards production files by raw metadata and SHA-256 only', () => {
   assert.match(script, /field-e2e-\$stamp-\$runSuffix/);
   assert.match(script, /Get-FileHash -LiteralPath \$Path -Algorithm SHA256/);
-  assert.match(script, /Production DB WAL/);
-  assert.match(script, /Production DB SHM/);
+  assert.match(script, /ac\.db-wal/);
+  assert.match(script, /ac\.db-shm/);
   assert.match(script, /production_db_guard_passed/);
   assert.match(script, /additionally, \$guardMessage/);
   assert.match(script, /Assert-NotProductionPath \$dbPath \$productionDb/);
+  assert.match(script, /LocalApplicationData/);
+  assert.match(script, /settings\.json/);
+  assert.match(script, /enum_full_v5\.json/);
   assert.doesNotMatch(script, /--db=\$productionDb/);
   assert.doesNotMatch(script, /EMS_DB_PATH\s*=\s*\$productionDb/);
 });

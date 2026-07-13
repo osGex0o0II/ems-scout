@@ -40,9 +40,6 @@ public sealed partial class SettingsViewModel(
     public partial bool TrackRecentExports { get; set; }
 
     [ObservableProperty]
-    public partial int DefaultCollectionModeIndex { get; set; }
-
-    [ObservableProperty]
     public partial int LogLevelIndex { get; set; }
 
     [ObservableProperty]
@@ -186,7 +183,6 @@ public sealed partial class SettingsViewModel(
         DataDirectory = settings.DataDirectory;
         ExportDirectory = settings.ExportDirectory;
         TrackRecentExports = settings.TrackRecentExports;
-        DefaultCollectionModeIndex = settings.DefaultCollectionMode.Equals("auto-launch", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
         LogLevelIndex = settings.LogLevel.ToUpperInvariant() switch
         {
             "ERROR" => 0,
@@ -214,7 +210,7 @@ public sealed partial class SettingsViewModel(
             DataDirectory = DataDirectory,
             ExportDirectory = ExportDirectory,
             TrackRecentExports = TrackRecentExports,
-            DefaultCollectionMode = DefaultCollectionModeIndex == 1 ? "auto-launch" : "edge-cdp",
+            DefaultCollectionMode = "edge-cdp",
             LogLevel = LogLevelIndex switch
             {
                 0 => "ERROR",

@@ -1,7 +1,7 @@
-param(
+﻿param(
     [string]$Building = "1号",
     [string]$CdpUrl = "http://127.0.0.1:9222",
-    [string]$EmsUrl = "http://172.29.248.4:8000/ui",
+    [string]$EmsUrl = $(if ([string]::IsNullOrWhiteSpace($env:EMS_URL)) { "http://172.29.248.4:8000/ui" } else { $env:EMS_URL }),
     [switch]$RunSingleBuilding,
     [switch]$RunAllBuildings,
     [switch]$LaunchEdge,
@@ -16,6 +16,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot 'field-e2e-helpers.ps1')
+
+if ($PrepareLoginSession -and (-not $LaunchEdge -or -not $KeepBrowser -or -not $KeepProfile)) {
+    throw "-PrepareLoginSession requires explicit -LaunchEdge -KeepBrowser and -KeepProfile."
+}
+Assert-SafeEmsUrl $EmsUrl
+if ($PSBoundParameters.ContainsKey('EmsUrl')) {
+    Assert-SafeEmsUrlForCommandLine $EmsUrl
+}
 
 function Write-Step {
     param([string]$Message)
@@ -26,6 +35,36 @@ function Write-Step {
 function Resolve-FullPath {
     param([string]$Path)
     return [System.IO.Path]::GetFullPath($Path)
+}
+
+function Get-ProductionEvidencePaths {
+    param([string]$WorkspaceRoot)
+    $directories = @((Join-Path $WorkspaceRoot 'out'))
+    $localApplicationData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+    if (-not [string]::IsNullOrWhiteSpace($localApplicationData)) {
+        $productDirectory = Join-Path $localApplicationData 'EMS Scout'
+        $directories += Join-Path $productDirectory 'data'
+        $settingsPath = Join-Path $productDirectory 'settings.json'
+        if (Test-Path -LiteralPath $settingsPath) {
+            try {
+                $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
+                if (-not [string]::IsNullOrWhiteSpace([string]$settings.DataDirectory)) {
+                    $configured = [string]$settings.DataDirectory
+                    $directories += if ([System.IO.Path]::IsPathRooted($configured)) { $configured } else { Join-Path $WorkspaceRoot $configured }
+                }
+            }
+            catch {
+                throw "Cannot read native settings.json for production guard: $($_.Exception.Message)"
+            }
+        }
+    }
+    $paths = foreach ($directory in $directories) {
+        $dataDirectory = Resolve-FullPath $directory
+        foreach ($name in @('ac.db', 'ac.db-wal', 'ac.db-shm', 'enum_full_v5.json', 'collection_snapshot_v1.json')) {
+            Join-Path $dataDirectory $name
+        }
+    }
+    return @($paths | Sort-Object -Unique)
 }
 
 function Assert-NotProductionPath {
@@ -98,7 +137,8 @@ function Invoke-Checked {
     foreach ($key in $Environment.Keys) {
         $old[$key] = [Environment]::GetEnvironmentVariable($key, "Process")
         [Environment]::SetEnvironmentVariable($key, [string]$Environment[$key], "Process")
-        Write-Host "env:$key=$($Environment[$key])"
+        $displayValue = if ($key -eq 'EMS_URL') { Get-SanitizedEmsUrl ([string]$Environment[$key]) } else { [string]$Environment[$key] }
+        Write-Host "env:$key=$displayValue"
     }
 
     try {
@@ -285,7 +325,7 @@ function Test-CdpEndpoint {
             })
             Write-Host "CDP pages: $(@($pages).Count); EMS-like pages: $($emsPages.Count)"
             foreach ($page in $emsPages | Select-Object -First 5) {
-                Write-Host "  EMS page: $($page.title) <$($page.url)>"
+                Write-Host "  EMS page: $($page.title) <$(Get-SanitizedEmsUrl ([string]$page.url))>"
             }
         }
         catch {
@@ -392,7 +432,7 @@ function Start-FieldEdge {
     Write-Host "Edge: $edge"
     Write-Host "CDP: $Url"
     Write-Host "Profile: $ProfileDirectory"
-    Write-Host "EMS: $TargetEmsUrl"
+    Write-Host "EMS: $(Get-SanitizedEmsUrl $TargetEmsUrl)"
     $args = @(
         "--remote-debugging-port=$port",
         "--remote-debugging-address=127.0.0.1",
@@ -401,9 +441,9 @@ function Start-FieldEdge {
         "--no-first-run",
         "--disable-default-apps",
         "--start-maximized",
-        $TargetEmsUrl
+        "about:blank"
     )
-    $process = Start-Process -FilePath $edge -ArgumentList $args -PassThru -WindowStyle Normal
+    $process = Start-Process -FilePath $edge -ArgumentList (ConvertTo-WindowsCommandLine $args) -PassThru -WindowStyle Normal
     Write-Host "Started Edge pid=$($process.Id). If login is required, use the opened Edge window to log into EMS."
     return $process.Id
 }
@@ -416,7 +456,7 @@ function Stop-FieldEdge {
 
     $profile = Resolve-FullPath $ProfileDirectory
     $processes = @(Get-CimInstance Win32_Process -Filter "name = 'msedge.exe'" |
-        Where-Object { $_.CommandLine -and $_.CommandLine -like "*$profile*" })
+        Where-Object { Test-ProfileCommandLine $_.CommandLine $profile })
     if ($processes.Count -eq 0) {
         Write-Host "No field Edge processes to stop."
         return @()
@@ -503,7 +543,7 @@ function Wait-EmsPage {
             })
             if ($emsPages.Count -gt 0) {
                 foreach ($page in $emsPages | Select-Object -First 3) {
-                    Write-Host "EMS page detected: $($page.title) <$($page.url)>"
+                    Write-Host "EMS page detected: $($page.title) <$(Get-SanitizedEmsUrl ([string]$page.url))>"
                 }
                 return $true
             }
@@ -550,28 +590,28 @@ $manifestPath = Join-Path $runDir "manifest.json"
 $workflowId = "field-e2e-$stamp-$runSuffix"
 $script:FieldE2EManifestPath = $manifestPath
 $productionDb = Join-Path $root "out\ac.db"
-$productionDbSnapshots = @(
-    @{ Label = "Production DB"; Path = $productionDb; Snapshot = Get-FileSnapshot $productionDb },
-    @{ Label = "Production DB WAL"; Path = "$productionDb-wal"; Snapshot = Get-FileSnapshot "$productionDb-wal" },
-    @{ Label = "Production DB SHM"; Path = "$productionDb-shm"; Snapshot = Get-FileSnapshot "$productionDb-shm" }
-)
+$productionPaths = Get-ProductionEvidencePaths $root
+$productionDbSnapshots = @($productionPaths | ForEach-Object {
+    @{ Label = "Production evidence"; Path = $_; Snapshot = Get-FileSnapshot $_ }
+})
 
 New-Item -ItemType Directory -Force -Path $runDir, $qualityDir, $exportDir | Out-Null
 Assert-NotProductionPath $dbPath $productionDb "EMS_DB_PATH"
 Assert-NotProductionPath $jsonPath (Join-Path $root "out\enum_full_v5.json") "EMS_JSON_PATH"
 Assert-NotProductionPath $snapshotPath (Join-Path $root "out\collection_snapshot_v1.json") "EMS_SNAPSHOT_PATH"
-
-Write-Host "Field E2E run dir: $runDir"
-if ($PrepareLoginSession -and -not $LaunchEdge) {
-    throw "-PrepareLoginSession requires -LaunchEdge."
+foreach ($productionPath in $productionPaths) {
+    Assert-NotProductionPath $dbPath $productionPath "EMS_DB_PATH"
+    Assert-NotProductionPath $jsonPath $productionPath "EMS_JSON_PATH"
+    Assert-NotProductionPath $snapshotPath $productionPath "EMS_SNAPSHOT_PATH"
 }
 
+Write-Host "Field E2E run dir: $runDir"
 Write-Host "Mode: verify=$(-not $SkipVerify); single-building=$($RunSingleBuilding.IsPresent); all-buildings=$($RunAllBuildings.IsPresent); launch-edge=$($LaunchEdge.IsPresent); prepare-login=$($PrepareLoginSession.IsPresent); building=$Building"
 Update-RunManifest $manifestPath @{
     started_at = (Get-Date).ToUniversalTime().ToString("o")
     root = (Resolve-FullPath $root)
     run_dir = (Resolve-FullPath $runDir)
-    ems_url = $EmsUrl
+    ems_url = (Get-SanitizedEmsUrl $EmsUrl)
     requested_cdp_url = $CdpUrl
     building = $Building
     run_single_building = $RunSingleBuilding.IsPresent
@@ -579,6 +619,8 @@ Update-RunManifest $manifestPath @{
     workflow_id = $workflowId
     launch_edge = $LaunchEdge.IsPresent
     prepare_login_session = $PrepareLoginSession.IsPresent
+    keep_browser = $KeepBrowser.IsPresent
+    keep_profile = $KeepProfile.IsPresent
     skip_verify = $SkipVerify.IsPresent
     production_db_snapshots_before = $productionDbSnapshots
     stages = @()
@@ -608,11 +650,19 @@ try {
         if (-not (Wait-CdpEndpoint $CdpUrl 30)) {
             throw "Launched Edge CDP did not become ready."
         }
+        Invoke-Checked "Wait EMS login" "node" @(
+            "scripts\wait-ems-login.js",
+            "--cdp-url=$CdpUrl",
+            "--timeout-seconds=$LoginWaitSeconds"
+        ) @{ EMS_URL = $EmsUrl; CDP_URL = $CdpUrl }
         $null = Wait-EmsPage $CdpUrl $EmsUrl $LoginWaitSeconds
         if ($PrepareLoginSession) {
             Write-Step "Login session prepared"
             Write-Host "Use the opened Edge window to log into EMS, then run field-e2e with:"
-            Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\field-e2e.ps1 -CdpUrl $CdpUrl -Building $Building -RunSingleBuilding"
+            $safeEmsUrl = Get-SanitizedEmsUrl $EmsUrl
+            $emsUrlArgument = if ($safeEmsUrl -eq $EmsUrl) { " -EmsUrl `"$safeEmsUrl`"" } else { "" }
+            Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\field-e2e.ps1 -CdpUrl $CdpUrl -Building $Building -RunSingleBuilding$emsUrlArgument"
+            if (-not $emsUrlArgument) { Write-Host "  Keep EMS_URL set in the environment for the credential-bearing EMS address." }
             Write-Host "Keep this Edge window open until collection finishes."
             Update-RunManifest $manifestPath @{
                 prepared_at = (Get-Date).ToUniversalTime().ToString("o")
@@ -621,16 +671,8 @@ try {
                 keep_browser_required = $true
                 edge_profile_dir = (Resolve-FullPath $edgeProfileDir)
             }
-            $KeepBrowser = $true
-            $KeepProfile = $true
             return
         }
-        Invoke-Checked "Wait EMS login" "node" @(
-            "scripts\wait-ems-login.js",
-            "--cdp-url=$CdpUrl",
-            "--ems-url=$EmsUrl",
-            "--timeout-seconds=$LoginWaitSeconds"
-        )
     }
 
     $cdpOk = Test-CdpEndpoint $CdpUrl $EmsUrl
@@ -660,7 +702,6 @@ try {
             "--verify",
             "--bldg=$Building",
             "--out-dir=$runDir",
-            "--ems-url=$EmsUrl",
             "--cdp-url=$CdpUrl",
             "--log-level=DEBUG",
             "--log-category=ENUM,QUALITY,CRASH",
@@ -680,7 +721,6 @@ try {
     $enumArgs = @(
         "--edge",
         "--out-dir=$runDir",
-        "--ems-url=$EmsUrl",
         "--cdp-url=$CdpUrl",
         "--log-level=DEBUG",
         "--log-category=ENUM,QUALITY,CRASH",
@@ -809,11 +849,9 @@ try {
         db_path = (Resolve-FullPath $dbPath)
         quality_dir = (Resolve-FullPath $qualityDir)
         export_dir = (Resolve-FullPath $exportDir)
-        production_db_snapshots_after = @(
-            @{ Label = "Production DB"; Path = $productionDb; Snapshot = Get-FileSnapshot $productionDb },
-            @{ Label = "Production DB WAL"; Path = "$productionDb-wal"; Snapshot = Get-FileSnapshot "$productionDb-wal" },
-            @{ Label = "Production DB SHM"; Path = "$productionDb-shm"; Snapshot = Get-FileSnapshot "$productionDb-shm" }
-        )
+        production_db_snapshots_after = @($productionPaths | ForEach-Object {
+            @{ Label = "Production evidence"; Path = $_; Snapshot = Get-FileSnapshot $_ }
+        })
     }
 }
 catch {
@@ -844,11 +882,9 @@ finally {
             $productionGuardErrors += $_.Exception.Message
         }
     }
-    $productionDbSnapshotsAfter = @(
-        @{ Label = "Production DB"; Path = $productionDb; Snapshot = Get-FileSnapshot $productionDb },
-        @{ Label = "Production DB WAL"; Path = "$productionDb-wal"; Snapshot = Get-FileSnapshot "$productionDb-wal" },
-        @{ Label = "Production DB SHM"; Path = "$productionDb-shm"; Snapshot = Get-FileSnapshot "$productionDb-shm" }
-    )
+    $productionDbSnapshotsAfter = @($productionPaths | ForEach-Object {
+        @{ Label = "Production evidence"; Path = $_; Snapshot = Get-FileSnapshot $_ }
+    })
     if (Test-Path $manifestPath) {
         $statusPatch = @{
             finished_at = (Get-Date).ToUniversalTime().ToString("o")

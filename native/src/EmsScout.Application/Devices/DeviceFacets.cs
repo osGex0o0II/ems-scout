@@ -34,10 +34,10 @@ public sealed record DeviceFacets(
         var rows = records.ToList();
         return new DeviceFacets(
             Total: rows.Count,
-            Running: rows.Count(row => row.CommunicationState == DeviceCommunicationState.Running),
-            Stopped: rows.Count(row => row.CommunicationState == DeviceCommunicationState.Stopped),
-            Offline: rows.Count(row => row.CommunicationState == DeviceCommunicationState.Offline),
-            Unknown: rows.Count(row => row.CommunicationState == DeviceCommunicationState.Unknown),
+            Running: rows.Count(row => row.EffectiveCommunicationState == DeviceCommunicationState.Running),
+            Stopped: rows.Count(row => row.EffectiveCommunicationState == DeviceCommunicationState.Stopped),
+            Offline: rows.Count(row => row.EffectiveCommunicationState == DeviceCommunicationState.Offline),
+            Unknown: rows.Count(row => row.EffectiveCommunicationState == DeviceCommunicationState.Unknown),
             PublicArea: rows.Count(row => row.AreaType == DeviceAreaClassifier.PublicArea),
             PrivateArea: rows.Count(row => row.AreaType == DeviceAreaClassifier.PrivateArea),
             TemperatureIssues: rows.Count(row => row.Health.HasTemperatureIssue),

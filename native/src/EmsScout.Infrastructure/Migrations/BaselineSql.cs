@@ -48,3 +48,27 @@ internal static class IdentitySql
 
     public static string Text => CachedSql.Value;
 }
+
+internal static class ScheduleSql
+{
+    private static readonly Lazy<string> CachedSql = new(
+        () => BaselineSql.LoadAndValidate(".Migrations.Sql.V003__schedule_groups.sql"));
+
+    public static string Text => CachedSql.Value;
+}
+
+internal static class ScheduleIntegritySql
+{
+    private static readonly Lazy<string> CachedSql = new(
+        () => BaselineSql.LoadAndValidate(".Migrations.Sql.V004__schedule_integrity.sql"));
+
+    public static string Text => CachedSql.Value;
+}
+
+internal static class AttentionQueueSql
+{
+    private static readonly Lazy<string> CachedSql = new(
+        () => BaselineSql.LoadAndValidate(".Migrations.Sql.V005__attention_queue.sql"));
+
+    public static string Text => CachedSql.Value;
+}

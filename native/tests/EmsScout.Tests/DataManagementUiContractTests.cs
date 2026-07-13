@@ -56,6 +56,39 @@ public sealed class DataManagementUiContractTests
     }
 
     [Fact]
+    public void DataPageProvidesQuickFiltersRetryableErrorsAndDeviceDetails()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml"));
+        var codeBehind = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml.cs"));
+
+        Assert.Contains("ItemsSource=\"{x:Bind ViewModel.QuickFilters, Mode=OneWay}\"", xaml);
+        Assert.Contains("Click=\"QuickFilter_Click\"", xaml);
+        Assert.Contains("<ToggleButton", xaml);
+        Assert.Contains("IsChecked=\"{Binding IsActive, Mode=OneWay}\"", xaml);
+        Assert.Contains("Text=\"{x:Bind ViewModel.ActiveFilterSummary, Mode=OneWay}\"", xaml);
+        Assert.Contains("Text=\"{x:Bind ViewModel.ExportPreviewText, Mode=OneWay}\"", xaml);
+        Assert.Contains("Text=\"{x:Bind ViewModel.DataStateText, Mode=OneWay}\"", xaml);
+        Assert.Contains("Visibility=\"{x:Bind ViewModel.LoadErrorVisibility, Mode=OneWay}\"", xaml);
+        Assert.Contains("Visibility=\"{x:Bind ViewModel.ResultListVisibility, Mode=OneWay}\"", xaml);
+        Assert.Contains("Click=\"RetryLoad_Click\"", xaml);
+        Assert.Contains("<Expander", xaml);
+        Assert.Contains("Header=\"更多筛选\"", xaml);
+        Assert.Contains("IsExpanded=\"False\"", xaml);
+        Assert.Contains("Width=\"360\"", xaml);
+        Assert.Contains("Text=\"设备详情\"", xaml);
+        Assert.Contains("Text=\"基础信息\"", xaml);
+        Assert.Contains("Text=\"采集值\"", xaml);
+        Assert.Contains("Text=\"实时值\"", xaml);
+        Assert.Contains("Text=\"质量与关注\"", xaml);
+        Assert.Contains("ViewModel.SelectedDevice.IssueSummary", xaml);
+        Assert.Contains("ViewModel.SelectedDevice.WatchSummary", xaml);
+        Assert.Contains("ApplyQuickFilterAsync", codeBehind);
+        Assert.Contains("ViewModel.RefreshAsync", codeBehind);
+        Assert.Contains("public Visibility ResultListVisibility", File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs")));
+    }
+
+    [Fact]
     public void DataViewModelExposesUnmatchedAreaOption()
     {
         var root = LocateRepositoryRoot();
@@ -81,7 +114,7 @@ public sealed class DataManagementUiContractTests
             source.IndexOf("private DeviceQuery BuildQuery", StringComparison.Ordinal)..];
 
         Assert.Contains("BuildQuery(limit: PageSize", source);
-        Assert.Contains("BuildQuery(limit: ExportLimit", source);
+        Assert.Contains("var exportQuery = _querySession.SuccessfulQuery! with", source);
         Assert.Contains("Building: EmptyToNull(SelectedBuilding?.Value)", buildQuery);
         Assert.Contains("CommunicationState: EmptyToNull(SelectedCommunication?.Value)", buildQuery);
         Assert.Contains("Floor: EmptyToNull(SelectedFloor?.Value)", buildQuery);
@@ -93,9 +126,10 @@ public sealed class DataManagementUiContractTests
         Assert.Contains("SetTemperature: EmptyToNull(SelectedSetTemperature?.Value)", buildQuery);
         Assert.Contains("RealtimeLock: EmptyToNull(SelectedRealtimeLock?.Value)", buildQuery);
         Assert.Contains("AreaType: EmptyToNull(SelectedArea?.Value)", buildQuery);
+        Assert.Contains("QuickFilter: EmptyToNull(_activeQuickFilter)", buildQuery);
         Assert.Contains("Limit: limit", buildQuery);
         Assert.Contains("Offset: offset", buildQuery);
-        Assert.Contains("RunId: null", buildQuery);
+        Assert.Contains("RunId: DataContext.RunId", buildQuery);
     }
 
     [Fact]
@@ -109,6 +143,51 @@ public sealed class DataManagementUiContractTests
 
         Assert.Contains("ReloadFilterOptionsAsync(cancellationToken)", applyFilters);
         Assert.Contains("LoadPageCoreAsync(cancellationToken)", applyFilters);
+    }
+
+    [Fact]
+    public void DataViewModelKeepsLastSuccessfulRowsAndRejectsStaleResponses()
+    {
+        var root = LocateRepositoryRoot();
+        var viewModelPath = Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs");
+        var source = File.ReadAllText(viewModelPath);
+
+        Assert.Contains("DeviceDataQuerySession _querySession", source);
+        Assert.Contains("_querySession.Begin(query)", source);
+        Assert.Contains("_querySession.TryAccept(request, result)", source);
+        Assert.Contains("public bool HasLoadError", source);
+        Assert.Contains("public string LoadErrorText", source);
+        Assert.Contains("public bool HasStaleResults", source);
+        Assert.Contains("public string ActiveFilterSummary", source);
+        Assert.Contains("public async Task ApplyQuickFilterAsync", source);
+        Assert.Contains("QuickFilter: EmptyToNull(_activeQuickFilter)", source);
+
+        var refresh = source[
+            source.IndexOf("public async Task RefreshAsync", StringComparison.Ordinal)..source.IndexOf("private async Task ReloadFilterOptionsAsync", StringComparison.Ordinal)];
+        Assert.DoesNotContain("Devices.Clear()", refresh);
+
+        var loadPage = source[
+            source.IndexOf("private async Task LoadPageAsync", StringComparison.Ordinal)..source.IndexOf("private async Task LoadPageCoreAsync", StringComparison.Ordinal)];
+        Assert.DoesNotContain("Devices.Clear()", loadPage);
+    }
+
+    [Fact]
+    public void DataExportReusesTheSuccessfulQueryAndConfirmsThePreviewCount()
+    {
+        var root = LocateRepositoryRoot();
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs"));
+        var codeBehind = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml.cs"));
+        var exportMethod = viewModel[
+            viewModel.IndexOf("public async Task ExportAsync", StringComparison.Ordinal)..viewModel.IndexOf("public void OpenExportLocation", StringComparison.Ordinal)];
+
+        Assert.Contains("var exportQuery = _querySession.SuccessfulQuery! with", exportMethod);
+        Assert.Contains("Limit = ExportLimit", exportMethod);
+        Assert.Contains("Offset = 0", exportMethod);
+        Assert.DoesNotContain("BuildQuery(", exportMethod);
+        Assert.DoesNotContain("LoadPageCoreAsync", exportMethod);
+        Assert.Contains("result.RowCount != _querySession.SuccessfulTotal", exportMethod);
+        Assert.Contains("ContentDialog", codeBehind);
+        Assert.Contains("ViewModel.ExportPreviewText", codeBehind);
     }
 
     [Fact]
@@ -221,6 +300,20 @@ public sealed class DataManagementUiContractTests
         Assert.Equal("未知", record.CommunicationStatusText);
         Assert.Equal("未知", record.RealtimeLockText);
         Assert.Equal("无实时数据", (record with { Realtime = null }).RealtimeLockText);
+    }
+
+    [Fact]
+    public void DeviceRecordDerivesUnambiguousOperatingStatusFromCommunicationAndSwitch()
+    {
+        var record = DeviceWithRealtimeLock("");
+
+        Assert.Equal("开机", (record with { CommunicationText = "在线", SwitchState = "ON" }).OperatingStatusText);
+        Assert.Equal("关机", (record with { CommunicationText = "在线", SwitchState = "OFF" }).OperatingStatusText);
+        Assert.Equal("离线", (record with { CommunicationText = "离线", SwitchState = "ON" }).OperatingStatusText);
+        Assert.Equal("未知", (record with { CommunicationText = "在线", SwitchState = "-" }).OperatingStatusText);
+        Assert.True(EmsScout.Application.Devices.DeviceQuerySpecification.MatchesResult(
+            record with { CommunicationText = "在线", SwitchState = "ON" },
+            new EmsScout.Application.Devices.DeviceQuery(CommunicationState: "开机")));
     }
 
     [Fact]

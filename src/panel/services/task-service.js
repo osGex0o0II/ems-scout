@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { sanitizeUrlForDisplay } = require('../../url-sanitizer');
 const { normalizeTaskError } = require('../rules/task-error-rules');
 
 const STAGE_TEXT = {
@@ -74,7 +75,7 @@ function createTaskService(options) {
       label: 'EMS 页面',
       status: emsUrl ? 'ok' : 'error',
       message: emsUrl ? 'EMS 页面地址已配置' : '未配置 EMS 页面地址',
-      detail: emsUrl,
+      detail: sanitizeUrlForDisplay(emsUrl),
       suggestion: emsUrl ? '' : '请设置 EMS_URL，或使用默认 EMS 页面地址。',
     });
 

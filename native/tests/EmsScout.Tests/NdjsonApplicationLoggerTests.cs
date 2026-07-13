@@ -20,7 +20,8 @@ public sealed class NdjsonApplicationLoggerTests
             "workflow_failed",
             $"failed in {home}/private?token=abc123",
             new ApplicationLogContext("wf-1", "import", "database_operation_failed", true),
-            new InvalidOperationException("Authorization: Bearer secret-token"),
+            new InvalidOperationException(
+                "Authorization: Bearer secret-token at https://example.com/ui?ticket=TOPSECRET#session"),
             new Dictionary<string, object?>
             {
                 ["databasePath"] = home + "/ac.db",
@@ -41,6 +42,8 @@ public sealed class NdjsonApplicationLoggerTests
         Assert.DoesNotContain("abc123", line);
         Assert.DoesNotContain("secret-token", line);
         Assert.DoesNotContain("secret-value", line);
+        Assert.DoesNotContain("TOPSECRET", line);
+        Assert.DoesNotContain("#session", line);
         Assert.Equal("<redacted>", record.GetProperty("data").GetProperty("accessToken").GetString());
     }
 

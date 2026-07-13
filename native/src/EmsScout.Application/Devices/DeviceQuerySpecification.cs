@@ -51,7 +51,7 @@ public static class DeviceQuerySpecification
         }
 
         var expected = communicationState.Trim();
-        return string.Equals(row.CommunicationStatusText, expected, StringComparison.OrdinalIgnoreCase);
+        return string.Equals(row.OperatingStatusText, expected, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool MatchesFloor(DeviceRecord row, string? floor)
@@ -212,7 +212,7 @@ public static class DeviceQuerySpecification
         yield return row.IndoorTemperature;
         yield return row.SetTemperature;
         yield return row.Zuo ?? string.Empty;
-        yield return row.CommunicationStatusText;
+        yield return row.OperatingStatusText;
         yield return row.SwitchState;
         yield return row.Note ?? string.Empty;
         yield return row.Realtime?.DevId ?? string.Empty;

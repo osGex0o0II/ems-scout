@@ -10,7 +10,9 @@ public sealed record CollectionProgressPresentation(
     string ProgressMessage,
     string Building,
     int Current,
-    int Total);
+    int Total,
+    int PageCards,
+    int AccumulatedCards);
 
 public static class CollectionProgressPresenter
 {
@@ -24,7 +26,7 @@ public static class CollectionProgressPresenter
             var message = ReadString(root, "message");
             if (!string.IsNullOrWhiteSpace(message))
             {
-                return new(true, false, message, percent, message, string.Empty, 0, 0);
+                return new(true, false, message, percent, message, string.Empty, 0, 0, 0, 0);
             }
 
             if (TryReadPositiveInt(root, "deviceTotal", out var deviceTotal))
@@ -39,7 +41,9 @@ public static class CollectionProgressPresenter
                     string.Empty,
                     building,
                     done,
-                    deviceTotal);
+                    deviceTotal,
+                    0,
+                    0);
             }
 
             var enumerationBuilding = ReadString(root, "bldg");
@@ -55,11 +59,13 @@ public static class CollectionProgressPresenter
                 string.Empty,
                 enumerationBuilding,
                 current,
-                total);
+                total,
+                cards,
+                accumulated);
         }
         catch (JsonException)
         {
-            return new(false, false, "采集进度 " + json, null, string.Empty, string.Empty, 0, 0);
+            return new(false, false, "采集进度 " + json, null, string.Empty, string.Empty, 0, 0, 0, 0);
         }
     }
 

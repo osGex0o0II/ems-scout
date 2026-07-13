@@ -16,18 +16,23 @@ public sealed class DataViewModel(
     IDeviceExportService exportService,
     AppDataPathService pathService,
     AppUiSettingsService uiSettingsService,
-    IApplicationLogger applicationLogger) : ObservableObject
+    IApplicationLogger applicationLogger,
+    DataContextService dataContext) : ObservableObject
 {
     private const int PageSize = 500;
     private const int ExportLimit = 50000;
     private static readonly Regex NativeExportFileNamePattern =
-        new(@"^数据管理筛选结果_\d{8}_\d{6}\.xlsx$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        new(@"^数据管理筛选结果_\d{8}_\d{6}_\d{3}(?:_\d+)?\.xlsx$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private string _statusText = "正在读取 SQLite 数据";
     private string _resultSummary = "--";
     private string _pageSummary = "--";
     private string _lastExportPath = string.Empty;
     private string _lastExportFilePath = string.Empty;
+    private string _loadErrorText = string.Empty;
+    private string _activeFilterSummary = "全部设备";
+    private string? _activeQuickFilter;
+    private bool _hasStaleResults;
     private bool _isLoading;
     private Thickness _tableRowPadding = new(14, 8, 14, 8);
     private Thickness _tableHeaderPadding = new(14, 8, 14, 8);
@@ -46,8 +51,14 @@ public sealed class DataViewModel(
     private DataFilterOption? _selectedArea;
     private string _deviceNameText = string.Empty;
     private bool _isInitializing;
+    private bool _contextAttached;
+    private readonly DeviceDataQuerySession _querySession = new();
+
+    public DataContextService DataContext { get; } = dataContext;
 
     public ObservableCollection<DataDeviceRow> Devices { get; } = [];
+
+    public ObservableCollection<DeviceQuickFilterOption> QuickFilters { get; } = [];
 
     public ObservableCollection<RecentExportRow> RecentExports { get; } = [];
 
@@ -107,6 +118,53 @@ public sealed class DataViewModel(
         private set => SetProperty(ref _lastExportPath, value);
     }
 
+    public string LoadErrorText
+    {
+        get => _loadErrorText;
+        private set
+        {
+            if (SetProperty(ref _loadErrorText, value))
+            {
+                OnPropertyChanged(nameof(HasLoadError));
+                OnPropertyChanged(nameof(LoadErrorVisibility));
+            }
+        }
+    }
+
+    public bool HasLoadError => !string.IsNullOrWhiteSpace(LoadErrorText);
+
+    public Visibility LoadErrorVisibility => HasLoadError ? Visibility.Visible : Visibility.Collapsed;
+
+    public bool HasStaleResults
+    {
+        get => _hasStaleResults;
+        private set
+        {
+            if (SetProperty(ref _hasStaleResults, value))
+            {
+                OnPropertyChanged(nameof(StaleResultsVisibility));
+            }
+        }
+    }
+
+    public Visibility StaleResultsVisibility => HasStaleResults ? Visibility.Visible : Visibility.Collapsed;
+
+    public string ActiveFilterSummary
+    {
+        get => _activeFilterSummary;
+        private set => SetProperty(ref _activeFilterSummary, value);
+    }
+
+    public string ExportPreviewText => DataContext.IsHistory
+        ? "历史批次只读，不可导出"
+        : !HasCurrentSuccessfulQuery
+            ? "筛选条件已改变，请先查询"
+            : $"将导出 {_querySession.SuccessfulTotal:N0} 台设备";
+
+    public string DataStateText => DataContext.IsHistory
+        ? $"{DataContext.DisplayText} · 只读"
+        : $"{DataContext.DisplayText} · 当前可操作";
+
     public bool CanOpenLastExport => !IsLoading && !string.IsNullOrWhiteSpace(_lastExportFilePath) && File.Exists(_lastExportFilePath);
 
     public bool HasRecentExports => RecentExports.Count > 0;
@@ -119,13 +177,30 @@ public sealed class DataViewModel(
 
     public bool CanRunDataAction => !IsLoading;
 
-    public bool CanExport => !IsLoading && TotalRows > 0 && TotalRows <= ExportLimit;
+    public bool CanExport => !IsLoading && !DataContext.IsHistory &&
+                             HasCurrentSuccessfulQuery &&
+                             TotalRows > 0 && TotalRows <= ExportLimit;
+
+    private bool HasCurrentSuccessfulQuery => _querySession.SuccessfulQuery is not null &&
+                                              QueryScopesEqual(
+                                                  _querySession.SuccessfulQuery,
+                                                  BuildQuery(limit: PageSize, offset: 0));
+
+    public string ExportHint => DataContext.IsHistory
+        ? "所选历史批次为只读预览；切换到最近更新时间可导出。"
+        : TotalRows > ExportLimit
+            ? $"结果超过 {ExportLimit:N0} 行，请缩小筛选范围后导出。"
+            : "导出内容与当前筛选结果一致。";
 
     public Visibility EmptyStateVisibility => !IsLoading && Devices.Count == 0
         ? Visibility.Visible
         : Visibility.Collapsed;
 
-    public Visibility LoadingStateVisibility => IsLoading
+    public Visibility ResultListVisibility => Devices.Count > 0
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+
+    public Visibility LoadingStateVisibility => IsLoading && Devices.Count == 0
         ? Visibility.Visible
         : Visibility.Collapsed;
 
@@ -140,10 +215,12 @@ public sealed class DataViewModel(
                 OnPropertyChanged(nameof(CanMoveNext));
                 OnPropertyChanged(nameof(CanRunDataAction));
                 OnPropertyChanged(nameof(CanExport));
+                OnPropertyChanged(nameof(ExportHint));
                 OnPropertyChanged(nameof(CanOpenLastExport));
                 OnPropertyChanged(nameof(EmptyStateVisibility));
+                OnPropertyChanged(nameof(ResultListVisibility));
                 OnPropertyChanged(nameof(LoadingStateVisibility));
-                OnPropertyChanged(nameof(CanExport));
+                OnPropertyChanged(nameof(ExportPreviewText));
             }
         }
     }
@@ -189,14 +266,26 @@ public sealed class DataViewModel(
         {
             if (SetProperty(ref _selectedDevice, value))
             {
+                OnPropertyChanged(nameof(DetailVisibility));
+                OnPropertyChanged(nameof(NoSelectionDetailVisibility));
             }
         }
     }
 
+    public Visibility DetailVisibility => SelectedDevice is null ? Visibility.Collapsed : Visibility.Visible;
+
+    public Visibility NoSelectionDetailVisibility => SelectedDevice is null ? Visibility.Visible : Visibility.Collapsed;
+
     public string DeviceNameText
     {
         get => _deviceNameText;
-        set => SetProperty(ref _deviceNameText, value);
+        set
+        {
+            if (SetProperty(ref _deviceNameText, value))
+            {
+                NotifyFilterInputChanged();
+            }
+        }
     }
 
     public DataFilterOption? SelectedBuilding
@@ -208,6 +297,7 @@ public sealed class DataViewModel(
             {
                 CoerceZuoSelectionForBuilding();
                 OnPropertyChanged(nameof(CanFilterByZuo));
+                NotifyFilterInputChanged();
             }
         }
     }
@@ -215,19 +305,37 @@ public sealed class DataViewModel(
     public DataFilterOption? SelectedCommunication
     {
         get => _selectedCommunication;
-        set => SetProperty(ref _selectedCommunication, value);
+        set
+        {
+            if (SetProperty(ref _selectedCommunication, value))
+            {
+                NotifyFilterInputChanged();
+            }
+        }
     }
 
     public DataFilterOption? SelectedFloor
     {
         get => _selectedFloor;
-        set => SetProperty(ref _selectedFloor, value);
+        set
+        {
+            if (SetProperty(ref _selectedFloor, value))
+            {
+                NotifyFilterInputChanged();
+            }
+        }
     }
 
     public DataFilterOption? SelectedZuo
     {
         get => _selectedZuo;
-        set => SetProperty(ref _selectedZuo, value);
+        set
+        {
+            if (SetProperty(ref _selectedZuo, value))
+            {
+                NotifyFilterInputChanged();
+            }
+        }
     }
 
     public bool CanFilterByZuo => IsZuoBuilding(SelectedBuilding?.Value);
@@ -235,37 +343,73 @@ public sealed class DataViewModel(
     public DataFilterOption? SelectedPageName
     {
         get => _selectedPageName;
-        set => SetProperty(ref _selectedPageName, value);
+        set
+        {
+            if (SetProperty(ref _selectedPageName, value))
+            {
+                NotifyFilterInputChanged();
+            }
+        }
     }
 
     public DataFilterOption? SelectedMode
     {
         get => _selectedMode;
-        set => SetProperty(ref _selectedMode, value);
+        set
+        {
+            if (SetProperty(ref _selectedMode, value))
+            {
+                NotifyFilterInputChanged();
+            }
+        }
     }
 
     public DataFilterOption? SelectedFan
     {
         get => _selectedFan;
-        set => SetProperty(ref _selectedFan, value);
+        set
+        {
+            if (SetProperty(ref _selectedFan, value))
+            {
+                NotifyFilterInputChanged();
+            }
+        }
     }
 
     public DataFilterOption? SelectedSetTemperature
     {
         get => _selectedSetTemperature;
-        set => SetProperty(ref _selectedSetTemperature, value);
+        set
+        {
+            if (SetProperty(ref _selectedSetTemperature, value))
+            {
+                NotifyFilterInputChanged();
+            }
+        }
     }
 
     public DataFilterOption? SelectedRealtimeLock
     {
         get => _selectedRealtimeLock;
-        set => SetProperty(ref _selectedRealtimeLock, value);
+        set
+        {
+            if (SetProperty(ref _selectedRealtimeLock, value))
+            {
+                NotifyFilterInputChanged();
+            }
+        }
     }
 
     public DataFilterOption? SelectedArea
     {
         get => _selectedArea;
-        set => SetProperty(ref _selectedArea, value);
+        set
+        {
+            if (SetProperty(ref _selectedArea, value))
+            {
+                NotifyFilterInputChanged();
+            }
+        }
     }
 
 
@@ -281,6 +425,11 @@ public sealed class DataViewModel(
         try
         {
             RefreshRecentExports();
+            AttachDataContext();
+            if (DataContext.Options.Count == 0)
+            {
+                await DataContext.RefreshAsync(cancellationToken).ConfigureAwait(true);
+            }
             if (BuildingOptions.Count == 0)
             {
                 await ReloadFilterOptionsAsync(cancellationToken).ConfigureAwait(true);
@@ -299,7 +448,7 @@ public sealed class DataViewModel(
             }
             else
             {
-                StatusText = ResultStatusText("已读取当前筛选结果");
+                StatusText = ResultStatusText("已读取筛选结果");
             }
         }
         finally
@@ -322,18 +471,11 @@ public sealed class DataViewModel(
             await ReloadFilterOptionsAsync(cancellationToken).ConfigureAwait(true);
             CurrentPage = 1;
             await LoadPageCoreAsync(cancellationToken).ConfigureAwait(true);
-            StatusText = ResultStatusText("已刷新当前 SQLite 数据");
+            StatusText = ResultStatusText("已刷新设备数据");
         }
         catch (Exception ex)
         {
-            Devices.Clear();
-            SelectedDevice = null;
-            TotalRows = 0;
-            ResultSummary = "--";
-            PageSummary = "--";
-            StatusText = applicationLogger.WriteFailure(ex, "data").DisplayText;
-            OnPropertyChanged(nameof(EmptyStateVisibility));
-            OnPropertyChanged(nameof(LoadingStateVisibility));
+            HandleLoadFailure(ex);
             RefreshRecentExports();
         }
         finally
@@ -413,18 +555,11 @@ public sealed class DataViewModel(
         {
             await ReloadFilterOptionsAsync(cancellationToken).ConfigureAwait(true);
             await LoadPageCoreAsync(cancellationToken).ConfigureAwait(true);
-            StatusText = ResultStatusText("已读取当前 SQLite 设备数据");
+            StatusText = ResultStatusText("已读取设备数据");
         }
         catch (Exception ex)
         {
-            Devices.Clear();
-            SelectedDevice = null;
-            TotalRows = 0;
-            ResultSummary = "--";
-            PageSummary = "--";
-            StatusText = applicationLogger.WriteFailure(ex, "data").DisplayText;
-            OnPropertyChanged(nameof(EmptyStateVisibility));
-            OnPropertyChanged(nameof(LoadingStateVisibility));
+            HandleLoadFailure(ex);
         }
         finally
         {
@@ -485,20 +620,13 @@ public sealed class DataViewModel(
         try
         {
             await LoadPageCoreAsync(cancellationToken).ConfigureAwait(true);
-            StatusText = ResultStatusText("已读取当前 SQLite 设备数据");
+            StatusText = ResultStatusText("已读取设备数据");
             OnPropertyChanged(nameof(EmptyStateVisibility));
             OnPropertyChanged(nameof(LoadingStateVisibility));
         }
         catch (Exception ex)
         {
-            Devices.Clear();
-            SelectedDevice = null;
-            TotalRows = 0;
-            ResultSummary = "--";
-            PageSummary = "--";
-            StatusText = applicationLogger.WriteFailure(ex, "data").DisplayText;
-            OnPropertyChanged(nameof(EmptyStateVisibility));
-            OnPropertyChanged(nameof(LoadingStateVisibility));
+            HandleLoadFailure(ex);
         }
         finally
         {
@@ -509,15 +637,27 @@ public sealed class DataViewModel(
     private async Task LoadPageCoreAsync(CancellationToken cancellationToken)
     {
         var query = BuildQuery(limit: PageSize, offset: (CurrentPage - 1) * PageSize);
+        var request = _querySession.Begin(query);
         var result = await repository.SearchAsync(query, cancellationToken).ConfigureAwait(true);
-        TotalRows = result.Total;
-        Devices.Clear();
-        foreach (var record in result.Rows)
+        if (!_querySession.TryAccept(request, result))
         {
-            Devices.Add(new DataDeviceRow(record));
+            return;
         }
 
-        SelectedDevice = Devices.FirstOrDefault();
+        var selectedId = SelectedDevice?.Id;
+        var rows = result.Rows.Select(record => new DataDeviceRow(record)).ToArray();
+        TotalRows = result.Total;
+        Devices.Clear();
+        foreach (var row in rows)
+        {
+            Devices.Add(row);
+        }
+
+        SelectedDevice = Devices.FirstOrDefault(row => row.Id == selectedId) ?? Devices.FirstOrDefault();
+        ReplaceQuickFilters(result.Facets);
+        ActiveFilterSummary = FormatActiveFilters(query);
+        LoadErrorText = string.Empty;
+        HasStaleResults = false;
         ResultSummary = result.Total > ExportLimit
             ? $"共 {result.Total:N0} 条，超过 Excel 导出上限 {ExportLimit:N0} 条"
             : $"共 {result.Total:N0} 条，当前页 {Devices.Count:N0} 条";
@@ -525,14 +665,31 @@ public sealed class DataViewModel(
             ? "第 1 / 1 页"
             : $"第 {CurrentPage:N0} / {TotalPages:N0} 页";
         OnPropertyChanged(nameof(EmptyStateVisibility));
+        OnPropertyChanged(nameof(ResultListVisibility));
         OnPropertyChanged(nameof(LoadingStateVisibility));
+        OnPropertyChanged(nameof(CanExport));
+        OnPropertyChanged(nameof(ExportPreviewText));
     }
 
     private string ResultStatusText(string prefix)
     {
         return TotalRows == 0
-            ? prefix + "：没有符合条件的设备"
-            : $"{prefix}：{TotalRows:N0} 台设备";
+            ? $"{prefix}（{DataContext.DisplayText}）：没有符合条件的设备"
+            : $"{prefix}（{DataContext.DisplayText}）：{TotalRows:N0} 台设备";
+    }
+
+    public async Task ApplyQuickFilterAsync(string quickFilter, CancellationToken cancellationToken = default)
+    {
+        if (IsLoading)
+        {
+            return;
+        }
+
+        _activeQuickFilter = string.Equals(_activeQuickFilter, quickFilter, StringComparison.OrdinalIgnoreCase)
+            ? null
+            : quickFilter;
+        NotifyFilterInputChanged();
+        await ApplyFiltersAsync(cancellationToken).ConfigureAwait(true);
     }
 
     public async Task ResetFiltersAsync(CancellationToken cancellationToken = default)
@@ -553,6 +710,8 @@ public sealed class DataViewModel(
         SelectedSetTemperature = SetTemperatureOptions.FirstOrDefault();
         SelectedRealtimeLock = RealtimeLockOptions.FirstOrDefault();
         SelectedArea = AreaOptions.FirstOrDefault();
+        _activeQuickFilter = null;
+        NotifyFilterInputChanged();
         await ApplyFiltersAsync(cancellationToken).ConfigureAwait(true);
     }
 
@@ -563,34 +722,49 @@ public sealed class DataViewModel(
             return;
         }
 
+        if (!HasCurrentSuccessfulQuery)
+        {
+            StatusText = "筛选条件已改变，请先查询再导出";
+            return;
+        }
+
+        var exportQuery = _querySession.SuccessfulQuery! with
+        {
+            Limit = ExportLimit,
+            Offset = 0,
+        };
+
         IsLoading = true;
-        StatusText = "正在同步筛选并导出当前筛选 Excel";
+        StatusText = $"正在导出 {_querySession.SuccessfulTotal:N0} 台设备";
         LastExportPath = string.Empty;
         SetLastExportFilePath(string.Empty);
         try
         {
-            CurrentPage = 1;
-            await LoadPageCoreAsync(cancellationToken).ConfigureAwait(true);
-            if (TotalRows == 0)
+            if (_querySession.SuccessfulTotal == 0)
             {
-                StatusText = "当前筛选没有符合条件的设备，未导出 Excel";
+                StatusText = "筛选结果没有设备，未导出 Excel";
                 return;
             }
 
-            if (TotalRows > ExportLimit)
+            if (_querySession.SuccessfulTotal > ExportLimit)
             {
-                StatusText = $"当前筛选 {TotalRows:N0} 行，超过 Excel 导出上限 {ExportLimit:N0} 行；请缩小筛选条件后再导出";
+                StatusText = $"筛选结果 {_querySession.SuccessfulTotal:N0} 行，超过 Excel 导出上限 {ExportLimit:N0} 行；请缩小筛选条件后再导出";
                 return;
             }
 
             var result = await exportService.ExportAsync(
-                BuildQuery(limit: ExportLimit, offset: 0),
+                exportQuery,
                 pathService.ExportDirectory,
                 cancellationToken).ConfigureAwait(true);
+            if (result.RowCount != _querySession.SuccessfulTotal)
+            {
+                throw new InvalidDataException(
+                    $"Export result count mismatch: expected {_querySession.SuccessfulTotal}, actual {result.RowCount}.");
+            }
             LastExportPath = $"上次导出：{result.FileName}；位置：{Path.GetDirectoryName(result.Path)}";
             SetLastExportFilePath(result.Path);
             RefreshRecentExports();
-            StatusText = $"已导出 {result.RowCount:N0} 行当前筛选 Excel：{result.FileName}；可打开导出位置查看";
+            StatusText = $"已导出 {result.RowCount:N0} 行筛选结果：{result.FileName}；可打开导出位置查看";
         }
         catch (Exception ex)
         {
@@ -697,9 +871,108 @@ public sealed class DataViewModel(
             SetTemperature: EmptyToNull(SelectedSetTemperature?.Value),
             RealtimeLock: EmptyToNull(SelectedRealtimeLock?.Value),
             AreaType: EmptyToNull(SelectedArea?.Value),
+            QuickFilter: EmptyToNull(_activeQuickFilter),
             Limit: limit,
             Offset: offset,
-            RunId: null);
+            RunId: DataContext.RunId);
+    }
+
+    private void HandleLoadFailure(Exception exception)
+    {
+        var failure = applicationLogger.WriteFailure(exception, "data");
+        LoadErrorText = failure.DisplayText;
+        HasStaleResults = Devices.Count > 0;
+        StatusText = failure.DisplayText;
+        OnPropertyChanged(nameof(EmptyStateVisibility));
+        OnPropertyChanged(nameof(ResultListVisibility));
+        OnPropertyChanged(nameof(LoadingStateVisibility));
+    }
+
+    private void ReplaceQuickFilters(DeviceFacets facets)
+    {
+        QuickFilters.Clear();
+        foreach (var item in DeviceQuickFilterCatalog.Create(facets, _activeQuickFilter))
+        {
+            QuickFilters.Add(item);
+        }
+    }
+
+    private static string FormatActiveFilters(DeviceQuery query)
+    {
+        var filters = new List<string>();
+        AddFilter(filters, "楼栋", query.Building);
+        AddFilter(filters, "座号", query.Zuo);
+        AddFilter(filters, "楼层", query.Floor);
+        AddFilter(filters, "页面", query.PageName);
+        AddFilter(filters, "设备", query.DeviceName);
+        AddFilter(filters, "状态", query.CommunicationState);
+        AddFilter(filters, "区域", query.AreaType);
+        AddFilter(filters, "模式", query.Mode);
+        AddFilter(filters, "风速", query.Fan);
+        AddFilter(filters, "设置温度", query.SetTemperature);
+        AddFilter(filters, "集控锁定", query.RealtimeLock);
+        if (!string.IsNullOrWhiteSpace(query.QuickFilter))
+        {
+            var label = query.QuickFilter switch
+            {
+                "offline" => "离线",
+                "unknown" => "未知",
+                "temp_abnormal" => "温度异常",
+                "realtime_missing" => "无实时数据",
+                "needs_review" => "需关注",
+                _ => query.QuickFilter,
+            };
+            filters.Add($"快捷：{label}");
+        }
+
+        return filters.Count == 0 ? "已生效条件：全部设备" : "已生效条件：" + string.Join(" · ", filters);
+    }
+
+    private static void AddFilter(ICollection<string> filters, string label, string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            filters.Add($"{label}：{value.Trim()}");
+        }
+    }
+
+    private static bool QueryScopesEqual(DeviceQuery left, DeviceQuery right)
+    {
+        return left with { Limit = 0, Offset = 0 } == right with { Limit = 0, Offset = 0 };
+    }
+
+    private void NotifyFilterInputChanged()
+    {
+        OnPropertyChanged(nameof(CanExport));
+        OnPropertyChanged(nameof(ExportPreviewText));
+    }
+
+    public async Task SelectDataContextAsync(DataContextOption? option, CancellationToken cancellationToken = default)
+    {
+        DataContext.Select(option);
+        await LoadPageAsync(cancellationToken).ConfigureAwait(true);
+    }
+
+    private void AttachDataContext()
+    {
+        if (_contextAttached)
+        {
+            return;
+        }
+
+        DataContext.ContextChanged += async (_, _) =>
+        {
+            OnPropertyChanged(nameof(CanExport));
+            OnPropertyChanged(nameof(ExportHint));
+            OnPropertyChanged(nameof(ExportPreviewText));
+            OnPropertyChanged(nameof(DataStateText));
+            if (!_isInitializing && !IsLoading)
+            {
+                CurrentPage = 1;
+                await LoadPageAsync().ConfigureAwait(true);
+            }
+        };
+        _contextAttached = true;
     }
 
     private void ApplyNavigationRequest(DataNavigationRequest request)

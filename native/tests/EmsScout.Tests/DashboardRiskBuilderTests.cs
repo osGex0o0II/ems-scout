@@ -116,6 +116,11 @@ public sealed class DashboardRiskBuilderTests
         Assert.Contains(risks, risk => risk.Title == "实时设备字段存在异常" && risk.RealtimeMatch == "invalid");
         Assert.Contains(risks, risk => risk.Title == "实时源存在对账差异" && risk.RealtimeMatch == "missing");
         Assert.Contains(risks, risk => risk.Title == "存在异常隔离批次");
+        Assert.Contains(risks, risk => risk.IssueId == "watch:state:abnormal" && risk.SourceKey == "watch");
+        Assert.Contains(risks, risk => risk.IssueId == "quality:summary:issues" && risk.SourceKey == "quality");
+        Assert.Contains(risks, risk => risk.IssueId == "realtime:devices:invalid" && risk.SourceKey == "realtime");
+        Assert.Contains(risks, risk => risk.IssueId == "reconciliation:summary:difference" && risk.SourceKey == "reconciliation");
+        Assert.Contains(risks, risk => risk.IssueId == "runs:anomaly" && risk.SourceKey == "runs");
     }
 
     [Fact]

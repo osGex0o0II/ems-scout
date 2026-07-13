@@ -18,11 +18,11 @@ public sealed class SqliteSchemaMigratorTests
 
             Assert.True(File.Exists(databasePath));
             Assert.Null(created.BackupPath);
-            Assert.Equal([1, 2], created.AppliedVersions);
+            Assert.Equal([1, 2, 3, 4, 5], created.AppliedVersions);
             Assert.Equal("absent", created.Before.DatabaseShape);
             Assert.True(created.After.IsCurrent);
             Assert.Equal("versioned-identity-v2", created.After.DatabaseShape);
-            Assert.Equal(2, created.After.UserVersion);
+            Assert.Equal(5, created.After.UserVersion);
             Assert.NotNull(created.IdentityReport);
             Assert.Equal(0, created.IdentityReport.CurrentCardCount);
             Assert.Empty(Directory.EnumerateFiles(Path.GetDirectoryName(databasePath)!, "*.partial"));
@@ -31,10 +31,10 @@ public sealed class SqliteSchemaMigratorTests
             {
                 await connection.OpenAsync();
                 Assert.Equal("ok", await ScalarStringAsync(connection, "PRAGMA quick_check"));
-                Assert.Equal(2L, await ScalarInt64Async(connection, "PRAGMA user_version"));
-                Assert.Equal(2L, await ScalarInt64Async(connection, "SELECT COUNT(*) FROM ems_schema_migrations"));
+                Assert.Equal(5L, await ScalarInt64Async(connection, "PRAGMA user_version"));
+                Assert.Equal(5L, await ScalarInt64Async(connection, "SELECT COUNT(*) FROM ems_schema_migrations"));
                 Assert.Equal(
-                    2L,
+                    5L,
                     await ScalarInt64Async(
                         connection,
                         "SELECT COUNT(*) FROM ems_schema_migrations WHERE backup_path = 'not-required:fresh-create'"));
@@ -187,7 +187,7 @@ public sealed class SqliteSchemaMigratorTests
 
             var result = await new SqliteSchemaMigrator().MigrateAsync(databasePath);
 
-            Assert.Equal([1, 2], result.AppliedVersions);
+            Assert.Equal([1, 2, 3, 4, 5], result.AppliedVersions);
             Assert.NotNull(result.BackupPath);
             Assert.True(File.Exists(result.BackupPath));
             Assert.NotNull(result.IdentityReport);

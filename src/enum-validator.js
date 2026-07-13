@@ -65,6 +65,27 @@ function validateEnumData(data, options = {}) {
   const buildings = normalizeSelection(data, options.buildings || options.selectedBuildings);
   const errors = [];
   const warnings = [];
+  const requested = options.buildings || options.selectedBuildings || [];
+  const present = new Set(buildings.map(building => building.building));
+  for (const building of requested) {
+    if (!present.has(building)) errors.push(`${building}: 请求采集的楼栋未出现在结果中。`);
+  }
+  for (const building of buildings) {
+    if (building.err) errors.push(`${building.building}: 楼栋采集失败: ${building.err}`);
+    for (const subArea of building.subAreas || []) {
+      if (subArea.err && subArea.err !== 'bm inline') {
+        errors.push(`${building.building} F${subArea.floor ?? '-'} ${subArea.text || '-'}: 子区采集失败: ${subArea.err}`);
+      }
+      for (const page of subArea.pages || []) {
+        if (page.err) {
+          errors.push(`${building.building} F${subArea.floor ?? '-'} ${subArea.text || '-'} ${page.page || '-'}: 页面采集失败: ${page.err}`);
+        }
+        if (page.stale) {
+          errors.push(`${building.building} F${subArea.floor ?? '-'} ${subArea.text || '-'} ${page.page || '-'}: stale 页面未确认更新。`);
+        }
+      }
+    }
+  }
   const stats = buildings.map(buildingStats).sort((a, b) => BLDG_ORDER.indexOf(a.building) - BLDG_ORDER.indexOf(b.building));
 
   if (!stats.length) {

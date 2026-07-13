@@ -2,6 +2,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
+using Microsoft.UI.Xaml.Input;
+using Windows.System;
 using EmsScout.Desktop.Services;
 using EmsScout.Desktop.ViewModels;
 
@@ -36,6 +38,13 @@ public sealed partial class DataPage : Page
         await ViewModel.ApplyFiltersAsync();
     }
 
+    private async void DeviceName_KeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (e.Key != VirtualKey.Enter) return;
+        e.Handled = true;
+        await ViewModel.ApplyFiltersAsync();
+    }
+
     private async void BuildingFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         await ViewModel.ApplyBuildingSelectionAsync();
@@ -56,6 +65,27 @@ public sealed partial class DataPage : Page
         await ViewModel.RefreshAsync();
     }
 
+    private async void RetryLoad_Click(object sender, RoutedEventArgs e)
+    {
+        await ViewModel.RefreshAsync();
+    }
+
+    private async void QuickFilter_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is FrameworkElement { Tag: string quickFilter })
+        {
+            await ViewModel.ApplyQuickFilterAsync(quickFilter);
+        }
+    }
+
+    private void DataContext_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ComboBox comboBox && comboBox.SelectedItem is DataContextOption option)
+        {
+            ViewModel.DataContext.Select(option);
+        }
+    }
+
     private async void PreviousPage_Click(object sender, RoutedEventArgs e)
     {
         await ViewModel.MovePreviousAsync();
@@ -68,7 +98,24 @@ public sealed partial class DataPage : Page
 
     private async void Export_Click(object sender, RoutedEventArgs e)
     {
-        await ViewModel.ExportAsync();
+        if (!ViewModel.CanExport)
+        {
+            return;
+        }
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "确认导出当前筛选",
+            Content = ViewModel.ExportPreviewText,
+            PrimaryButtonText = "导出 Excel",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Primary,
+        };
+        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+        {
+            await ViewModel.ExportAsync();
+        }
     }
 
     private void OpenExportLocation_Click(object sender, RoutedEventArgs e)

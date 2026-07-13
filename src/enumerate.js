@@ -6,10 +6,12 @@ const fs = require('fs');
 const path = require('path');
 const { checkCardQuality, getZone } = require('./rules');
 const { createCapturePolling } = require('./capture-polling');
-const { auditCollectedOutput, pageFromData } = require('./capture-result');
+const { auditCollectedOutput, pageFromData, summarizeCardStates } = require('./capture-result');
 const { validateEnumData, formatValidation } = require('./enum-validator');
 const { matchesEmsPageUrl, parseEnumerateOptions } = require('./enumerate-options');
 const { createEnumerationOutputStore } = require('./enumerate-output');
+const { cardIdentity, tabIsActive } = require('./page-navigation');
+const { sanitizeErrorForDisplay, sanitizeUrlForDisplay } = require('./url-sanitizer');
 const { log: loggerLog, setLevel, setCategories, enableFileLog, close, LEVELS, CATEGORIES } = require('./logger');
 // Compat: old-style log() defaults to INFO+ENUM
 const LOG = { I: m => loggerLog(LEVELS.INFO, 'ENUM', m), D: (c, m, x) => loggerLog(LEVELS.DEBUG, c, m, x), 
@@ -47,7 +49,6 @@ if (LOG_FILE) enableFileLog(OUT_DIR);
 
 // Output: append mode keeps not-yet-recaptured buildings; writes are atomic.
 const outputStore = createEnumerationOutputStore({ outputFile: OUT_FILE, append: APPEND });
-const saveOutput = buildingResult => outputStore.saveBuilding(buildingResult);
 
 // ===== Helpers =====
 function pause(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -299,19 +300,7 @@ async function injectHelpers(page) {
         });
 
         const switchImgs = imgList.filter(i => i.w >= 38 && i.w <= 50 && i.h >= 17 && i.h <= 30);
-        const switchByHref = {};
-        for (const si of switchImgs) {
-          if (!si.href) continue;
-          if (!switchByHref[si.href]) switchByHref[si.href] = 0;
-          switchByHref[si.href]++;
-        }
-        const hrefs = Object.keys(switchByHref);
         let offHref = null, onHref = null;
-        if (hrefs.length > 1) {
-          hrefs.sort((a, b) => switchByHref[b] - switchByHref[a]);
-          offHref = hrefs[0];
-          onHref = hrefs[1];
-        }
 
         // Indicator images (29x27) for comm status
         const indicatorImgs = imgList.filter(i => i.w >= 25 && i.w <= 33 && i.h >= 23 && i.h <= 31);
@@ -548,7 +537,7 @@ async function injectHelpers(page) {
                 }
               }
               if (f.fan) {
-                if (card.fan === '-' || /^\d$/.test(f.fan)) {
+                if (card.fan === '-' || /^\d$/.test(card.fan)) {
                   if (card.fan !== f.fan) loggerLog(LEVELS.DEBUG, 'VUE', `fan ${card.fan}→${f.fan}`, { card: card.name });
                   card.fan = f.fan;
                 }
@@ -781,8 +770,8 @@ async function healthCheck(page) {
 async function recoverFromCrash(page, buildingName, partialResult) {
   log('!!! PAGE CRASHED — auto-reloading...');
   if (partialResult) {
-    saveOutput(partialResult);
-    log(`  Saved ${partialResult.subAreas.length} sub-areas`);
+    const recoveryFile = outputStore.saveRecovery(partialResult);
+    log(`  Saved ${partialResult.subAreas.length} sub-areas to recovery snapshot: ${recoveryFile}`);
   }
   // Reload page programmatically
   try { await page.evaluate(() => location.reload()); } catch {}
@@ -977,8 +966,8 @@ async function verifyCardIntegrity(page) {
       }
       return {
         count: data.cards ? data.cards.length : 0,
-        onCount: data.onHref ? data.cards.filter(c => c.indicator === data.onHref).length : -1,
-        offCount: data.offHref ? data.cards.filter(c => c.indicator === data.offHref).length : -1,
+        onCount: data.cards ? data.cards.filter(c => c.comm === '开机').length : 0,
+        offCount: data.cards ? data.cards.filter(c => c.comm === '关机').length : 0,
         issues,
         placeholderCards: data.cards ? data.cards.filter(c => c.name && c.name.startsWith('0-')).map(c => c.name) : []
       };
@@ -994,15 +983,11 @@ async function captureEnhancedSnapshot(page, label) {
   const pageState = await verifyPageState(page);
   const cardIntegrity = await verifyCardIntegrity(page);
   let cards = [];
-  let onHref = '';
-  let offHref = '';
   let layout = '';
 
   try {
     const data = await page.evaluate(() => window.__ems.extractCards());
     cards = data.cards || [];
-    onHref = data.onHref || '';
-    offHref = data.offHref || '';
     layout = data.layout || '';
   } catch (e) {
     // fallback
@@ -1015,6 +1000,7 @@ async function captureEnhancedSnapshot(page, label) {
     indicatorFreq[src] = (indicatorFreq[src] || 0) + 1;
   }
 
+  const stateSummary = summarizeCardStates(cards);
   return {
     label,
     ts: new Date().toISOString(),
@@ -1022,14 +1008,14 @@ async function captureEnhancedSnapshot(page, label) {
     pageState,
     cardIntegrity,
     cards,
-    onHref,
-    offHref,
     layout,
     indicatorFreq,
     cardCount: cards.length,
-    // Determine ON count using onHref frequency
-    onCount: onHref ? (indicatorFreq[onHref] || 0) : 0,
-    offCount: offHref ? (indicatorFreq[offHref] || 0) : 0
+    onCount: stateSummary.counts.开机,
+    offCount: stateSummary.counts.关机,
+    offlineCount: stateSummary.counts.离线,
+    unknownCount: stateSummary.counts.未知,
+    cardsByState: stateSummary.cardsByState
   };
 }
 
@@ -1192,7 +1178,7 @@ async function main() {
   let browser, context, page;
 
   if (USE_AUTO_LAUNCH) {
-    log(`Mode: Auto-launch → Edge (EMS ${EMS_URL})`);
+    log(`Mode: Auto-launch → Edge (EMS ${sanitizeUrlForDisplay(EMS_URL)})`);
     const EDGE_PROFILE = path.join(OUT_DIR, '.edge_profile');
     try {
       fs.mkdirSync(EDGE_PROFILE, { recursive: true });
@@ -1210,26 +1196,26 @@ async function main() {
       await ensureLoggedInOrExit(page);
       log('页面已加载，开始采集。');
     } catch (e) {
-      log('Auto-launch failed:', e.message);
+      log('Auto-launch failed:', sanitizeErrorForDisplay(e, [EMS_URL]));
       log('请确认 Microsoft Edge 已安装。');
       log(`降级提示: 可使用 --edge 模式（先手动打开 ${CDP_URL}）。`);
       process.exit(1);
     }
   } else if (USE_CDP) {
-    log(`Mode: CDP → Edge (${CDP_URL}, EMS ${EMS_URL})`);
+    log(`Mode: CDP → Edge (${CDP_URL}, EMS ${sanitizeUrlForDisplay(EMS_URL)})`);
     try { browser = await chromium.connectOverCDP(CDP_URL); }
     catch (e) { log('Cannot connect to Edge CDP at', CDP_URL); process.exit(1); }
     context = browser.contexts()[0];
     const pages = context.pages();
     page = pages.find(p => isEmsPageUrl(p.url())) || pages[0];
-    log('Page:', page.url());
+    log('Page:', sanitizeUrlForDisplay(page.url()));
     if (!isEmsPageUrl(page.url())) {
       await page.goto(EMS_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
     }
     await page.waitForLoadState('networkidle').catch(() => pause(3000));
     await ensureLoggedInOrExit(page);
   } else {
-    log(`Mode: Headless Chromium (${EMS_URL}, --edge to use existing Edge CDP)`);
+    log(`Mode: Headless Chromium (${sanitizeUrlForDisplay(EMS_URL)}, --edge to use existing Edge CDP)`);
     browser = await chromium.launch({ headless: !process.argv.includes('--no-headless') });
     context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
     page = await context.newPage();
@@ -1309,14 +1295,8 @@ async function main() {
 
     // Output detailed breakdown
     log(`--- Card breakdown ---`);
-    const byState = {};
-    for (const c of snapshot.cards) {
-      const state = c.indicator === snapshot.onHref ? '开机'
-        : c.indicator === snapshot.offHref ? '关机' : '离线';
-      if (!byState[state]) byState[state] = [];
-      byState[state].push(c);
-    }
-    for (const [state, cards] of Object.entries(byState)) {
+    for (const [state, cards] of Object.entries(snapshot.cardsByState)) {
+      if (cards.length === 0) continue;
       log(`${state} (${cards.length}):`);
       for (const c of cards) {
         log(`  ${c.name}${c.area ? ' [' + c.area + ']' : ''}${c.publicArea ? ' (公区)' : ''}`);
@@ -1341,7 +1321,11 @@ async function main() {
     for (const t of RECAPTURE_TARGETS) {
       log(`--- Recapture ${t.building} x=${t.x} y=${t.y} ---`);
       const bldg = BUILDINGS.find(b => b.building === t.building);
-      if (!bldg) { log(`  Unknown building ${t.building}`); continue; }
+      if (!bldg) {
+        log(`  Unknown building ${t.building}`);
+        recaptureResult.targets.push({ ...t, err: 'unknown building' });
+        continue;
+      }
       const clickedMenu = await clickMenu(page, bldg.menuMatch);
       if (!clickedMenu) { log(`  Menu not found`); recaptureResult.targets.push({ ...t, err: 'menu' }); continue; }
       log(`  Menu: ${clickedMenu}`);
@@ -1384,7 +1368,11 @@ async function main() {
               if (!w || !w.__vue__) return -1;
               return Object.keys(w.__vue__.$data.websocketDataProp || {}).length;
             }).catch(() => -1);
-            await page.evaluate((id) => window.__ems.clickById(id), curBtns['下页']);
+            const clickedNext = await page.evaluate((id) => window.__ems.clickById(id), curBtns['下页']);
+            if (!clickedNext) {
+              pages.push({ page: prefix + pageNum + '页', err: 'next page click failed', cards: [] });
+              break;
+            }
             await pause(W.PAGE_CLICK);
             if (!(await waitForReady(page))) break;
             await waitForPageSwitch(page, beforeCount);
@@ -1478,7 +1466,11 @@ async function main() {
                 if (!w || !w.__vue__) return -1;
                 return Object.keys(w.__vue__.$data.websocketDataProp || {}).length;
               }).catch(() => -1);
-              await page.evaluate((id) => window.__ems.clickById(id), bid);
+              const clickedPage = await page.evaluate((id) => window.__ems.clickById(id), bid);
+              if (!clickedPage) {
+                pages.push({ page: prefix + plabel, err: 'page button click failed', cards: [] });
+                continue;
+              }
               await pause(W.PAGE_CLICK);
               if (!(await waitForReady(page))) continue;
               await waitForPageSwitch(page, beforeCount);
@@ -1542,12 +1534,23 @@ async function main() {
             log(`    Sub-tab ${tab.txt} — already active, skipping`);
             continue;
           }
-          if (tab.mainDom)
-            await page.evaluate((t) => window.__ems.clickMainDomTab(t), tab);
-          else
-            await page.evaluate((t) => window.__ems.clickShadowTab(t.id), tab);
+          const clickedTab = tab.mainDom
+            ? await page.evaluate((t) => window.__ems.clickMainDomTab(t), tab)
+            : await page.evaluate((t) => window.__ems.clickShadowTab(t.id), tab);
+          if (!clickedTab) {
+            saRes.err = `sub-tab click failed: ${tab.txt}`;
+            continue;
+          }
           await pause(W.PAGE_CLICK);
-          if (!(await waitForReady(page))) continue;
+          if (!(await waitForReady(page))) {
+            saRes.err = `sub-tab not ready: ${tab.txt}`;
+            continue;
+          }
+          const activeTabs = await page.evaluate(() => window.__ems.findSubTabs());
+          if (!tabIsActive(activeTabs, tab)) {
+            saRes.err = `sub-tab activation not confirmed: ${tab.txt}`;
+            continue;
+          }
           const tabPages = await capturePages(tab.txt + '/');
           // Skip if cards match default view
           const tabCardNames = tabPages.flatMap(p => p.cards || []).map(c => c.name).sort().join(',');
@@ -1628,20 +1631,59 @@ async function main() {
     fs.writeFileSync(recOut, JSON.stringify(recaptureResult, null, 2), 'utf-8');
     log(`Saved recapture result: ${recOut}`);
     const targetErrors = recaptureResult.targets.filter(t => t.err);
-    const qualityGateIssues = auditCollectedOutput({
+    const targetQualityGateIssues = auditCollectedOutput({
       buildings: recaptureResult.targets
         .filter(t => t.result)
         .map(t => ({ building: t.building, subAreas: [t.result] })),
     });
-    for (const issue of qualityGateIssues.slice(0, 20)) {
+    for (const issue of targetQualityGateIssues.slice(0, 20)) {
       loggerLog(LEVELS.ERROR, 'QUALITY', `RECAPTURE QUALITY GATE FAIL ${issue.building} F${issue.floor} ${issue.subArea} ${issue.page}: ${issue.details} reason=${issue.reason}`);
     }
+
+    const capturedByBuilding = new Map();
+    for (const targetResult of recaptureResult.targets.filter(targetResult => targetResult.result)) {
+      if (!capturedByBuilding.has(targetResult.building)) {
+        capturedByBuilding.set(targetResult.building, {
+          building: targetResult.building,
+          subAreas: [],
+        });
+      }
+      capturedByBuilding.get(targetResult.building).subAreas.push(targetResult.result);
+    }
+    const capturedBuildings = [...capturedByBuilding.values()];
+    let mergedValidation = null;
+    let mergedQualityGateIssues = [];
+    let mergeFailure = null;
+    if (targetErrors.length === 0 && targetQualityGateIssues.length === 0) {
+      try {
+        outputStore.saveRecapture(capturedBuildings, {
+          validate: (mergedOutput, selectedBuildings) => {
+            mergedValidation = validateEnumData(mergedOutput, { buildings: selectedBuildings });
+            mergedQualityGateIssues = auditCollectedOutput({
+              buildings: mergedOutput.buildings.filter(building => selectedBuildings.includes(building.building)),
+            });
+            return { ok: mergedValidation.ok && mergedQualityGateIssues.length === 0 };
+          },
+        });
+      } catch (error) {
+        mergeFailure = error;
+      }
+    }
+
+    if (mergedValidation) {
+      for (const line of formatValidation(mergedValidation)) log(`  ${line}`);
+    }
+    for (const issue of mergedQualityGateIssues.slice(0, 20)) {
+      loggerLog(LEVELS.ERROR, 'QUALITY', `RECAPTURE MERGED QUALITY FAIL ${issue.building} F${issue.floor} ${issue.subArea} ${issue.page}: ${issue.details} reason=${issue.reason}`);
+    }
     await browser.close();
-    if (targetErrors.length || qualityGateIssues.length) {
+    if (targetErrors.length || targetQualityGateIssues.length || mergeFailure) {
       if (targetErrors.length) log(`Recapture target failures: ${targetErrors.length}`);
-      if (qualityGateIssues.length) log(`Recapture quality failures: ${qualityGateIssues.length}`);
+      if (targetQualityGateIssues.length) log(`Recapture quality failures: ${targetQualityGateIssues.length}`);
+      if (mergeFailure) log(`Recapture merge rejected: ${mergeFailure.message}`);
       process.exit(2);
     }
+    log(`Saved merged recapture: ${OUT_FILE}`);
     return;
   }
 
@@ -1704,7 +1746,7 @@ async function main() {
       visited.add(visitKey);
 
       // BM is handled as a special page within 6号 A座 1F, not as a standalone sub-area
-      if (bldg.building === '6号' && target.floor === -2) { bRes.subAreas.push({ idx: saIdx, floor: -2, text: target.text, err: 'bm inline' }); continue; }
+      if (bldg.building === '6号' && target.floor === -2) { bRes.subAreas.push({ idx: saIdx, floor: -2, text: target.text, status: 'captured_inline' }); continue; }
 
       // Page health check — skip first sub-area (page still loading after menu click)
       if (saIdx > 0 && !(await healthCheck(page))) {
@@ -1914,14 +1956,12 @@ async function main() {
             const cn = ['', '一','二','三','四','五','六','七','八','九','十'][pageNum] || pageNum.toString();
             // Validate: page switch must produce different cards
             const stale = prevCards.length > 0 && data.cards.length > 0 &&
-              data.cards.map(c => c.name).join(',') === prevCards.map(c => c.name).join(',');
+              cardIdentity(data.cards) === cardIdentity(prevCards);
             const pageEntry = pageFromData(prefix + cn + '页', data);
             if (stale) {
               pageEntry.stale = true;
               loggerLog(LEVELS.WARN, 'ENUM', `${prefix + cn}页 data unchanged — page switch may have failed, retrying...`);
-              // Retry: click 下页 again up to 2 times with 1.5s wait
               for (let r = 0; r < 2; r++) {
-                if (!(await page.evaluate((id) => window.__ems.clickById(id), bid))) break;
                 await pause(1500);
                 if (!(await waitForReady(page))) break;
                 await waitForDataReady(page);
@@ -1938,7 +1978,7 @@ async function main() {
                     return window.__ems.extractCards();
                   }).catch(() => ({ cards: [], count: 0 }));
                 }
-                const stillStale = dataRetry.cards.length > 0 && dataRetry.cards.map(c => c.name).join(',') === prevCards.map(c => c.name).join(',');
+                const stillStale = dataRetry.cards.length > 0 && cardIdentity(dataRetry.cards) === cardIdentity(prevCards);
                 if (!stillStale && dataRetry.cards.length > 0) {
                   Object.assign(pageEntry, pageFromData(prefix + cn + '页', dataRetry));
                   pageEntry.stale = false;
@@ -1951,7 +1991,7 @@ async function main() {
               }
             }
             results.push(pageEntry);
-            prevCards = data.cards;
+            prevCards = pageEntry.cards || [];
             pageNum++;
             curBtns = await page.evaluate(() => window.__ems.findPageBtns());
           }
@@ -2186,17 +2226,19 @@ async function main() {
             }
             // Validate page switch
             const stale = prevCards.length > 0 && data.cards.length > 0 &&
-              data.cards.map(c => c.name).join(',') === prevCards.map(c => c.name).join(',');
+              cardIdentity(data.cards) === cardIdentity(prevCards);
             const pEntry = pageFromData(prefix + plabel, data);
             if (stale) {
               pEntry.stale = true;
               loggerLog(LEVELS.WARN, 'ENUM', `${prefix + plabel} data unchanged — page switch may have failed, retrying...`);
               // Retry: click the same page button up to 2 times
               for (let r = 0; r < 2; r++) {
+                const retryButtons = await page.evaluate(() => window.__ems.findPageBtns()).catch(() => ({}));
+                const retryButtonId = retryButtons[plabel];
                 const retryClicked = await page.evaluate((id) => {
                   if (!window.__ems || !window.__ems.clickById) return false;
                   return window.__ems.clickById(id);
-                }, btnId).catch(() => false);
+                }, retryButtonId).catch(() => false);
                 if (!retryClicked) break;
                 await pause(1500);
                 if (!(await waitForReady(page))) break;
@@ -2214,7 +2256,7 @@ async function main() {
                     return window.__ems.extractCards();
                   }).catch(() => ({ cards: [], count: 0 }));
                 }
-                const stillStale = dataRetry.cards.length > 0 && dataRetry.cards.map(c => c.name).join(',') === prevCards.map(c => c.name).join(',');
+                const stillStale = dataRetry.cards.length > 0 && cardIdentity(dataRetry.cards) === cardIdentity(prevCards);
                 if (!stillStale && dataRetry.cards.length > 0) {
                   Object.assign(pEntry, pageFromData(prefix + plabel, dataRetry));
                   pEntry.stale = false;
@@ -2227,7 +2269,7 @@ async function main() {
               }
             }
             results.push(pEntry);
-            prevCards = data.cards;
+            prevCards = pEntry.cards || [];
           }
         }
         return results;
@@ -2252,8 +2294,20 @@ async function main() {
           const tabClicked = tab.mainDom
             ? await page.evaluate((t) => window.__ems.clickMainDomTab(t), tab)
             : await page.evaluate((t) => window.__ems.clickShadowTab(t.id), tab);
+          if (!tabClicked) {
+            saRes.err = `sub-tab click failed: ${tab.txt}`;
+            continue;
+          }
           await pause(W.PAGE_CLICK);
-          await waitForReady(page);
+          if (!(await waitForReady(page))) {
+            saRes.err = `sub-tab not ready: ${tab.txt}`;
+            continue;
+          }
+          const activeTabs = await page.evaluate(() => window.__ems.findSubTabs());
+          if (!tabIsActive(activeTabs, tab)) {
+            saRes.err = `sub-tab activation not confirmed: ${tab.txt}`;
+            continue;
+          }
           const tabPages = await collectPage(tab.txt + '/');
           // Skip if cards match default view
           const tabCardNames = tabPages.flatMap(p => p.cards || []).map(c => c.name).sort().join(',');
@@ -2345,8 +2399,7 @@ async function main() {
     process.exit(2);
   }
 
-  // Save each building (append mode)
-  for (const bRes of allResults) saveOutput(bRes);
+  outputStore.saveRun(allResults);
   log(`Saved: ${OUT_FILE}`);
 
   // Summary
@@ -2360,4 +2413,4 @@ async function main() {
   await browser.close();
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+main().catch(e => { console.error(sanitizeErrorForDisplay(e, [EMS_URL])); process.exit(1); });

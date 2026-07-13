@@ -37,7 +37,7 @@ public sealed class SqliteQualityAuditService : INativeQualityAuditService
 
         var databasePath = Path.GetFullPath(resolvedPath);
         var data = await _reader
-            .ReadAsync(databasePath, request.SourceKind, cancellationToken)
+            .ReadAsync(databasePath, request.SourceKind, request.RunId, cancellationToken)
             .ConfigureAwait(false);
         if (data is null)
         {

@@ -133,7 +133,7 @@ public sealed class SqliteDeviceReadRepository(
 
         return new DeviceFilterOptions(
             CountOptions(filtered, row => row.Building),
-            CountOptions(filtered, row => row.CommunicationStatusText, sortByCountDescending: true),
+            CountOptions(filtered, row => row.OperatingStatusText, sortByCountDescending: true),
             CountOptions(filtered, row => row.FloorLabel, sortKey: option => FloorSortValue(option.Value)),
             CountOptions(filtered, row => row.SubArea),
             PageOptions(filtered),
@@ -320,14 +320,20 @@ public sealed class SqliteDeviceReadRepository(
         }
 
         var expected = communicationState.Trim();
-        if (expected.Equals("未知", StringComparison.OrdinalIgnoreCase))
+        var comm = "IFNULL(NULLIF(TRIM(c.comm), ''), '未知')";
+        var deviceSwitch = "UPPER(IFNULL(TRIM(c.switch), ''))";
+        clauses.Add(expected switch
         {
-            clauses.Add("IFNULL(NULLIF(TRIM(c.comm), ''), '未知') = '未知'");
-            return;
+            "离线" => $"{comm} = '离线'",
+            "开机" => $"({comm} = '开机' OR ({comm} NOT IN ('离线', '关机', '开机') AND {deviceSwitch} = 'ON'))",
+            "关机" => $"({comm} = '关机' OR ({comm} NOT IN ('离线', '关机', '开机') AND {deviceSwitch} = 'OFF'))",
+            "未知" => $"({comm} NOT IN ('离线', '关机', '开机') AND {deviceSwitch} NOT IN ('ON', 'OFF'))",
+            _ => $"{comm} = $communication",
+        });
+        if (expected is not ("离线" or "开机" or "关机" or "未知"))
+        {
+            parameters["$communication"] = expected;
         }
-
-        clauses.Add("IFNULL(NULLIF(TRIM(c.comm), ''), '未知') = $communication");
-        parameters["$communication"] = expected;
     }
 
     private static void AddExactTextClause(
@@ -434,7 +440,7 @@ public sealed class SqliteDeviceReadRepository(
                 .ThenBy(row => row.Name, StringComparer.OrdinalIgnoreCase),
             "name" => rows.OrderBy(row => row.Name, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(row => row.Building, StringComparer.OrdinalIgnoreCase),
-            "comm" => rows.OrderBy(row => row.CommunicationStatusText, StringComparer.OrdinalIgnoreCase)
+            "comm" => rows.OrderBy(row => row.OperatingStatusText, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(row => row.Building, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(row => row.Name, StringComparer.OrdinalIgnoreCase),
             "area" => rows.OrderBy(row => row.AreaType, StringComparer.OrdinalIgnoreCase)

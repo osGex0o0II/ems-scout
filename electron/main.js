@@ -8,6 +8,10 @@ const { createAppTray } = require('./tray');
 
 const PORT = Number(process.env.EMS_PANEL_PORT || DEFAULT_PORT);
 
+if (process.env.EMS_ENABLE_LEGACY_PANEL !== '1') {
+  console.error('legacy-electron-desktop is disabled by default. Set EMS_ENABLE_LEGACY_PANEL=1 to run intentionally.');
+  app.whenReady().then(() => app.exit(2));
+} else {
 let mainWindow = null;
 let appTray = null;
 let quitRequested = false;
@@ -78,4 +82,5 @@ if (!singleInstance) {
     stopServer();
     appTray = null;
   });
+}
 }

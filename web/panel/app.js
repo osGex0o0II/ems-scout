@@ -113,12 +113,29 @@ function textOrDash(value) {
   return raw || '-';
 }
 
+let panelTokenPromise;
+
+async function panelToken() {
+  if (!panelTokenPromise) {
+    panelTokenPromise = fetch('/api/session', { cache: 'no-store' })
+      .then(async res => {
+        const payload = await res.json();
+        if (!res.ok || !payload.data || !payload.data.token) throw new Error('无法建立本地面板会话');
+        return payload.data.token;
+      });
+  }
+  return panelTokenPromise;
+}
+
 async function api(path, options = {}) {
   const init = { ...options };
+  const headers = new Headers(init.headers || {});
+  headers.set('x-ems-panel-token', await panelToken());
   if (init.body && typeof init.body !== 'string') {
-    init.headers = { 'content-type': 'application/json', ...(init.headers || {}) };
+    headers.set('content-type', 'application/json');
     init.body = JSON.stringify(init.body);
   }
+  init.headers = headers;
   const res = await fetch(path, init);
   const data = await res.json();
   if (!res.ok || data.ok === false) throw new Error(data.error || res.statusText);

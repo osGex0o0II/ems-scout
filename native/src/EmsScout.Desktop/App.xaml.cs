@@ -1,7 +1,10 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
+using Microsoft.Windows.AppLifecycle;
+using Windows.ApplicationModel.Activation;
 using EmsScout.Application.Collection;
 using EmsScout.Application;
+using EmsScout.Application.Attention;
 using EmsScout.Application.Devices;
 using EmsScout.Application.Groups;
 using EmsScout.Application.Logging;
@@ -33,11 +36,17 @@ public partial class App : Microsoft.UI.Xaml.Application
     public App()
     {
         InitializeComponent();
-        Services = ConfigureServices();
     }
 
     protected override async void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
+        var appActivationArguments = AppInstance.GetCurrent().GetActivatedEventArgs();
+        var desktopLaunchArguments = appActivationArguments.Data is ILaunchActivatedEventArgs launchArguments
+            ? launchArguments.Arguments
+            : args.Arguments;
+        var launchOptions = AppLaunchOptions.Parse(desktopLaunchArguments);
+        Services = ConfigureServices(launchOptions);
+
         string? startupFailure = null;
         try
         {
@@ -51,10 +60,14 @@ public partial class App : Microsoft.UI.Xaml.Application
         }
 
         _window = new MainWindow(startupFailure);
+        _window.Closed += (_, _) =>
+        {
+            if (Services is IDisposable disposable) disposable.Dispose();
+        };
         _window.Activate();
     }
 
-    private static IServiceProvider ConfigureServices()
+    private static IServiceProvider ConfigureServices(AppLaunchOptions launchOptions)
     {
         var workspaceRoot = WorkspaceLocator.LocateRepositoryRoot();
 
@@ -63,7 +76,9 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<IApplicationLogger>(provider => new NdjsonApplicationLogger(
             Path.Combine(AppStorageDefaults.ProductDirectory, "logs"),
             enabled: () => provider.GetRequiredService<AppSettingsService>().Load().SaveNdjsonLog));
-        services.AddSingleton<AppSettingsService>();
+        services.AddSingleton(launchOptions.SettingsPathOverride is null
+            ? new AppSettingsService()
+            : new AppSettingsService(launchOptions.SettingsPathOverride));
         services.AddSingleton(provider => new AppDataPathService(
             workspaceRoot,
             provider.GetRequiredService<AppSettingsService>()));
@@ -73,6 +88,8 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<ApplicationOperationState>();
         services.AddSingleton<AppUiSettingsService>();
         services.AddSingleton<IInventorySnapshotSource>(provider => new SqliteInventorySnapshotSource(
+            () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
+        services.AddSingleton<IRecaptureLocationSource>(provider => new SqliteRecaptureLocationSource(
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
         services.AddSingleton<IRealtimeDetailSource>(provider => new RealtimeLatestJsonSource(
             workspaceRoot,
@@ -104,19 +121,23 @@ public partial class App : Microsoft.UI.Xaml.Application
             () => provider.GetRequiredService<AppDataPathService>().QualityOutputDirectory));
         services.AddSingleton<ICollectionRunRepository>(provider => new SqliteCollectionRunRepository(
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
+        services.AddSingleton<IAttentionIssueRepository>(provider => new SqliteAttentionIssueRepository(
+            () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
         services.AddSingleton<IAreaGroupRepository>(provider => new SqliteAreaGroupRepository(
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
         services.AddSingleton<NavigationService>();
+        services.AddSingleton<DataContextService>();
         services.AddSingleton<INavigationService>(provider => provider.GetRequiredService<NavigationService>());
         services.AddSingleton<WindowHandleProvider>();
         services.AddSingleton<DashboardOverviewService>();
         services.AddSingleton(new NodeCollectionTaskRunner(workspaceRoot));
         services.AddSingleton<CollectionEnvironmentProbe>();
-        services.AddTransient<HomeViewModel>();
-        services.AddTransient<CollectionTaskViewModel>();
-        services.AddTransient<DataViewModel>();
-        services.AddTransient<AuditViewModel>();
+        services.AddSingleton<HomeViewModel>();
+        services.AddSingleton<CollectionTaskViewModel>();
+        services.AddSingleton<DataViewModel>();
+        services.AddSingleton<AuditViewModel>();
         services.AddTransient<GroupsViewModel>();
+        services.AddTransient<DateManagementViewModel>();
         services.AddTransient<SettingsViewModel>();
         services.AddTransient<DiagnosticsViewModel>();
         return services.BuildServiceProvider();

@@ -1,4 +1,4 @@
-param(
+﻿param(
   [string]$OutputDirectory,
   [string]$CacheDirectory = (Join-Path ([System.IO.Path]::GetTempPath()) 'ems-scout-sidecar-cache'),
   [switch]$SkipSmoke
@@ -10,12 +10,18 @@ $NodeArchive = "node-$NodeVersion-win-x64.zip"
 $NodeArchiveSha256 = '0ae68406b42d7725661da979b1403ec9926da205c6770827f33aac9d8f26e821'
 $NodeDownloadUrl = "https://nodejs.org/dist/$NodeVersion/$NodeArchive"
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+. (Join-Path $PSScriptRoot 'prepare-sidecar-helpers.ps1')
 
 if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
   $OutputDirectory = Join-Path $Root 'artifacts\sidecar\win-x64'
 }
 $OutputDirectory = [System.IO.Path]::GetFullPath($OutputDirectory)
 $CacheDirectory = [System.IO.Path]::GetFullPath($CacheDirectory)
+
+$ownedOutputRoot = Join-Path $Root 'artifacts\sidecar'
+$ownedCacheRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'ems-scout-sidecar-cache'
+Assert-SafeOwnedDirectory $OutputDirectory 'Sidecar output' $ownedOutputRoot
+Assert-SafeOwnedDirectory $CacheDirectory 'Sidecar cache' $ownedCacheRoot
 
 function Assert-File([string]$Path) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
@@ -107,7 +113,9 @@ $applicationFiles = @(
   'src\enumerate-options.js',
   'src\enumerate-output.js',
   'src\logger.js',
+  'src\page-navigation.js',
   'src\rules.js',
+  'src\url-sanitizer.js',
   'scripts\audit-contracts.js',
   'scripts\audit-realtime-data.js',
   'scripts\collect-building-realtime-batch.js',
@@ -124,6 +132,14 @@ $nodeModulesDirectory = Join-Path $appDirectory 'node_modules'
 New-Item -ItemType Directory -Force -Path $nodeModulesDirectory | Out-Null
 Copy-Item -LiteralPath (Join-Path $Root 'node_modules\playwright') -Destination $nodeModulesDirectory -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $Root 'node_modules\playwright-core') -Destination $nodeModulesDirectory -Recurse -Force
+
+# Recorder, trace-viewer, and dashboard assets are development tooling. Their
+# content-hashed names are parsed as invalid PRI qualifiers by the MSIX build.
+$playwrightViteDirectory = Join-Path $nodeModulesDirectory 'playwright-core\lib\vite'
+if (Test-Path -LiteralPath $playwrightViteDirectory) {
+  Assert-SafeOwnedDirectory $playwrightViteDirectory 'Playwright tooling prune' $OutputDirectory
+  Remove-Item -LiteralPath $playwrightViteDirectory -Recurse -Force
+}
 
 $playwrightPackage = Get-Content -LiteralPath (Join-Path $Root 'node_modules\playwright\package.json') -Raw | ConvertFrom-Json
 $manifestPath = Join-Path $OutputDirectory 'payload-manifest.json'
@@ -162,6 +178,8 @@ require('./src/capture-quality');
 require('./src/capture-result');
 require('./src/enumerate-options');
 require('./src/enumerate-output');
+require('./src/page-navigation');
+require('./src/url-sanitizer');
 process.stderr.write('playwright-snapshot-and-enumerator-modules-ready\n');
 "@
   Push-Location $appDirectory

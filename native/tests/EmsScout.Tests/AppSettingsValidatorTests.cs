@@ -7,6 +7,7 @@ public sealed class AppSettingsValidatorTests
     [Theory]
     [InlineData("not-a-url", "EMS 地址")]
     [InlineData("ftp://example.local/ui", "EMS 地址")]
+    [InlineData("https://user:secret@example.local/ui", "用户信息")]
     public void RejectsInvalidEmsUrl(string emsUrl, string expectedMessage)
     {
         var settings = new AppSettings { EmsUrl = emsUrl };

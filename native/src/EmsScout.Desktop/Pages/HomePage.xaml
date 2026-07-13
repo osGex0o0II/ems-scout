@@ -17,10 +17,17 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel Spacing="3">
-                    <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="EMS Scout 运维总览" />
+                    <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="工作台" />
                     <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.PageStatus, Mode=OneWay}" />
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                    <ComboBox
+                        Width="250"
+                        Header="数据批次"
+                        DisplayMemberPath="DisplayText"
+                        ItemsSource="{x:Bind ViewModel.DataContext.Options, Mode=OneWay}"
+                        SelectedItem="{x:Bind ViewModel.DataContext.Selected, Mode=TwoWay}"
+                        SelectionChanged="DataContext_SelectionChanged" />
                     <Button
                         VerticalAlignment="Top"
                         Click="Refresh_Click"
@@ -53,48 +60,95 @@
                     </StackPanel>
                     <ListView
                         Grid.Row="1"
-                        IsItemClickEnabled="True"
                         ItemsSource="{x:Bind ViewModel.Risks, Mode=OneWay}"
-                        ItemClick="Risks_ItemClick"
-                        SelectionMode="None">
+                        SelectionMode="None"
+                        ScrollViewer.HorizontalScrollBarVisibility="Auto">
                         <ListView.Header>
-                            <Grid Padding="16,10" ColumnSpacing="14">
+                            <Grid MinWidth="980" Padding="16,10" ColumnSpacing="10">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="58" />
-                                    <ColumnDefinition Width="120" />
-                                    <ColumnDefinition Width="1.1*" />
-                                    <ColumnDefinition Width="2*" />
+                                    <ColumnDefinition Width="52" />
+                                    <ColumnDefinition Width="112" />
+                                    <ColumnDefinition Width="1.6*" />
+                                    <ColumnDefinition Width="88" />
+                                    <ColumnDefinition Width="60" />
                                     <ColumnDefinition Width="84" />
-                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="104" />
+                                    <ColumnDefinition Width="140" />
                                 </Grid.ColumnDefinitions>
                                 <TextBlock FontWeight="SemiBold" Text="级别" />
                                 <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="来源" />
                                 <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="事项" />
-                                <TextBlock Grid.Column="3" FontWeight="SemiBold" Text="说明" />
+                                <TextBlock Grid.Column="3" FontWeight="SemiBold" Text="范围" />
                                 <TextBlock Grid.Column="4" FontWeight="SemiBold" Text="数量" />
-                                <TextBlock Grid.Column="5" FontWeight="SemiBold" Text="操作" />
+                                <TextBlock Grid.Column="5" FontWeight="SemiBold" Text="状态" />
+                                <TextBlock Grid.Column="6" FontWeight="SemiBold" Text="更新时间" />
+                                <TextBlock Grid.Column="7" FontWeight="SemiBold" Text="操作" />
                             </Grid>
                         </ListView.Header>
                         <ListView.ItemTemplate>
                             <DataTemplate x:DataType="vm:DashboardRiskRow">
-                                <Grid Padding="16,9" ColumnSpacing="14">
+                                <Grid MinWidth="980" Padding="16,9" ColumnSpacing="10">
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="58" />
-                                        <ColumnDefinition Width="120" />
-                                        <ColumnDefinition Width="1.1*" />
-                                        <ColumnDefinition Width="2*" />
+                                        <ColumnDefinition Width="52" />
+                                        <ColumnDefinition Width="112" />
+                                        <ColumnDefinition Width="1.6*" />
+                                        <ColumnDefinition Width="88" />
+                                        <ColumnDefinition Width="60" />
                                         <ColumnDefinition Width="84" />
-                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="104" />
+                                        <ColumnDefinition Width="140" />
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Orientation="Horizontal" Spacing="6">
                                         <FontIcon FontSize="14" Glyph="{x:Bind Glyph}" />
                                         <TextBlock FontWeight="SemiBold" Text="{x:Bind SeverityText}" />
                                     </StackPanel>
                                     <TextBlock Grid.Column="1" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind Source}" TextWrapping="WrapWholeWords" />
-                                    <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="{x:Bind Title}" TextWrapping="WrapWholeWords" />
-                                    <TextBlock Grid.Column="3" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind Detail}" TextWrapping="WrapWholeWords" />
+                                    <StackPanel Grid.Column="2" Spacing="2">
+                                        <TextBlock FontWeight="SemiBold" Text="{x:Bind Title}" TextWrapping="WrapWholeWords" />
+                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" MaxLines="2" Text="{x:Bind Detail}" TextTrimming="CharacterEllipsis" TextWrapping="WrapWholeWords" ToolTipService.ToolTip="{x:Bind Detail}" />
+                                    </StackPanel>
+                                    <TextBlock Grid.Column="3" Text="{x:Bind Scope}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind Scope}" />
                                     <TextBlock Grid.Column="4" Text="{x:Bind CountText}" />
-                                    <TextBlock Grid.Column="5" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" Text="{x:Bind ActionText}" />
+                                    <TextBlock Grid.Column="5" Text="{x:Bind StatusText}" ToolTipService.ToolTip="{x:Bind IgnoreReason}" />
+                                    <TextBlock Grid.Column="6" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind UpdatedText}" />
+                                    <StackPanel Grid.Column="7" Orientation="Horizontal" Spacing="3">
+                                        <Button
+                                            Width="32"
+                                            Height="32"
+                                            AutomationProperties.Name="定位待处理事项"
+                                            Click="LocateAttention_Click"
+                                            IsEnabled="{x:Bind CanNavigate}"
+                                            ToolTipService.ToolTip="定位">
+                                            <FontIcon FontSize="14" Glyph="&#xE707;" />
+                                        </Button>
+                                        <Button
+                                            Width="32"
+                                            Height="32"
+                                            AutomationProperties.Name="确认待处理事项"
+                                            Click="AcknowledgeAttention_Click"
+                                            IsEnabled="{x:Bind CanAcknowledge}"
+                                            ToolTipService.ToolTip="标记已确认">
+                                            <FontIcon FontSize="14" Glyph="&#xE73E;" />
+                                        </Button>
+                                        <Button
+                                            Width="32"
+                                            Height="32"
+                                            AutomationProperties.Name="忽略待处理事项"
+                                            Click="IgnoreAttention_Click"
+                                            IsEnabled="{x:Bind CanIgnore}"
+                                            ToolTipService.ToolTip="忽略并填写原因">
+                                            <FontIcon FontSize="14" Glyph="&#xE711;" />
+                                        </Button>
+                                        <Button
+                                            Width="32"
+                                            Height="32"
+                                            AutomationProperties.Name="重新打开待处理事项"
+                                            Click="ReopenAttention_Click"
+                                            IsEnabled="{x:Bind CanReopen}"
+                                            ToolTipService.ToolTip="重新标记为未处理">
+                                            <FontIcon FontSize="14" Glyph="&#xE72C;" />
+                                        </Button>
+                                    </StackPanel>
                                 </Grid>
                             </DataTemplate>
                         </ListView.ItemTemplate>

@@ -22,6 +22,8 @@ public sealed class DataDeviceRow(DeviceRecord record)
 
     public string CommunicationText { get; } = record.CommunicationStatusText;
 
+    public string OperatingStatus { get; } = record.OperatingStatusText;
+
     public string AreaType { get; } = record.AreaType;
 
     public string Zuo { get; } = string.IsNullOrWhiteSpace(record.Zuo) ? "--" : record.Zuo;

@@ -10,6 +10,7 @@ public static class CollectionTaskModeValues
 {
     public const string Full = "full";
     public const string CollectImport = "collect_import";
+    public const string Recapture = "recapture";
     public const string EnumerateOnly = "enumerate_only";
     public const string ValidateOnly = "validate_only";
     public const string ImportOnly = "import_only";
@@ -57,8 +58,9 @@ public static class CollectionTaskModeCatalog
 {
     public static IReadOnlyList<CollectionTaskModeOption> Options { get; } =
     [
-        new(CollectionTaskModeValues.CollectImport, "采集并更新数据", "采集所选楼栋、校验结果、更新当前数据并运行质量检查。", "开始采集"),
-        new(CollectionTaskModeValues.Full, "采集并更新实时详情", "在基础采集后继续更新实时详情并运行实时点位审计。", "开始完整任务"),
+        new(CollectionTaskModeValues.CollectImport, "采集并导入（兼容）", "兼容旧流程：采集、校验、导入并运行基础质量检查。", "开始兼容任务"),
+        new(CollectionTaskModeValues.Full, "采集", "采集所选楼栋、更新当前数据并完成质量与实时审计。", "开始采集"),
+        new(CollectionTaskModeValues.Recapture, "补采指定区域", "补采指定楼栋、座号或楼层，并完成完整数据更新与审计。", "开始补采"),
         new(CollectionTaskModeValues.EnumerateOnly, "仅枚举 JSON", "只运行卡片枚举，生成 enum_full_v5.json，不更新 SQLite。", "开始枚举"),
         new(CollectionTaskModeValues.ValidateOnly, "仅校验 JSON", "只校验现有 enum_full_v5.json，不修改 SQLite。", "开始校验"),
         new(CollectionTaskModeValues.ImportOnly, "仅导入 SQLite", "将现有 enum_full_v5.json 导入 SQLite；导入脚本会再次校验采集结果。", "开始导入"),
@@ -80,7 +82,7 @@ public static class CollectionTaskModeCatalog
         {
             CollectionTaskModeValues.Full => new(
                 value,
-                "完整采集",
+                "采集",
                 RequiresBuildings: true,
                 RunEnumeration: true,
                 RunValidation: true,
@@ -98,6 +100,16 @@ public static class CollectionTaskModeCatalog
                 RunQuality: true,
                 RunRealtimeDetails: false,
                 RunRealtimeAudit: false),
+            CollectionTaskModeValues.Recapture => new(
+                value,
+                "补采指定区域",
+                RequiresBuildings: true,
+                RunEnumeration: true,
+                RunValidation: true,
+                RunImport: true,
+                RunQuality: true,
+                RunRealtimeDetails: true,
+                RunRealtimeAudit: true),
             CollectionTaskModeValues.EnumerateOnly => new(
                 value,
                 "仅枚举 JSON",

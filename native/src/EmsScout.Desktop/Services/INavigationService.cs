@@ -5,6 +5,10 @@ using EmsScout.Application.Devices;
 public interface INavigationService
 {
     void NavigateToData(DataNavigationRequest request);
+
+    void NavigateToAudit();
+
+    void NavigateToDates();
 }
 
 public sealed record DataNavigationRequest(
@@ -30,14 +34,28 @@ public sealed record DataNavigationRequest(
 public sealed class NavigationService : INavigationService
 {
     private Action<DataNavigationRequest>? _navigateToData;
+    private Action? _navigateToAudit;
+    private Action? _navigateToDates;
 
-    public void Attach(Action<DataNavigationRequest> navigateToData)
+    public void Attach(Action<DataNavigationRequest> navigateToData, Action navigateToAudit, Action navigateToDates)
     {
         _navigateToData = navigateToData;
+        _navigateToAudit = navigateToAudit;
+        _navigateToDates = navigateToDates;
     }
 
     public void NavigateToData(DataNavigationRequest request)
     {
         _navigateToData?.Invoke(request);
+    }
+
+    public void NavigateToAudit()
+    {
+        _navigateToAudit?.Invoke();
+    }
+
+    public void NavigateToDates()
+    {
+        _navigateToDates?.Invoke();
     }
 }

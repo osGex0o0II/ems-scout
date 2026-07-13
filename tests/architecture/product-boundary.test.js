@@ -132,13 +132,18 @@ test('packaged Sidecar includes every local module required by the enumerator', 
     'capture-result',
     'enumerate-options',
     'enumerate-output',
+    'page-navigation',
+    'url-sanitizer',
   ]) {
     assert.match(packaging, new RegExp(`require\\('./src/${moduleName}'\\)`),
       `${moduleName} must be loaded by the package smoke test`);
   }
+  assert.match(packaging, /playwright-core\\lib\\vite/,
+    'MSIX payload must prune Playwright tooling assets whose hashed names look like PRI qualifiers');
 });
 
 test('Windows x64 packaging inputs are available in a clean clone', () => {
+  const packageJson = JSON.parse(read('package.json'));
   const profilePath = path.join(
     root,
     'native/src/EmsScout.Desktop/Properties/PublishProfiles/win-x64.pubxml');
@@ -150,7 +155,77 @@ test('Windows x64 packaging inputs are available in a clean clone', () => {
   assert.match(profile, /<RuntimeIdentifier>win-x64<\/RuntimeIdentifier>/);
   assert.match(profile, /<SelfContained>true<\/SelfContained>/);
   assert.match(packageScript, /Fixture!=ProductionEvidence/);
+  assert.match(packageScript, /dotnet clean \$Solution/,
+    'packaging must clean the solution-level intermediate graph before publish');
+  assert.match(packageScript, /dotnet clean \$DesktopProject[^]*Platform=x64/,
+    'packaging must clean x64 desktop intermediates before publish');
+  assert.match(packageScript, /windows-sdk-environment\.ps1/,
+    'packaging must initialize the Windows SDK task environment');
   assert.match(projectIgnore, /!Properties\/PublishProfiles\/win-x64\.pubxml/);
   assert.match(desktopProject, /<PublishTrimmed>false<\/PublishTrimmed>/);
   assert.doesNotMatch(desktopProject, /<PublishTrimmed[^>]*>True<\/PublishTrimmed>/i);
+  assert.match(read('scripts/prepare-sidecar.ps1'), /Assert-SafeOwnedDirectory/);
+  assert.doesNotMatch(packageJson.scripts['native:build'], /--no-restore/,
+    'native:build must refresh the restore graph after dependency changes');
+  assert.match(packageJson.scripts['native:build'], /scripts[\\/]build-native\.ps1/,
+    'native:build must use the clean Windows build entry');
+  const buildScript = read('scripts/build-native.ps1');
+  const sdkEnvironment = read('scripts/windows-sdk-environment.ps1');
+  assert.match(buildScript, /windows-sdk-environment\.ps1/,
+    'native build must initialize the Windows SDK task environment');
+  assert.match(sdkEnvironment, /PROCESSOR_ARCHITECTURE/,
+    'the shared SDK environment must supply the architecture required by MSIX tasks');
+  assert.match(buildScript, /dotnet clean/);
+  assert.match(buildScript, /EmsScout\.Desktop\.csproj/);
+  assert.match(buildScript, /Platform=x64/);
+  assert.match(buildScript, /dotnet build/);
+  const targetFamily = desktopProject.match(/windows10\.0\.(\d+)\.0/)?.[1];
+  const buildToolsFamily = desktopProject.match(
+    /Microsoft\.Windows\.SDK\.BuildTools" Version="10\.0\.(\d+)\./)?.[1];
+  assert.equal(buildToolsFamily, targetFamily,
+    'MSIX BuildTools must match the desktop target Windows SDK family');
+});
+
+test('desktop owns and cleans its isolated Edge CDP session', () => {
+  const viewModel = read('native/src/EmsScout.Desktop/ViewModels/CollectionTaskViewModel.cs');
+  const app = read('native/src/EmsScout.Desktop/App.xaml.cs');
+  const probe = read('native/src/EmsScout.Infrastructure/Sidecar/CollectionEnvironmentProbe.cs');
+  assert.match(viewModel, /browser-sessions/);
+  assert.match(viewModel, /IDisposable/);
+  assert.match(viewModel, /Kill\(entireProcessTree: true\)/);
+  assert.match(viewModel, /--remote-debugging-port=0/);
+  assert.match(viewModel, /OwnedEdgeCdpEndpoint/);
+  assert.match(viewModel, /_ownedEdgeProcess\.HasExited/);
+  assert.match(viewModel, /if \(!emsOpened\)[^]*throw new InvalidOperationException/,
+    'opening EMS must fail closed when the owned CDP endpoint never becomes reachable');
+  assert.doesNotMatch(viewModel, /--remote-debugging-port=\{settings\.EdgeCdpPort\}/);
+  assert.match(probe, /json\/new\?/);
+  assert.doesNotMatch(viewModel, /ArgumentList\.Add\(settings\.EmsUrl\)/);
+  assert.match(app, /Services is IDisposable/);
+  assert.match(viewModel, /_activeTask\?\.Cancel\(\)/);
+});
+
+test('switch href state is never guessed from image frequency', () => {
+  for (const file of ['src/enumerate.js', 'src/verify-live.js']) {
+    const source = read(file);
+    assert.doesNotMatch(source, /hrefs\.sort\(\(a, b\) => switchByHref\[b\] - switchByHref\[a\]\)/);
+  }
+});
+
+test('ExportSmoke runtime boundary catches path and filesystem failures', () => {
+  const source = read('native/tools/EmsScout.ExportSmoke/Program.cs');
+  assert.match(source, /try\s*\{\s*var dbPath = Path\.GetFullPath\(options\.DatabasePath\)/,
+    'runtime try boundary must begin immediately before path normalization');
+  assert.match(source, /Console\.Error\.WriteLine\("ERROR: " \+ ex\.Message\);/);
+});
+
+test('build and CI artifacts never package archived or production EMS data', () => {
+  const packageJson = JSON.parse(read('package.json'));
+  const workflow = read('.github/workflows/windows-x64.yml');
+  const packagedFiles = packageJson.build.files.join('\n');
+
+  assert.doesNotMatch(packagedFiles, /^(?:data|out)\//m);
+  assert.doesNotMatch(workflow, /data\/1号楼\/ac\.db/);
+  assert.doesNotMatch(workflow, /artifacts\/ci\/\*\*/);
+  assert.match(workflow, /tests\/contract-audit\/fixtures\/schema-v0\.sql/);
 });

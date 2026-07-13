@@ -4,7 +4,17 @@ using EmsScout.Application.Devices;
 using EmsScout.Infrastructure.Sqlite;
 using EmsScout.Infrastructure.Realtime;
 
-var options = ExportSmokeOptions.Parse(args);
+ExportSmokeOptions options;
+try
+{
+    options = ExportSmokeOptions.Parse(args);
+}
+catch (ArgumentException ex)
+{
+    Console.Error.WriteLine("ERROR: " + ex.Message);
+    ExportSmokeOptions.PrintHelp();
+    return 2;
+}
 if (options.ShowHelp)
 {
     ExportSmokeOptions.PrintHelp();
@@ -23,37 +33,37 @@ if (string.IsNullOrWhiteSpace(options.OutputDirectory))
     return 2;
 }
 
-var dbPath = Path.GetFullPath(options.DatabasePath);
-var outputDirectory = Path.GetFullPath(options.OutputDirectory);
-var workspaceRoot = Path.GetFullPath(options.WorkspaceRoot ?? LocateWorkspaceRoot());
-var realtimeDirectory = Path.GetFullPath(options.RealtimeDirectory ?? Path.GetDirectoryName(dbPath) ?? workspaceRoot);
-
-if (!File.Exists(dbPath))
-{
-    Console.Error.WriteLine("ERROR: database not found: " + dbPath);
-    return 2;
-}
-
-Directory.CreateDirectory(outputDirectory);
-var realtime = new RealtimeLatestJsonSource(workspaceRoot, realtimeDirectory);
-var repository = new SqliteDeviceReadRepository(() => dbPath, realtime);
-var service = new SqliteDeviceExportService(repository);
-var query = new DeviceQuery(
-    Building: options.Building,
-    CommunicationState: options.CommunicationState,
-    Floor: options.Floor,
-    SubArea: options.SubArea,
-    DeviceName: options.DeviceName,
-    Zuo: options.Zuo,
-    RealtimeLock: options.RealtimeLock,
-    AreaType: options.AreaType,
-    Mode: options.Mode,
-    Fan: options.Fan,
-    SetTemperature: options.SetTemperature,
-    IndoorTemperature: options.IndoorTemperature);
-
 try
 {
+    var dbPath = Path.GetFullPath(options.DatabasePath);
+    var outputDirectory = Path.GetFullPath(options.OutputDirectory);
+    var workspaceRoot = Path.GetFullPath(options.WorkspaceRoot ?? LocateWorkspaceRoot());
+    var realtimeDirectory = Path.GetFullPath(options.RealtimeDirectory ?? Path.GetDirectoryName(dbPath) ?? workspaceRoot);
+
+    if (!File.Exists(dbPath))
+    {
+        Console.Error.WriteLine("ERROR: database not found: " + dbPath);
+        return 2;
+    }
+
+    Directory.CreateDirectory(outputDirectory);
+    var realtime = new RealtimeLatestJsonSource(workspaceRoot, realtimeDirectory);
+    var repository = new SqliteDeviceReadRepository(() => dbPath, realtime);
+    var service = new SqliteDeviceExportService(repository);
+    var query = new DeviceQuery(
+        Building: options.Building,
+        CommunicationState: options.CommunicationState,
+        Floor: options.Floor,
+        SubArea: options.SubArea,
+        DeviceName: options.DeviceName,
+        Zuo: options.Zuo,
+        RealtimeLock: options.RealtimeLock,
+        AreaType: options.AreaType,
+        Mode: options.Mode,
+        Fan: options.Fan,
+        SetTemperature: options.SetTemperature,
+        IndoorTemperature: options.IndoorTemperature);
+
     var result = await service.ExportAsync(query, outputDirectory);
     ValidateWorkbook(result.Path, result.RowCount, options.AllowEmpty);
     Console.WriteLine("EXPORT_OK");

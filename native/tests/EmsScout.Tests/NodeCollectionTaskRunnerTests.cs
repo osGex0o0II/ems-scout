@@ -134,6 +134,40 @@ public sealed class NodeCollectionTaskRunnerTests
         }
     }
 
+    [Fact]
+    public async Task DisposingRunnerTerminatesAnActiveSidecar()
+    {
+        if (!CanRunNode())
+        {
+            return;
+        }
+
+        var workspace = await CreateFaultWorkspaceAsync(StartedEventSource() + "setInterval(()=>{},1000);");
+        try
+        {
+            using var runner = new NodeCollectionTaskRunner(workspace);
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var run = runner.RunWorkflowScriptAsync(
+                "child.js",
+                [],
+                _ => { },
+                workflowEvent =>
+                {
+                    if (workflowEvent.Type == WorkflowEventType.Started) started.TrySetResult();
+                },
+                CancellationToken.None);
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(3));
+
+            runner.Dispose();
+
+            await Assert.ThrowsAnyAsync<Exception>(() => run.WaitAsync(TimeSpan.FromSeconds(3)));
+        }
+        finally
+        {
+            Directory.Delete(workspace, recursive: true);
+        }
+    }
+
     private static bool CanRunNode()
     {
         try
