@@ -10,11 +10,17 @@ internal static class ProductionDataSnapshot
 
     private static Snapshot Create()
     {
+        CleanupStaleSnapshots();
         var repositoryRoot = LocateRepositoryRoot();
-        var sourceDatabase = Path.Combine(repositoryRoot, "out", "ac.db");
+        var configuredDatabase = Environment.GetEnvironmentVariable("EMS_PRODUCTION_DB_PATH");
+        var sourceDatabase = string.IsNullOrWhiteSpace(configuredDatabase)
+            ? Path.Combine(repositoryRoot, "out", "ac.db")
+            : Path.GetFullPath(configuredDatabase);
         if (!File.Exists(sourceDatabase))
         {
-            throw new FileNotFoundException("Missing production database fixture.", sourceDatabase);
+            throw new FileNotFoundException(
+                "Missing production database fixture. Set EMS_PRODUCTION_DB_PATH to a complete evidence database or place it at out/ac.db.",
+                sourceDatabase);
         }
 
         var temporaryRoot = Path.Combine(
@@ -37,6 +43,12 @@ internal static class ProductionDataSnapshot
 
     private static string LocateRepositoryRoot()
     {
+        var configuredRoot = Environment.GetEnvironmentVariable("EMS_PRODUCTION_REPOSITORY_ROOT");
+        if (!string.IsNullOrWhiteSpace(configuredRoot))
+        {
+            return Path.GetFullPath(configuredRoot);
+        }
+
         for (var current = new DirectoryInfo(AppContext.BaseDirectory); current is not null; current = current.Parent)
         {
             if (File.Exists(Path.Combine(current.FullName, "package.json")) &&
@@ -58,6 +70,28 @@ internal static class ProductionDataSnapshot
         catch
         {
             // Process exit cleanup is best effort; test data is confined to the system temp directory.
+        }
+    }
+
+    private static void CleanupStaleSnapshots()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-production-snapshot-tests");
+        if (!Directory.Exists(root))
+        {
+            return;
+        }
+        foreach (var directory in Directory.EnumerateDirectories(root))
+        {
+            try
+            {
+                if (Directory.GetCreationTimeUtc(directory) < DateTime.UtcNow.AddDays(-1))
+                {
+                    Directory.Delete(directory, recursive: true);
+                }
+            }
+            catch
+            {
+            }
         }
     }
 

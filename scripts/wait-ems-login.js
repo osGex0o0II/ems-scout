@@ -2,6 +2,7 @@
 'use strict';
 
 const { chromium } = require('playwright');
+const { sanitizeErrorForDisplay, sanitizeUrlForDisplay } = require('../src/url-sanitizer');
 
 function argValue(name, fallback = '') {
   const hit = process.argv.find(a => a.startsWith(name + '='));
@@ -9,7 +10,7 @@ function argValue(name, fallback = '') {
 }
 
 const cdpUrl = argValue('--cdp-url', process.env.CDP_URL || 'http://127.0.0.1:9222');
-const emsUrl = argValue('--ems-url', process.env.EMS_URL || 'http://172.29.248.4:8000/ui');
+const emsUrl = process.env.EMS_URL || 'http://172.29.248.4:8000/ui';
 const timeoutSeconds = Math.max(1, Number(argValue('--timeout-seconds', '120')) || 120);
 
 function isEmsPageUrl(url) {
@@ -59,18 +60,18 @@ async function main() {
     let lastRemain = -1;
     while (Date.now() < deadline) {
       if (await isLoggedIn(page)) {
-        console.log('EMS_LOGIN_OK url=' + page.url());
+        console.log('EMS_LOGIN_OK url=' + sanitizeUrlForDisplay(page.url()));
         return;
       }
       const remain = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
       if (remain !== lastRemain && (remain % 5 === 0 || remain <= 10)) {
-        console.log(`EMS_LOGIN_WAIT remaining=${remain}s url=${page.url()}`);
+        console.log(`EMS_LOGIN_WAIT remaining=${remain}s url=${sanitizeUrlForDisplay(page.url())}`);
         lastRemain = remain;
       }
       await page.waitForTimeout(1000);
     }
 
-    console.error('EMS_LOGIN_TIMEOUT url=' + page.url());
+    console.error('EMS_LOGIN_TIMEOUT url=' + sanitizeUrlForDisplay(page.url()));
     process.exit(3);
   } finally {
     await browser.close().catch(() => {});
@@ -78,6 +79,6 @@ async function main() {
 }
 
 main().catch(err => {
-  console.error('EMS_LOGIN_ERROR ' + (err && err.message ? err.message : String(err)));
+  console.error('EMS_LOGIN_ERROR ' + sanitizeErrorForDisplay(err, [emsUrl]));
   process.exit(1);
 });

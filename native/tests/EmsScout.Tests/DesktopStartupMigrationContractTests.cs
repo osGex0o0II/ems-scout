@@ -25,6 +25,9 @@ public sealed class DesktopStartupMigrationContractTests
         Assert.Contains("catch (Exception ex)", app);
         Assert.Contains("LegacyOutMigrationService", initializer);
         Assert.Contains("SqliteSchemaMigrator", initializer);
+        Assert.Contains("File.Exists(paths.DatabasePath)", initializer);
+        Assert.Contains(".MigrateAsync(paths.DatabasePath", initializer);
+        Assert.Contains(".CreateNewAsync(paths.DatabasePath", initializer);
         Assert.Contains("Path.Combine(pathService.WorkspaceRoot, \"out\")", initializer);
         Assert.Contains("var paths = pathService.Capture()", initializer);
         Assert.Contains("IApplicationLogger logger", initializer);

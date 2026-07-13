@@ -60,3 +60,12 @@ test('capture signatures and final acceptance are deterministic', () => {
   assert.equal(isAcceptableCapture(data), true);
   assert.equal(isAcceptableCapture({ ...data, cards: cards.map(item => ({ ...item, comm: '' })) }), false);
 });
+
+test('numeric fan values are incomplete until mapped to the supported vocabulary', () => {
+  const numeric = [card({ fan: '1' }), card({ name: '1-0102-KT', fan: '1' })];
+
+  assert.equal(checkCardQuality(numeric).ok, false);
+  for (const fan of ['低', '中', '高', '自动']) {
+    assert.equal(checkCardQuality(numeric.map(item => ({ ...item, fan }))).ok, true);
+  }
+});

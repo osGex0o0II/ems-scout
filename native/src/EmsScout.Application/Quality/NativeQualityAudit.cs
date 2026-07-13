@@ -11,17 +11,22 @@ public enum QualityAuditSourceKind
 {
     LatestCompletedRun,
     Current,
+    SpecificRun,
 }
 
 public sealed record NativeQualityAuditRequest(
     QualityAuditSourceKind SourceKind,
-    string? DatabasePath = null)
+    string? DatabasePath = null,
+    long? RunId = null)
 {
     public static NativeQualityAuditRequest LatestCompletedRun { get; } =
         new(QualityAuditSourceKind.LatestCompletedRun);
 
     public static NativeQualityAuditRequest Current { get; } =
         new(QualityAuditSourceKind.Current);
+
+    public static NativeQualityAuditRequest ForRun(long runId) =>
+        new(QualityAuditSourceKind.SpecificRun, RunId: runId);
 }
 
 public sealed record QualityAuditKnownFindingAnnotation(

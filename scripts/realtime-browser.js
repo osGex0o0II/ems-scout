@@ -5,6 +5,7 @@ const http = require('http');
 const path = require('path');
 const { spawn } = require('child_process');
 const { chromium } = require('playwright');
+const { sanitizeErrorForDisplay, sanitizeUrlForDisplay } = require('../src/url-sanitizer');
 
 const ROOT = path.resolve(__dirname, '..');
 const OUT_DIR = path.resolve(process.env.EMS_OUT_DIR || path.join(ROOT, 'out'));
@@ -110,7 +111,7 @@ function launchEdgeCdp(cdpUrl, emsUrl, log) {
     `--user-data-dir=${EDGE_PROFILE}`,
     '--no-first-run',
     '--disable-default-apps',
-    emsUrl,
+    'about:blank',
   ];
   logLine(log, `[CDP] 未发现 ${cdpUrl}，正在启动 Edge 调试端口 ${port}`);
   const proc = spawn(edge, args, {
@@ -178,7 +179,7 @@ async function getOrOpenEmsPageFromContext(context, emsUrl, log, prefix = '[BROW
   if (!page) page = pages[0] || await context.newPage();
   await page.bringToFront().catch(() => {});
   if (!isEmsUrl(page.url(), emsUrl)) {
-    logLine(log, `${prefix} 打开 EMS: ${emsUrl}`);
+    logLine(log, `${prefix} 打开 EMS: ${sanitizeUrlForDisplay(emsUrl)}`);
     await page.goto(emsUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
   }
   await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
@@ -236,11 +237,11 @@ async function launchPersistentEdge(emsUrl, log, options = {}) {
     if (context) {
       await context.close().catch(() => {});
     }
-    const msg = err && err.message ? err.message : String(err);
+    const msg = sanitizeErrorForDisplay(err, [emsUrl]);
     if (/user data dir|profile|already in use|正在使用|占用|lock/i.test(msg)) {
       throw new Error(`自动启动 Edge 失败：实时采集用户数据目录正在被占用。请关闭上一次自动启动的 Edge 窗口后重试，或切换为“连接已有 Edge CDP（专家）”。原始错误：${msg}`);
     }
-    throw err;
+    throw new Error(msg);
   }
 }
 

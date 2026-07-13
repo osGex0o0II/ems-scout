@@ -12,6 +12,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -21,11 +22,21 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel Spacing="3">
-                <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="数据管理" />
+                <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="设备数据" />
                 <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
+                <TextBlock Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" Text="{x:Bind ViewModel.DataStateText, Mode=OneWay}" />
                 <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind ViewModel.LastExportPath, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
+                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind ViewModel.ExportHint, Mode=OneWay}" TextWrapping="WrapWholeWords" />
+                <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.ExportPreviewText, Mode=OneWay}" />
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
+                <ComboBox
+                    Width="250"
+                    Header="数据批次"
+                    DisplayMemberPath="DisplayText"
+                    ItemsSource="{x:Bind ViewModel.DataContext.Options, Mode=OneWay}"
+                    SelectedItem="{x:Bind ViewModel.DataContext.Selected, Mode=TwoWay}"
+                    SelectionChanged="DataContext_SelectionChanged" />
                 <Button
                     Click="OpenExportLocation_Click"
                     Style="{StaticResource ToolbarButtonStyle}"
@@ -41,7 +52,7 @@
                     IsEnabled="{x:Bind ViewModel.CanExport, Mode=OneWay}">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon FontSize="14" Glyph="&#xE118;" />
-                        <TextBlock Text="导出当前筛选 Excel" />
+                        <TextBlock Text="导出筛选 Excel" />
                     </StackPanel>
                 </Button>
             </StackPanel>
@@ -50,6 +61,7 @@
         <Border Grid.Row="1" Style="{StaticResource WorkbenchCardStyle}">
             <Grid RowSpacing="6">
                 <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
@@ -85,7 +97,36 @@
                     </StackPanel>
                 </Grid>
 
-                    <Grid Grid.Row="1" ColumnSpacing="8" RowSpacing="6">
+                <Grid Grid.Row="1" ColumnSpacing="10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock VerticalAlignment="Center" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="快捷筛选" />
+                    <ItemsControl Grid.Column="1" ItemsSource="{x:Bind ViewModel.QuickFilters, Mode=OneWay}">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal" Spacing="6" />
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <ToggleButton
+                                    Click="QuickFilter_Click"
+                                    Content="{Binding DisplayText}"
+                                    IsChecked="{Binding IsActive, Mode=OneWay}"
+                                    Tag="{Binding Key}"
+                                    MinHeight="32"
+                                    Padding="12,5"
+                                    AutomationProperties.Name="{Binding DisplayText}"
+                                    ToolTipService.ToolTip="{Binding DisplayText}" />
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Grid>
+
+                <Expander Grid.Row="2" Header="更多筛选" IsExpanded="False">
+                    <Grid ColumnSpacing="8" RowSpacing="6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="1*" MinWidth="108" />
                             <ColumnDefinition Width="1*" MinWidth="108" />
@@ -105,7 +146,7 @@
                         <ComboBox Grid.Row="1" Grid.Column="1" Header="座号" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.ZuoOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedZuo, Mode=TwoWay}" IsEnabled="{x:Bind ViewModel.CanFilterByZuo, Mode=OneWay}" ToolTipService.ToolTip="仅适用于5号、6号楼" />
                         <ComboBox Grid.Row="1" Grid.Column="2" Header="楼层" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.FloorOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedFloor, Mode=TwoWay}" SelectionChanged="FloorFilter_SelectionChanged" />
                         <ComboBox Grid.Row="1" Grid.Column="3" Header="页面" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.PageNameOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedPageName, Mode=TwoWay}" />
-                        <TextBox Grid.Row="1" Grid.Column="4" Grid.ColumnSpan="2" Header="设备名" PlaceholderText="输入设备名" Text="{x:Bind ViewModel.DeviceNameText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBox Grid.Row="1" Grid.Column="4" Grid.ColumnSpan="2" Header="设备名" PlaceholderText="输入后按 Enter 查询" KeyDown="DeviceName_KeyDown" Text="{x:Bind ViewModel.DeviceNameText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                         <TextBlock Grid.Row="2" Grid.ColumnSpan="6" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="状态筛选" />
                         <ComboBox Grid.Row="3" Header="区域" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.AreaOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedArea, Mode=TwoWay}" />
                         <ComboBox Grid.Row="3" Grid.Column="1" Header="开关机状态" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.CommunicationOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedCommunication, Mode=TwoWay}" />
@@ -114,14 +155,43 @@
                         <ComboBox Grid.Row="3" Grid.Column="4" Header="设置温度(℃)" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.SetTemperatureOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedSetTemperature, Mode=TwoWay}" />
                         <ComboBox Grid.Row="3" Grid.Column="5" Header="集控锁定状态" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.RealtimeLockOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedRealtimeLock, Mode=TwoWay}" />
                     </Grid>
+                </Expander>
 
             </Grid>
         </Border>
 
-        <Grid Grid.Row="2" ColumnSpacing="14">
+        <Border
+            Grid.Row="2"
+            Padding="12,8"
+            Background="{ThemeResource SystemFillColorCriticalBackgroundBrush}"
+            CornerRadius="4"
+            Visibility="{x:Bind ViewModel.LoadErrorVisibility, Mode=OneWay}">
+            <Grid ColumnSpacing="10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Spacing="2">
+                    <TextBlock FontWeight="SemiBold" Text="设备数据读取失败" />
+                    <TextBlock Text="{x:Bind ViewModel.LoadErrorText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
+                    <TextBlock
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Text="当前显示上次成功结果"
+                        Visibility="{x:Bind ViewModel.StaleResultsVisibility, Mode=OneWay}" />
+                </StackPanel>
+                <Button Grid.Column="1" Click="RetryLoad_Click" Style="{StaticResource ToolbarButtonStyle}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon FontSize="14" Glyph="&#xE72C;" />
+                        <TextBlock Text="重试" />
+                    </StackPanel>
+                </Button>
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="3" ColumnSpacing="14">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="0" />
+                <ColumnDefinition Width="360" />
             </Grid.ColumnDefinitions>
 
             <ProgressBar
@@ -142,11 +212,17 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <TextBlock
-                            VerticalAlignment="Center"
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Text="{x:Bind ViewModel.ResultSummary, Mode=OneWay}"
-                            TextTrimming="CharacterEllipsis" />
+                        <StackPanel VerticalAlignment="Center" Spacing="2">
+                            <TextBlock
+                                FontWeight="SemiBold"
+                                Text="{x:Bind ViewModel.ResultSummary, Mode=OneWay}"
+                                TextTrimming="CharacterEllipsis" />
+                            <TextBlock
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="{x:Bind ViewModel.ActiveFilterSummary, Mode=OneWay}"
+                                TextTrimming="CharacterEllipsis"
+                                ToolTipService.ToolTip="{x:Bind ViewModel.ActiveFilterSummary, Mode=OneWay}" />
+                        </StackPanel>
                         <Button
                             Grid.Column="1"
                             Click="PreviousPage_Click"
@@ -179,6 +255,7 @@
                         SelectedItem="{x:Bind ViewModel.SelectedDevice, Mode=TwoWay}"
                         SelectionChanged="DeviceList_SelectionChanged"
                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                        Visibility="{x:Bind ViewModel.ResultListVisibility, Mode=OneWay}"
                         SelectionMode="Single">
                         <ListView.Header>
                             <Grid MinWidth="1620" Padding="{x:Bind ViewModel.TableHeaderPadding, Mode=OneWay}" ColumnSpacing="10">
@@ -233,7 +310,7 @@
                                     <TextBlock Grid.Column="3" Text="{Binding PageName}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding PageName}" />
                                     <TextBlock Grid.Column="4" FontWeight="SemiBold" Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Name}" />
                                     <TextBlock Grid.Column="5" Text="{Binding AreaType}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding AreaType}" />
-                                    <TextBlock Grid.Column="6" Text="{Binding CommunicationText}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding CommunicationText}" />
+                                    <TextBlock Grid.Column="6" Text="{Binding OperatingStatus}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding OperatingStatus}" />
                                     <TextBlock Grid.Column="7" Text="{Binding Mode}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Mode}" />
                                     <TextBlock Grid.Column="8" Text="{Binding Fan}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Fan}" />
                                     <TextBlock Grid.Column="9" Text="{Binding SetTemperature}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding SetTemperature}" />
@@ -244,7 +321,7 @@
                         </ListView.ItemTemplate>
                     </ListView>
                     <StackPanel
-                        Grid.RowSpan="2"
+                        Grid.Row="1"
                         HorizontalAlignment="Center"
                         VerticalAlignment="Center"
                         Spacing="6"
@@ -257,7 +334,7 @@
                             TextWrapping="WrapWholeWords" />
                     </StackPanel>
                     <Border
-                        Grid.RowSpan="2"
+                        Grid.Row="1"
                         Background="{ThemeResource LayerFillColorDefaultBrush}"
                         Opacity="0.96"
                         Visibility="{x:Bind ViewModel.LoadingStateVisibility, Mode=OneWay}">
@@ -266,7 +343,7 @@
                             VerticalAlignment="Center"
                             Spacing="10">
                             <ProgressRing IsActive="{x:Bind ViewModel.IsLoading, Mode=OneWay}" />
-                            <TextBlock HorizontalAlignment="Center" FontWeight="SemiBold" Text="正在查询 SQLite 数据" />
+                            <TextBlock HorizontalAlignment="Center" FontWeight="SemiBold" Text="正在查询设备数据" />
                             <TextBlock
                                 HorizontalAlignment="Center"
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
@@ -274,6 +351,71 @@
                                 TextWrapping="WrapWholeWords" />
                         </StackPanel>
                     </Border>
+                </Grid>
+            </Border>
+
+            <Border Grid.Column="1" Style="{StaticResource WorkbenchCardStyle}" Padding="0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid Padding="14,10" BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="0,0,0,1">
+                        <TextBlock Style="{StaticResource SectionTitleStyle}" Text="设备详情" />
+                    </Grid>
+                    <StackPanel
+                        Grid.Row="1"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Spacing="5"
+                        Visibility="{x:Bind ViewModel.NoSelectionDetailVisibility, Mode=OneWay}">
+                        <FontIcon FontSize="24" Glyph="&#xE8A7;" />
+                        <TextBlock FontWeight="SemiBold" Text="请选择设备" />
+                    </StackPanel>
+                    <ScrollViewer
+                        Grid.Row="1"
+                        Padding="14,10"
+                        VerticalScrollBarVisibility="Auto"
+                        Visibility="{x:Bind ViewModel.DetailVisibility, Mode=OneWay}">
+                        <StackPanel Spacing="14">
+                            <StackPanel Spacing="5">
+                                <TextBlock FontWeight="SemiBold" Text="基础信息" />
+                                <TextBlock FontSize="17" FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedDevice.Name, Mode=OneWay, FallbackValue=--}" TextWrapping="WrapWholeWords" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.DeviceId, Mode=OneWay, FallbackValue=--}" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.Location, Mode=OneWay, FallbackValue=--}" TextWrapping="WrapWholeWords" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.PageName, Mode=OneWay, FallbackValue=--}" TextWrapping="WrapWholeWords" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.AreaType, Mode=OneWay, FallbackValue=--}" />
+                            </StackPanel>
+                            <StackPanel Spacing="5">
+                                <TextBlock FontWeight="SemiBold" Text="采集值" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.OperatingStatus, Mode=OneWay, FallbackValue=--}" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.Mode, Mode=OneWay, FallbackValue=--}" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.Fan, Mode=OneWay, FallbackValue=--}" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.SetTemperature, Mode=OneWay, FallbackValue=--}" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.IndoorTemperature, Mode=OneWay, FallbackValue=--}" />
+                            </StackPanel>
+                            <StackPanel Spacing="5">
+                                <TextBlock FontWeight="SemiBold" Text="实时值" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.RealtimeMatchLabel, Mode=OneWay, FallbackValue=--}" TextWrapping="WrapWholeWords" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.RealtimePower, Mode=OneWay, FallbackValue=--}" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.RealtimeLock, Mode=OneWay, FallbackValue=--}" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.RealtimePointSummary, Mode=OneWay, FallbackValue=--}" TextWrapping="WrapWholeWords" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.RealtimeModbus, Mode=OneWay, FallbackValue=--}" TextWrapping="WrapWholeWords" />
+                            </StackPanel>
+                            <StackPanel Spacing="5">
+                                <TextBlock FontWeight="SemiBold" Text="质量与关注" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.HealthLabel, Mode=OneWay, FallbackValue=--}" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.IssueSummary, Mode=OneWay, FallbackValue=--}" TextWrapping="WrapWholeWords" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.WatchLabel, Mode=OneWay, FallbackValue=--}" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.WatchSummary, Mode=OneWay, FallbackValue=--}" TextWrapping="WrapWholeWords" />
+                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.WatchEvidence, Mode=OneWay, FallbackValue=--}" TextWrapping="WrapWholeWords" />
+                            </StackPanel>
+                            <StackPanel Spacing="5">
+                                <TextBlock FontWeight="SemiBold" Text="数据上下文" />
+                                <TextBlock Text="{x:Bind ViewModel.DataStateText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
+                            </StackPanel>
+                        </StackPanel>
+                    </ScrollViewer>
                 </Grid>
             </Border>
 

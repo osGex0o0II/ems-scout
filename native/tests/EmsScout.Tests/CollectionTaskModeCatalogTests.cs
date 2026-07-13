@@ -69,6 +69,33 @@ public sealed class CollectionTaskModeCatalogTests
     }
 
     [Fact]
+    public void RecaptureUsesTheCompleteCollectionPipeline()
+    {
+        var plan = CollectionTaskModeCatalog.BuildPlan(
+            CollectionTaskModeValues.Recapture,
+            new CollectionCustomTaskOptions(false, false, false, false));
+
+        Assert.True(plan.RequiresBuildings);
+        Assert.True(plan.RunEnumeration);
+        Assert.True(plan.RunValidation);
+        Assert.True(plan.RunImport);
+        Assert.True(plan.RunQuality);
+        Assert.True(plan.RunRealtimeDetails);
+        Assert.True(plan.RunRealtimeAudit);
+    }
+
+    [Fact]
+    public void FullModeIsPresentedAsTheDefaultCollectionAction()
+    {
+        var option = Assert.Single(
+            CollectionTaskModeCatalog.Options,
+            item => item.Value == CollectionTaskModeValues.Full);
+
+        Assert.Equal("采集", option.Label);
+        Assert.Equal("开始采集", option.StartButtonText);
+    }
+
+    [Fact]
     public void CustomModeUsesExplicitToggleCombination()
     {
         var plan = CollectionTaskModeCatalog.BuildPlan(

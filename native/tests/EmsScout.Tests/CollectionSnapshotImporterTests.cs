@@ -32,7 +32,7 @@ public sealed class CollectionSnapshotImporterTests
 
         await using var connection = CollectionImportDatabaseFixture.Open(database);
         await connection.OpenAsync();
-        Assert.Equal(2, await CollectionImportDatabaseFixture.ScalarLongAsync(connection, "PRAGMA user_version"));
+        Assert.Equal(5, await CollectionImportDatabaseFixture.ScalarLongAsync(connection, "PRAGMA user_version"));
         Assert.Equal(1, await CollectionImportDatabaseFixture.ScalarLongAsync(connection, "SELECT COUNT(*) FROM cards"));
         Assert.Equal(1, await CollectionImportDatabaseFixture.ScalarLongAsync(connection, "SELECT COUNT(*) FROM run_cards"));
         Assert.Equal(1, await CollectionImportDatabaseFixture.ScalarLongAsync(connection, "SELECT COUNT(*) FROM device_registry"));
@@ -60,7 +60,7 @@ public sealed class CollectionSnapshotImporterTests
         Assert.True(File.Exists(database));
         await using var connection = CollectionImportDatabaseFixture.Open(database);
         await connection.OpenAsync();
-        Assert.Equal(2, await CollectionImportDatabaseFixture.ScalarLongAsync(connection, "PRAGMA user_version"));
+        Assert.Equal(5, await CollectionImportDatabaseFixture.ScalarLongAsync(connection, "PRAGMA user_version"));
         Assert.Equal(0, await CollectionImportDatabaseFixture.ScalarLongAsync(connection, "SELECT COUNT(*) FROM cards"));
         Assert.Equal(0, await CollectionImportDatabaseFixture.ScalarLongAsync(connection, "SELECT COUNT(*) FROM collection_runs"));
         Assert.Equal(0, await CollectionImportDatabaseFixture.ScalarLongAsync(connection, "SELECT COUNT(*) FROM device_registry"));

@@ -15,12 +15,13 @@ let stopping = false;
 let serviceOptions = null;
 let restartCount = 0;
 let starting = false;
+const panelTokens = new Map();
 
 function panelUrl(port = DEFAULT_PORT) {
   return `http://127.0.0.1:${port}`;
 }
 
-function requestJson(method, routePath, body, options = {}) {
+function rawRequestJson(method, routePath, body, options = {}) {
   const port = options.port || DEFAULT_PORT;
   const timeoutMs = options.timeoutMs || 30000;
   const payload = body === undefined ? null : JSON.stringify(body);
@@ -34,6 +35,7 @@ function requestJson(method, routePath, body, options = {}) {
       timeout: timeoutMs,
       headers: {
         accept: 'application/json',
+        ...(options.token ? { 'x-ems-panel-token': options.token } : {}),
         ...(payload ? {
           'content-type': 'application/json; charset=utf-8',
           'content-length': Buffer.byteLength(payload),
@@ -52,7 +54,9 @@ function requestJson(method, routePath, body, options = {}) {
           return;
         }
         if (res.statusCode < 200 || res.statusCode >= 300 || (parsed && parsed.ok === false)) {
-          reject(new Error((parsed && parsed.error) || `HTTP ${res.statusCode} ${routePath}`));
+          const error = new Error((parsed && parsed.error) || `HTTP ${res.statusCode} ${routePath}`);
+          error.statusCode = res.statusCode;
+          reject(error);
           return;
         }
         resolve(parsed && Object.prototype.hasOwnProperty.call(parsed, 'data') ? parsed.data : parsed);
@@ -66,6 +70,40 @@ function requestJson(method, routePath, body, options = {}) {
     if (payload) req.write(payload);
     req.end();
   });
+}
+
+async function panelToken(port) {
+  if (!panelTokens.has(port)) {
+    const pending = rawRequestJson('GET', '/api/session', undefined, { port, timeoutMs: 1500 })
+      .then(session => {
+        if (!session || !session.token) throw new Error('Panel session token is missing');
+        return session.token;
+      })
+      .catch(error => {
+        panelTokens.delete(port);
+        throw error;
+      });
+    panelTokens.set(port, pending);
+  }
+  return panelTokens.get(port);
+}
+
+async function requestJson(method, routePath, body, options = {}) {
+  const port = options.port || DEFAULT_PORT;
+  if (routePath === '/api/session') return rawRequestJson(method, routePath, body, options);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const token = await panelToken(port);
+    try {
+      return await rawRequestJson(method, routePath, body, { ...options, port, token });
+    } catch (error) {
+      if (attempt === 0 && error.statusCode === 403) {
+        panelTokens.delete(port);
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error('Panel session could not be established');
 }
 
 async function isHealthy(port = DEFAULT_PORT) {

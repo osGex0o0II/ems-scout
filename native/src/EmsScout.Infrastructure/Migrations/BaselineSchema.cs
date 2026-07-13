@@ -8,7 +8,10 @@ internal static class BaselineSchema
 {
     public const int V1Version = 1;
     public const int V2Version = 2;
-    public const int LatestVersion = V2Version;
+    public const int V3Version = 3;
+    public const int V4Version = 4;
+    public const int V5Version = 5;
+    public const int LatestVersion = V5Version;
 
     public static readonly HashSet<string> CoreTables = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -44,6 +47,12 @@ internal static class BaselineSchema
         ["device_registry"] = ["device_uid", "primary_source_key", "status", "created_at", "updated_at"],
         ["device_source_keys"] = ["source_key", "device_uid", "building", "sub_idx", "page_name", "device_name", "first_seen_run_id", "last_seen_run_id", "is_current", "created_at", "updated_at"],
         ["device_identity_ambiguities"] = ["id", "migration_version", "detected_at", "entity_table", "entity_key", "reason_code", "status", "source_key", "identity_json", "candidate_device_uids", "resolved_device_uid", "resolution_note", "resolved_at"],
+        ["schedule_groups"] = ["id", "area_group_id", "name", "description", "enabled", "created_at", "updated_at"],
+        ["schedule_rules"] = ["id", "schedule_group_id", "calendar_date", "expected_status", "note", "created_at", "updated_at"],
+        ["schedule_intervals"] = ["id", "rule_id", "start_time", "end_time", "created_at"],
+        ["schedule_group_members"] = ["id", "schedule_group_id", "area_group_item_id", "target_type", "building", "floor_label", "floor_value", "sub_area_text", "card_name", "device_uid", "expected_status", "note", "created_at", "updated_at"],
+        ["attention_issues"] = ["issue_id", "source_key", "issue_type", "severity", "run_id", "title", "detail", "scope", "issue_count", "navigation_json", "status", "ignore_reason", "first_seen_at", "last_seen_at", "resolved_at"],
+        ["attention_issue_history"] = ["id", "issue_id", "changed_at", "previous_status", "current_status", "reason"],
     };
 
     public static readonly AdditiveColumn[] V1AdditiveColumns =
@@ -76,6 +85,11 @@ internal static class BaselineSchema
         new("manual_overrides", "device_uid", "TEXT"),
         new("monitor_group_items", "device_uid", "TEXT"),
         new("realtime_match_overrides", "device_uid", "TEXT"),
+    ];
+
+    public static readonly AdditiveColumn[] V4AdditiveColumns =
+    [
+        new("schedule_group_members", "area_group_item_id", "INTEGER"),
     ];
 
     public static readonly Dictionary<string, ExpectedIndex> ExpectedIndexes = new(StringComparer.OrdinalIgnoreCase)
@@ -122,11 +136,23 @@ internal static class BaselineSchema
         ["idx_device_source_keys_current"] = new("device_source_keys", false),
         ["idx_device_identity_ambiguities_status"] = new("device_identity_ambiguities", false),
         ["idx_device_identity_ambiguities_entity"] = new("device_identity_ambiguities", false),
+        ["idx_schedule_groups_area"] = new("schedule_groups", false),
+        ["idx_schedule_rules_group_date"] = new("schedule_rules", false),
+        ["idx_schedule_intervals_rule"] = new("schedule_intervals", false),
+        ["idx_schedule_members_group"] = new("schedule_group_members", false),
+        ["idx_schedule_members_target"] = new("schedule_group_members", false),
+        ["ux_schedule_groups_area_name"] = new("schedule_groups", true),
+        ["ux_schedule_members_area_item"] = new("schedule_group_members", true),
+        ["idx_schedule_members_area_item"] = new("schedule_group_members", false),
+        ["ux_schedule_intervals_window"] = new("schedule_intervals", true),
+        ["idx_attention_issues_source"] = new("attention_issues", false),
+        ["idx_attention_issues_status"] = new("attention_issues", false),
+        ["idx_attention_history_issue"] = new("attention_issue_history", false),
     };
 
     public static bool TryGetAdditiveColumn(string table, string column, out AdditiveColumn addition)
     {
-        addition = V1AdditiveColumns.Concat(V2AdditiveColumns).FirstOrDefault(candidate =>
+        addition = V1AdditiveColumns.Concat(V2AdditiveColumns).Concat(V4AdditiveColumns).FirstOrDefault(candidate =>
             candidate.Table.Equals(table, StringComparison.OrdinalIgnoreCase) &&
             candidate.Name.Equals(column, StringComparison.OrdinalIgnoreCase))!;
         return addition is not null;

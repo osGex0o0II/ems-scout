@@ -39,15 +39,7 @@ jobs:
         run: dotnet restore native/EmsScout.Native.slnx -r win-x64
 
       - name: Test contracts and Sidecar
-        shell: pwsh
-        run: |
-          $tests = @(
-            Get-ChildItem sidecar/test, tests/architecture, tests/contract-audit, tests/enumeration, tests/field-e2e, tests/golden -Filter '*.test.js' -File -Recurse |
-              Sort-Object FullName |
-              ForEach-Object FullName
-          )
-          & node --test @tests
-          if ($LASTEXITCODE -ne 0) { throw "Node tests failed with exit code $LASTEXITCODE" }
+        run: npm test
 
       - name: Test collector rules
         run: npm run self-test
@@ -79,7 +71,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force artifacts/ci | Out-Null
-          Copy-Item -LiteralPath 'data/1号楼/ac.db' -Destination artifacts/ci/archived-core-v0.db
+          & node -e "const fs=require('fs');const Database=require('better-sqlite3');const db=new Database(process.argv[1]);db.exec(fs.readFileSync(process.argv[2],'utf8'));db.close();" `
+            artifacts/ci/archived-core-v0.db tests/contract-audit/fixtures/schema-v0.sql
+          if ($LASTEXITCODE -ne 0) { throw "Synthetic migration fixture creation failed with exit code $LASTEXITCODE" }
           & dotnet run --project native/tools/EmsScout.SchemaTool/EmsScout.SchemaTool.csproj `
             -c Release --no-restore -- `
             migrate --db artifacts/ci/archived-core-v0.db --apply `
@@ -103,6 +97,7 @@ jobs:
           & node scripts/audit-contracts.js artifacts/ci/archived-core-v0.db |
             Set-Content -LiteralPath artifacts/ci/contract-audit-migrated.json -Encoding utf8
           if ($LASTEXITCODE -ne 0) { throw "Migrated DB contract audit failed with exit code $LASTEXITCODE" }
+          Remove-Item -LiteralPath artifacts/ci/archived-core-v0.db, artifacts/ci/archived-core-v0.backup.db -Force
 
       - name: Stage and smoke bundled Sidecar
         shell: pwsh
@@ -121,6 +116,6 @@ jobs:
           retention-days: 14
           path: |
             artifacts/test-results/**
-            artifacts/ci/**
+            artifacts/ci/*.json
             artifacts/sidecar/win-x64/payload-manifest.json
             artifacts/packages/win-x64/**

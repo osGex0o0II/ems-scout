@@ -1,6 +1,6 @@
 # EMS Scout Windows 验证清单
 
-更新时间：2026-07-11
+更新时间：2026-07-13
 
 本清单用于在另一台 Windows x64 设备上从干净克隆继续验证。每一步通过后再进入下一步；
 失败时保留命令、完整输出和 `artifacts/`，不要用后续成功掩盖前序失败。
@@ -51,13 +51,7 @@ dotnet restore native\EmsScout.Native.slnx -r win-x64
 ## 4. 干净克隆自动化门禁
 
 ```powershell
-$tests = @(
-  Get-ChildItem sidecar\test, tests\architecture, tests\contract-audit, tests\enumeration, tests\field-e2e, tests\golden `
-    -Filter '*.test.js' -File -Recurse |
-    Sort-Object FullName |
-    ForEach-Object FullName
-)
-& node --test @tests
+npm test
 npm run self-test
 npm run native:test
 dotnet format native\EmsScout.Native.slnx --verify-no-changes --no-restore
@@ -66,6 +60,8 @@ dotnet format native\EmsScout.Native.slnx --verify-no-changes --no-restore
 说明：干净克隆没有 `out/` 生产证据。Node run17 黄金测试会明确 skip；
 `npm run native:test` 会排除 `Fixture=ProductionEvidence`，其余源码、迁移、契约、Excel、
 回滚和架构测试必须通过。
+
+CI 和安装包不得复制或上传 `data/`、`out/`、`*.db`、`*-wal`、`*-shm` 等现场证据；迁移自动化使用 `tests/contract-audit/fixtures/schema-v0.sql` 创建合成数据库。
 
 ## 5. 原生应用构建与启动
 

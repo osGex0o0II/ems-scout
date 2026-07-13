@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using EmsScout.Desktop.Services;
 using EmsScout.Desktop.ViewModels;
 
 namespace EmsScout.Desktop.Pages;
@@ -23,6 +24,14 @@ public sealed partial class AuditPage : Page
     private void OpenData_Click(object sender, RoutedEventArgs e)
     {
         ViewModel.OpenData();
+    }
+
+    private void DataContext_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ComboBox comboBox && comboBox.SelectedItem is DataContextOption option)
+        {
+            ViewModel.DataContext.Select(option);
+        }
     }
 
     private async void RestoreRun_Click(object sender, RoutedEventArgs e)

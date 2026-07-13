@@ -82,7 +82,7 @@ function checkCardQuality(cards, meta = {}) {
   const activeCount = activeCards.length;
   const activeWithSwitch = activeCards.filter(c => c.switch === 'ON' || c.switch === 'OFF').length;
   const activeWithMode = activeCards.filter(c => c.mode && c.mode !== '-').length;
-  const activeWithFan = activeCards.filter(c => c.fan && c.fan !== '-' && c.fan !== '0').length;
+  const activeWithFan = activeCards.filter(c => ['低', '中', '高', '自动'].includes(c.fan)).length;
   const activeWithIndoor = activeCards.filter(c => isRealIndoor(c.indoor)).length;
   const activeWithSetTemp = activeCards.filter(c => isValidSetTemp(c.setTemp)).length;
   const invalidIndoor = cards.filter(c => hasNumericValue(c.indoor) && !isValidIndoor(c.indoor)).length;

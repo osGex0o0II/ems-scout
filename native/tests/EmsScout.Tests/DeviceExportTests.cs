@@ -28,7 +28,7 @@ public sealed class DeviceExportTests : IDisposable
         var export = await exportService.ExportAsync(new DeviceQuery(), output);
 
         Assert.True(File.Exists(export.Path), $"Missing export: {export.Path}");
-        Assert.Matches(@"^数据管理筛选结果_\d{8}_\d{6}\.xlsx$", export.FileName);
+        Assert.Matches(@"^数据管理筛选结果_\d{8}_\d{6}_\d{3}(?:_\d+)?\.xlsx$", export.FileName);
         Assert.Equal("xlsx", export.Format);
         Assert.Equal(6570, export.RowCount);
         Assert.Equal(6570, export.Facets.Total);
@@ -88,7 +88,7 @@ public sealed class DeviceExportTests : IDisposable
         Assert.Equal(sample.PageLabel, row[3]);
         Assert.Equal(sample.Name, row[4]);
         Assert.Equal(sample.AreaType, row[5]);
-        Assert.Equal(sample.CommunicationText, row[6]);
+        Assert.Equal(sample.OperatingStatusText, row[6]);
         Assert.Equal(sample.Mode, row[7]);
         Assert.Equal(sample.Fan, row[8]);
         Assert.Equal(sample.SetTemperature, row[9]);
@@ -147,7 +147,7 @@ public sealed class DeviceExportTests : IDisposable
             ["2号", "B座", "2F", "默认页", "2-0201-KT", "非公区", "开机", "制冷", "中", "25", "26", "无实时数据"],
             exportedRows[2]);
         Assert.Equal(
-            ["3号", "", "3F", "默认页", "3-0301-KT", "未匹配", "未知", "制冷", "中", "25", "26", "未知"],
+            ["3号", "", "3F", "默认页", "3-0301-KT", "未匹配", "关机", "制冷", "中", "25", "26", "未知"],
             exportedRows[3]);
     }
 
@@ -191,6 +191,40 @@ public sealed class DeviceExportTests : IDisposable
     }
 
     [Fact]
+    public async Task DeviceWorkbookUsesDerivedOperatingStatusAndSanitizesInvalidXmlCharacters()
+    {
+        var online = Device(1, "1号", "1F", "1F A", "bad\u0001name", "在线", "非公区", "A座", null)
+            with
+        { SwitchState = "ON" };
+        var exportService = new SqliteDeviceExportService(new FakeDeviceReadRepository([online]));
+
+        var export = await exportService.ExportAsync(new DeviceQuery(), Path.Combine(temporaryRoot, "xml-controls"));
+
+        var row = Assert.Single(UserDeviceWorkbookAssert.ReadRows(export.Path).Skip(1));
+        Assert.Equal("开机", row[6]);
+        Assert.Equal("bad�name", row[4]);
+        UserDeviceWorkbookAssert.AssertShape(export);
+    }
+
+    [Fact]
+    public async Task ImmediateExportsUseDistinctFilesAndPreserveTheFirstWorkbook()
+    {
+        var exportService = new SqliteDeviceExportService(new FakeDeviceReadRepository([
+            Device(1, "1号", "1F", "1F A", "1-A", "关机", "非公区", "A座", null),
+        ]));
+        var output = Path.Combine(temporaryRoot, "collision");
+
+        var first = await exportService.ExportAsync(new DeviceQuery(), output);
+        var firstBytes = await File.ReadAllBytesAsync(first.Path);
+        var second = await exportService.ExportAsync(new DeviceQuery(), output);
+
+        Assert.NotEqual(first.Path, second.Path);
+        Assert.Equal(firstBytes, await File.ReadAllBytesAsync(first.Path));
+        UserDeviceWorkbookAssert.AssertShape(first);
+        UserDeviceWorkbookAssert.AssertShape(second);
+    }
+
+    [Fact]
     public async Task DeviceWorkbookRejectsResultsAboveExportLimit()
     {
         var exportService = new SqliteDeviceExportService(new TotalOverrideRepository(50001));
@@ -200,6 +234,20 @@ public sealed class DeviceExportTests : IDisposable
             () => exportService.ExportAsync(new DeviceQuery(), output));
 
         Assert.Contains("50,000", error.Message);
+        Assert.Empty(Directory.EnumerateFiles(output, "*.xlsx"));
+    }
+
+    [Fact]
+    public async Task DeviceWorkbookRejectsInconsistentResultTotalBeforeWritingFile()
+    {
+        var exportService = new SqliteDeviceExportService(new TotalOverrideRepository(3));
+        var output = Path.Combine(temporaryRoot, "inconsistent-total");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => exportService.ExportAsync(new DeviceQuery(Building: "1号"), output));
+
+        Assert.Contains("3", error.Message);
+        Assert.Contains("0", error.Message);
         Assert.Empty(Directory.EnumerateFiles(output, "*.xlsx"));
     }
 

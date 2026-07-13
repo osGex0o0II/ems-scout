@@ -21,21 +21,33 @@ public static class SpreadsheetWorkbookWriter
 
         if (File.Exists(path))
         {
-            File.Delete(path);
+            throw new IOException($"Workbook already exists: {path}");
         }
 
-        using var archive = ZipFile.Open(path, ZipArchiveMode.Create, Encoding.UTF8);
-        AddTextEntry(archive, "[Content_Types].xml", ContentTypesXml(sheets.Count));
-        AddTextEntry(archive, "_rels/.rels", RootRelationshipsXml());
-        AddTextEntry(archive, "xl/workbook.xml", WorkbookXml(sheets));
-        AddTextEntry(archive, "xl/_rels/workbook.xml.rels", WorkbookRelationshipsXml(sheets.Count));
-        AddTextEntry(archive, "xl/styles.xml", StylesXml());
-        for (var index = 0; index < sheets.Count; index++)
+        var temporaryPath = $"{path}.tmp-{Guid.NewGuid():N}";
+        try
         {
-            AddTextEntry(
-                archive,
-                $"xl/worksheets/sheet{index + 1}.xml",
-                WorksheetXml(sheets[index].Rows));
+            using (var archive = ZipFile.Open(temporaryPath, ZipArchiveMode.Create, Encoding.UTF8))
+            {
+                AddTextEntry(archive, "[Content_Types].xml", ContentTypesXml(sheets.Count));
+                AddTextEntry(archive, "_rels/.rels", RootRelationshipsXml());
+                AddTextEntry(archive, "xl/workbook.xml", WorkbookXml(sheets));
+                AddTextEntry(archive, "xl/_rels/workbook.xml.rels", WorkbookRelationshipsXml(sheets.Count));
+                AddTextEntry(archive, "xl/styles.xml", StylesXml());
+                for (var index = 0; index < sheets.Count; index++)
+                {
+                    AddTextEntry(
+                        archive,
+                        $"xl/worksheets/sheet{index + 1}.xml",
+                        WorksheetXml(sheets[index].Rows));
+                }
+            }
+
+            File.Move(temporaryPath, path, overwrite: false);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath)) File.Delete(temporaryPath);
         }
     }
 
@@ -77,7 +89,35 @@ public static class SpreadsheetWorkbookWriter
 
     private static string EscapeXml(string? value)
     {
-        return SecurityElement.Escape(value ?? string.Empty) ?? string.Empty;
+        return SecurityElement.Escape(SanitizeXml(value ?? string.Empty)) ?? string.Empty;
+    }
+
+    private static string SanitizeXml(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        for (var index = 0; index < value.Length; index++)
+        {
+            var current = value[index];
+            if (current is '\t' or '\n' or '\r' ||
+                current is >= '\u0020' and <= '\uD7FF' ||
+                current is >= '\uE000' and <= '\uFFFD')
+            {
+                builder.Append(current);
+            }
+            else if (char.IsHighSurrogate(current) &&
+                     index + 1 < value.Length &&
+                     char.IsLowSurrogate(value[index + 1]))
+            {
+                builder.Append(current);
+                builder.Append(value[++index]);
+            }
+            else
+            {
+                builder.Append('\uFFFD');
+            }
+        }
+
+        return builder.ToString();
     }
 
     private static void AddTextEntry(ZipArchive archive, string name, string content)

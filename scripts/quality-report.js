@@ -4,8 +4,9 @@
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
+const { copyStableSqliteSnapshot } = require('./sqlite-snapshot');
 const { BLDG_ORDER, BLDG_META } = require('../src/rules');
-const { ensureHistorySchema, resolveRunId, sourceForRun } = require('../src/panel/history');
+const { resolveRunId, sourceForRun } = require('../src/panel/history');
 
 const ROOT = path.join(__dirname, '..');
 const DB_PATH = process.env.EMS_DB_PATH || path.join(ROOT, 'out', 'ac.db');
@@ -46,6 +47,10 @@ function nowLocal() {
 
 function rows(db, sql, params = []) {
   return db.prepare(sql).all(...params);
+}
+
+function hasColumn(db, table, column) {
+  return db.pragma(`table_info(${table})`).some(item => item.name === column);
 }
 
 function safeJsonArray(value) {
@@ -142,51 +147,8 @@ function qualityOutPaths(runId) {
   };
 }
 
-function latestRunId() {
-  if (!fs.existsSync(DB_PATH)) return null;
-  const db = new Database(DB_PATH);
-  try {
-    ensureHistorySchema(db);
-    const row = db.prepare(`
-      SELECT id
-      FROM collection_runs
-      ORDER BY datetime(completed_at) DESC, id DESC
-      LIMIT 1
-    `).get();
-    return row ? row.id : null;
-  } finally {
-    db.close();
-  }
-}
-
 function resolveQualityRunArg(raw) {
-  if (raw === 'latest-run' || raw === 'latest-imported') return latestRunId();
   return raw || '';
-}
-
-function saveRunQualitySummary(runId, report) {
-  if (!runId) return;
-  const db = new Database(DB_PATH);
-  try {
-    ensureHistorySchema(db);
-    db.prepare(`
-      UPDATE collection_runs
-      SET quality_summary = ?
-      WHERE id = ?
-    `).run(JSON.stringify({
-      generated_at: report.generated_at,
-      generated_at_local: report.generated_at_local,
-      summary: report.summary,
-      issues: report.issues,
-    }), runId);
-  } finally {
-    db.close();
-  }
-}
-
-function ensureQualityReasonColumns(db) {
-  try { db.exec('ALTER TABLE pages ADD COLUMN quality_reason TEXT'); } catch {}
-  try { db.exec('ALTER TABLE run_pages ADD COLUMN quality_reason TEXT'); } catch {}
 }
 
 function buildReport(options = {}) {
@@ -194,24 +156,26 @@ function buildReport(options = {}) {
     throw new Error('Database not found: ' + DB_PATH);
   }
   const knownFindings = loadKnownFindings();
-
-  const writeDb = new Database(DB_PATH);
+  const snapshot = copyStableSqliteSnapshot(DB_PATH);
+  let db;
   try {
-    ensureHistorySchema(writeDb);
-    ensureQualityReasonColumns(writeDb);
-  } finally {
-    writeDb.close();
-  }
-
-  const db = new Database(DB_PATH, { readonly: true });
-  const runId = resolveRunId(db, options.runId || options.run_id);
+  db = new Database(snapshot.path, { fileMustExist: true });
+  db.pragma('query_only = ON');
+  const requestedRun = options.runId || options.run_id;
+  const latestRun = requestedRun === 'latest-run' || requestedRun === 'latest-imported'
+    ? db.prepare('SELECT id FROM collection_runs ORDER BY datetime(completed_at) DESC, id DESC LIMIT 1').get()
+    : null;
+  const runId = resolveRunId(db, latestRun ? latestRun.id : requestedRun);
   const source = sourceForRun(runId);
+  const qualityReason = hasColumn(db, source.pages, 'quality_reason')
+    ? "COALESCE(p.quality_reason, '')"
+    : "''";
   const runWhere = source.runWhere ? `WHERE ${source.runWhere}` : '';
   const andRunWhere = source.runWhere ? `AND ${source.runWhere}` : '';
   const run = runId ? db.prepare('SELECT id, run_key, completed_at, imported_at, scope, buildings FROM collection_runs WHERE id = ?').get(runId) : null;
   const cardRows = rows(db, `
     SELECT sa.building, sa.floor, sa.text AS sub_area, sa.x, sa.y,
-           p.page_name, p.layout, COALESCE(p.quality_reason, '') AS quality_reason,
+           p.page_name, p.layout, ${qualityReason} AS quality_reason,
            c.name, c.switch, c.mode, c.indoor, c.set_temp, c.fan,
            COALESCE(c.indicator, '') AS indicator,
            c.comm
@@ -280,6 +244,19 @@ function buildReport(options = {}) {
       ${andRunWhere}
     ORDER BY sa.building, sa.floor, sa.x, p.page_name
   `, source.runParams);
+  const pageCountMismatches = rows(db, `
+    SELECT sa.building, sa.floor, sa.text AS sub_area, p.page_name,
+           p.count, p.raw_count, p.unique_count, COUNT(c.id) AS actual_count
+    FROM ${source.subAreas} sa
+    JOIN ${source.pages} p ON p.${source.pageSaColumn} = sa.id
+    LEFT JOIN ${source.cards} c ON c.${source.cardPageColumn} = p.id
+    ${runWhere}
+    GROUP BY p.id
+    HAVING COALESCE(p.count, -1) <> actual_count
+       OR COALESCE(p.unique_count, -1) <> actual_count
+       OR COALESCE(p.raw_count, -1) < actual_count
+    ORDER BY sa.building, sa.floor, sa.x, p.page_name
+  `, source.runParams);
   const emptySubAreas = rows(db, `
     SELECT sa.building, sa.floor, sa.text AS sub_area, sa.sub_idx, sa.x, sa.y,
            COUNT(p.id) AS pages
@@ -293,7 +270,7 @@ function buildReport(options = {}) {
   const inlineSubAreas = emptySubAreas.filter(r => r.building === '6号' && r.floor === -2 && r.sub_area === 'BM');
   const emptyNonInlineSubAreas = emptySubAreas.filter(r => !(r.building === '6号' && r.floor === -2 && r.sub_area === 'BM'));
   const suspiciousUniformPages = rows(db, `
-    SELECT sa.building, sa.floor, sa.text AS sub_area, p.page_name, p.layout, COALESCE(p.quality_reason, '') AS quality_reason,
+    SELECT sa.building, sa.floor, sa.text AS sub_area, p.page_name, p.layout, ${qualityReason} AS quality_reason,
            COUNT(*) AS cards,
            COUNT(DISTINCT c.name) AS names,
            COUNT(DISTINCT c.indoor) AS indoor_vals,
@@ -317,7 +294,7 @@ function buildReport(options = {}) {
     ORDER BY sa.building, sa.floor, sa.x, p.id
   `, source.runParams);
   const uniformResolvedPages = rows(db, `
-    SELECT sa.building, sa.floor, sa.text AS sub_area, sa.x, sa.y, p.page_name, p.layout, COALESCE(p.quality_reason, '') AS quality_reason,
+    SELECT sa.building, sa.floor, sa.text AS sub_area, sa.x, sa.y, p.page_name, p.layout, ${qualityReason} AS quality_reason,
            COUNT(*) AS cards,
            MIN(c.indoor) AS indoor,
            MIN(c.set_temp) AS set_temp,
@@ -370,7 +347,7 @@ function buildReport(options = {}) {
   });
   const lowActiveFieldPages = rows(db, `
     SELECT sa.building, sa.floor, sa.text AS sub_area, sa.x, sa.y,
-           p.page_name, p.layout, COALESCE(p.quality_reason, '') AS quality_reason,
+           p.page_name, p.layout, ${qualityReason} AS quality_reason,
            COUNT(*) AS cards,
            SUM(c.comm = '开机' OR c.comm = '关机') AS active_cards,
            SUM((c.comm = '开机' OR c.comm = '关机') AND c.switch IN ('ON', 'OFF')) AS active_switch,
@@ -417,8 +394,6 @@ function buildReport(options = {}) {
     };
   });
 
-  db.close();
-
   const issues = [];
   if (placeholderCards.length) issues.push({ severity: 'P1', code: 'placeholder_names', count: placeholderCards.length, message: '存在 0-0001-KT 或空卡名，说明页面未完全加载即入库。' });
   if (inconsistentState.length) issues.push({ severity: 'P1', code: 'state_mismatch', count: inconsistentState.length, message: 'comm 与 switch 不一致。' });
@@ -426,6 +401,7 @@ function buildReport(options = {}) {
   if (baselineMisses.length) issues.push({ severity: 'P2', code: 'baseline_delta', count: baselineMisses.length, message: '楼栋卡数或子区数与基准不一致。' });
   if (unknownSwitch.length) issues.push({ severity: 'P2', code: 'unknown_switch', count: unknownSwitch.length, message: '存在非 ON/OFF/- 的开关状态。' });
   if (duplicateCardsSamePage.length) issues.push({ severity: 'P2', code: 'duplicate_cards_same_page', count: duplicateCardsSamePage.length, message: '同一页面存在重复卡名。' });
+  if (pageCountMismatches.length) issues.push({ severity: 'P1', code: 'page_count_mismatch', count: pageCountMismatches.length, message: '页面 count/raw_count/unique_count 与实际卡片数不一致。' });
   if (emptyNonInlineSubAreas.length) issues.push({ severity: 'P2', code: 'empty_sub_areas', count: emptyNonInlineSubAreas.length, message: '存在无页面/无卡片的空子区。' });
   if (suspiciousUniformPages.length) issues.push({ severity: 'P2', code: 'suspicious_uniform_pages', count: suspiciousUniformPages.length, message: '存在统一默认值且未完整加载通讯/开关的页面。' });
   const knownBuckets = [
@@ -482,6 +458,7 @@ function buildReport(options = {}) {
       unknown_switch: unknownSwitch.length,
       duplicate_cards_same_page: duplicateCardsSamePage.length,
       duplicate_rendered_pages: duplicateRenderedPages.length,
+      page_count_mismatch: pageCountMismatches.length,
       empty_sub_areas: emptyNonInlineSubAreas.length,
       inline_sub_areas: inlineSubAreas.length,
       suspicious_uniform_pages: suspiciousUniformPages.length,
@@ -501,6 +478,7 @@ function buildReport(options = {}) {
       unknown_switch: unknownSwitch.slice(0, 50),
       duplicate_cards_same_page: duplicateCardsSamePage.slice(0, 50),
       duplicate_rendered_pages: duplicateRenderedPages.slice(0, 50),
+      page_count_mismatch: pageCountMismatches.slice(0, 50),
       empty_sub_areas: emptyNonInlineSubAreas.slice(0, 50),
       inline_sub_areas: inlineSubAreas.slice(0, 50),
       suspicious_uniform_pages: suspiciousUniformPages.slice(0, 50),
@@ -512,6 +490,13 @@ function buildReport(options = {}) {
       uniform_resolved_pages: uniformResolvedPages.slice(0, 50),
     },
   };
+  } finally {
+    try {
+      db?.close();
+    } finally {
+      fs.rmSync(snapshot.directory, { recursive: true, force: true });
+    }
+  }
 }
 
 function renderText(report) {
@@ -645,19 +630,27 @@ function renderText(report) {
 }
 
 function main() {
+  if (process.argv.includes('--help')) {
+    console.log('Usage: EMS_DB_PATH=<database.db> EMS_QUALITY_OUT=<directory> node scripts/quality-report.js [--run-id=<id|latest-run>]');
+    return;
+  }
   const runIdArg = (process.argv.find(a => a.startsWith('--run-id=')) || '').split('=').slice(1).join('=');
-  const runId = resolveQualityRunArg(runIdArg);
-  const report = buildReport({ runId });
-  const paths = qualityOutPaths(report.run_id);
-  fs.mkdirSync(OUT_DIR, { recursive: true });
-  fs.writeFileSync(paths.jsonOut, JSON.stringify(report, null, 2), 'utf8');
-  fs.writeFileSync(paths.txtOut, renderText(report), 'utf8');
-  saveRunQualitySummary(report.run_id, report);
-  console.log('Saved:', paths.jsonOut);
-  console.log('Saved:', paths.txtOut);
-  if (report.summary.issue_count > 0) {
-    console.log(`Quality issues: ${report.summary.issue_count}`);
-    process.exitCode = 2;
+  try {
+    const runId = resolveQualityRunArg(runIdArg);
+    const report = buildReport({ runId });
+    const paths = qualityOutPaths(report.run_id);
+    fs.mkdirSync(OUT_DIR, { recursive: true });
+    fs.writeFileSync(paths.jsonOut, JSON.stringify(report, null, 2), 'utf8');
+    fs.writeFileSync(paths.txtOut, renderText(report), 'utf8');
+    console.log('Saved:', paths.jsonOut);
+    console.log('Saved:', paths.txtOut);
+    if (report.summary.issue_count > 0) {
+      console.log(`Quality issues: ${report.summary.issue_count}`);
+      process.exitCode = 2;
+    }
+  } catch (error) {
+    console.error('ERROR: ' + (error && error.message ? error.message : String(error)));
+    process.exitCode = 1;
   }
 }
 

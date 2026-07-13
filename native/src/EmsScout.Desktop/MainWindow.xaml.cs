@@ -16,7 +16,7 @@ public sealed partial class MainWindow : Window
         AppWindow.SetIcon("Assets/AppIcon.ico");
         App.Services.GetRequiredService<WindowHandleProvider>().Attach(this);
         App.Services.GetRequiredService<AppUiSettingsService>().ApplyTheme(RootGrid);
-        App.Services.GetRequiredService<NavigationService>().Attach(NavigateToData);
+        App.Services.GetRequiredService<NavigationService>().Attach(NavigateToData, NavigateToAudit, NavigateToDates);
         NavFrame.Navigate(typeof(HomePage));
         if (!string.IsNullOrWhiteSpace(startupFailure))
         {
@@ -35,6 +35,7 @@ public sealed partial class MainWindow : Window
                 .ConfigureAwait(true);
             StartupFailureBar.IsOpen = false;
             NavFrame.Navigate(typeof(HomePage));
+            NavFrame.BackStack.Clear();
         }
         catch (Exception ex)
         {
@@ -50,6 +51,7 @@ public sealed partial class MainWindow : Window
     {
         SelectNavigationItem("settings");
         NavFrame.Navigate(typeof(SettingsPage));
+        NavFrame.BackStack.Clear();
     }
 
     private void ShowStartupFailure(string message)
@@ -68,11 +70,11 @@ public sealed partial class MainWindow : Window
 
         var pageType = item.Tag switch
         {
-            "overview" => typeof(HomePage),
-            "tasks" => typeof(TasksPage),
-            "data" => typeof(DataPage),
+            "workbench" => typeof(HomePage),
+            "collection" => typeof(TasksPage),
+            "devices" => typeof(DataPage),
             "audit" => typeof(AuditPage),
-            "groups" => typeof(AreasPage),
+            "rules" => typeof(AreasPage),
             "settings" => typeof(SettingsPage),
             "diagnostics" => typeof(DiagnosticsPage),
             _ => throw new InvalidOperationException($"Unknown navigation item tag: {item.Tag}")
@@ -81,18 +83,36 @@ public sealed partial class MainWindow : Window
         if (NavFrame.CurrentSourcePageType != pageType)
         {
             NavFrame.Navigate(pageType);
+            NavFrame.BackStack.Clear();
         }
     }
 
     private void NavigateToData(DataNavigationRequest request)
     {
-        SelectNavigationItem("data");
+        SelectNavigationItem("devices");
         NavFrame.Navigate(typeof(DataPage), request);
+        NavFrame.BackStack.Clear();
+    }
+
+    private void NavigateToAudit()
+    {
+        SelectNavigationItem("audit");
+        NavFrame.Navigate(typeof(AuditPage));
+        NavFrame.BackStack.Clear();
+    }
+
+    private void NavigateToDates()
+    {
+        SelectNavigationItem("rules");
+        NavFrame.Navigate(typeof(DateManagementPage));
+        NavFrame.BackStack.Clear();
     }
 
     private void SelectNavigationItem(string tag)
     {
-        foreach (var item in NavView.MenuItems.OfType<NavigationViewItem>())
+        foreach (var item in NavView.MenuItems
+                     .Concat(NavView.FooterMenuItems)
+                     .OfType<NavigationViewItem>())
         {
             item.IsSelected = string.Equals(item.Tag?.ToString(), tag, StringComparison.OrdinalIgnoreCase);
         }

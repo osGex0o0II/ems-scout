@@ -9,6 +9,7 @@ internal sealed class SqliteQualityAuditDataReader
     public async Task<QualityAuditDataSet?> ReadAsync(
         string databasePath,
         QualityAuditSourceKind sourceKind,
+        long? requestedRunId,
         CancellationToken cancellationToken)
     {
         if (!File.Exists(databasePath))
@@ -39,6 +40,7 @@ internal sealed class SqliteQualityAuditDataReader
                 transaction,
                 tables,
                 sourceKind,
+                requestedRunId,
                 cancellationToken)
             .ConfigureAwait(false);
         if (source is null)
@@ -97,6 +99,7 @@ internal sealed class SqliteQualityAuditDataReader
         SqliteTransaction transaction,
         IReadOnlySet<string> tables,
         QualityAuditSourceKind sourceKind,
+        long? requestedRunId,
         CancellationToken cancellationToken)
     {
         if (sourceKind == QualityAuditSourceKind.Current)
@@ -124,13 +127,19 @@ internal sealed class SqliteQualityAuditDataReader
 
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = """
-            SELECT id
-            FROM collection_runs
-            WHERE status = 'completed'
-            ORDER BY datetime(completed_at) DESC, id DESC
-            LIMIT 1
-            """;
+        command.CommandText = sourceKind == QualityAuditSourceKind.SpecificRun
+            ? "SELECT id FROM collection_runs WHERE id = $run_id AND status = 'completed' LIMIT 1"
+            : """
+                SELECT id
+                FROM collection_runs
+                WHERE status = 'completed'
+                ORDER BY datetime(completed_at) DESC, id DESC
+                LIMIT 1
+                """;
+        if (sourceKind == QualityAuditSourceKind.SpecificRun)
+        {
+            command.Parameters.AddWithValue("$run_id", requestedRunId ?? -1);
+        }
         var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         if (value is null or DBNull)
         {

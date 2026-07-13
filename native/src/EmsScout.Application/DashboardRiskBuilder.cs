@@ -27,7 +27,10 @@ public static class DashboardRiskBuilder
                 "当前没有设备数据",
                 "总览、数据管理和 Excel 导出都需要先完成采集并导入 SQLite。",
                 "当前数据",
-                OverviewMetricKind.Danger));
+                OverviewMetricKind.Danger,
+                IssueId: "inventory:no-data",
+                SourceKey: "inventory",
+                IssueType: "no-data"));
         }
 
         if (summary.Unknown > 0)
@@ -39,7 +42,10 @@ public static class DashboardRiskBuilder
                 OverviewMetricKind.Warning,
                 summary.Unknown,
                 "查看未知",
-                CommunicationState: "未知"));
+                CommunicationState: "未知",
+                IssueId: "inventory:communication:unknown",
+                SourceKey: "inventory",
+                IssueType: "communication"));
         }
 
         if (summary.Offline > 0)
@@ -51,7 +57,10 @@ public static class DashboardRiskBuilder
                 summary.OfflineRate >= 0.1 ? OverviewMetricKind.Warning : OverviewMetricKind.Info,
                 summary.Offline,
                 "查看离线",
-                CommunicationState: "离线"));
+                CommunicationState: "离线",
+                IssueId: "inventory:communication:offline",
+                SourceKey: "inventory",
+                IssueType: "communication"));
         }
 
         if (facets.WatchAbnormal > 0)
@@ -63,7 +72,10 @@ public static class DashboardRiskBuilder
                 OverviewMetricKind.Danger,
                 facets.WatchAbnormal,
                 "查看异常",
-                WatchState: "abnormal"));
+                WatchState: "abnormal",
+                IssueId: "watch:state:abnormal",
+                SourceKey: "watch",
+                IssueType: "state"));
         }
 
         AddQualityRisk(risks, qualityReport, qualityError);
@@ -92,9 +104,12 @@ public static class DashboardRiskBuilder
         {
             risks.Add(new DashboardRiskItem(
                 "基础质量审计读取失败",
-                error.Message,
+                "基础质量审计暂时无法读取，请在审计页重试并查看诊断日志。",
                 "基础质量审计",
-                OverviewMetricKind.Warning));
+                OverviewMetricKind.Warning,
+                IssueId: "quality:read-error",
+                SourceKey: "quality",
+                IssueType: "read-error"));
             return;
         }
 
@@ -104,7 +119,10 @@ public static class DashboardRiskBuilder
                 "缺少基础质量审计结果",
                 "采集任务完成后建议运行基础质量检查，避免用过期或未审计数据判断进度。",
                 "基础质量审计",
-                OverviewMetricKind.Warning));
+                OverviewMetricKind.Warning,
+                IssueId: "quality:missing",
+                SourceKey: "quality",
+                IssueType: "missing"));
             return;
         }
 
@@ -117,7 +135,11 @@ public static class DashboardRiskBuilder
                     : report.StaleReason,
                 "基础质量审计",
                 OverviewMetricKind.Warning,
-                report.Summary.IssueCount));
+                report.Summary.IssueCount,
+                IssueId: "quality:stale",
+                SourceKey: "quality",
+                IssueType: "stale",
+                RunId: report.RunId));
         }
 
         if (report.Summary.IssueCount > 0)
@@ -129,7 +151,11 @@ public static class DashboardRiskBuilder
                 OverviewMetricKind.Warning,
                 report.Summary.IssueCount,
                 "查看需排查",
-                QuickFilter: "needs_review"));
+                QuickFilter: "needs_review",
+                IssueId: "quality:summary:issues",
+                SourceKey: "quality",
+                IssueType: "summary",
+                RunId: report.RunId));
         }
     }
 
@@ -142,9 +168,12 @@ public static class DashboardRiskBuilder
         {
             risks.Add(new DashboardRiskItem(
                 "实时点位审计读取失败",
-                error.Message,
+                "实时点位审计暂时无法读取，请在审计页重试并查看诊断日志。",
                 "实时点位审计",
-                OverviewMetricKind.Warning));
+                OverviewMetricKind.Warning,
+                IssueId: "realtime:read-error",
+                SourceKey: "realtime",
+                IssueType: "read-error"));
             return;
         }
 
@@ -154,7 +183,10 @@ public static class DashboardRiskBuilder
                 "缺少实时点位审计结果",
                 "运行实时详情采集和点位审计后，首页才能判断实时字段覆盖和异常。",
                 "实时点位审计",
-                OverviewMetricKind.Info));
+                OverviewMetricKind.Info,
+                IssueId: "realtime:missing",
+                SourceKey: "realtime",
+                IssueType: "missing"));
             return;
         }
 
@@ -167,7 +199,10 @@ public static class DashboardRiskBuilder
                 OverviewMetricKind.Danger,
                 report.CollectionErrorCount,
                 "查看点位异常",
-                RealtimePoints: "incomplete"));
+                RealtimePoints: "incomplete",
+                IssueId: "realtime:collection-errors",
+                SourceKey: "realtime",
+                IssueType: "collection"));
         }
 
         if (report.DeviceAnomalyRows > 0)
@@ -179,7 +214,10 @@ public static class DashboardRiskBuilder
                 OverviewMetricKind.Warning,
                 report.DeviceAnomalyRows,
                 "查看详情异常",
-                RealtimeMatch: "invalid"));
+                RealtimeMatch: "invalid",
+                IssueId: "realtime:devices:invalid",
+                SourceKey: "realtime",
+                IssueType: "devices"));
         }
     }
 
@@ -192,9 +230,12 @@ public static class DashboardRiskBuilder
         {
             risks.Add(new DashboardRiskItem(
                 "实时对账读取失败",
-                error.Message,
+                "实时对账暂时无法读取，请在审计页重试并查看诊断日志。",
                 "实时对账",
-                OverviewMetricKind.Warning));
+                OverviewMetricKind.Warning,
+                IssueId: "reconciliation:read-error",
+                SourceKey: "reconciliation",
+                IssueType: "read-error"));
             return;
         }
 
@@ -212,7 +253,10 @@ public static class DashboardRiskBuilder
                 OverviewMetricKind.Warning,
                 summary.DiffItemCount,
                 "查看缺实时",
-                RealtimeMatch: "missing"));
+                RealtimeMatch: "missing",
+                IssueId: "reconciliation:summary:difference",
+                SourceKey: "reconciliation",
+                IssueType: "summary"));
         }
     }
 
@@ -225,9 +269,12 @@ public static class DashboardRiskBuilder
         {
             risks.Add(new DashboardRiskItem(
                 "历史批次读取失败",
-                error.Message,
+                "采集批次暂时无法读取，请在审计页重试并查看诊断日志。",
                 "历史批次",
-                OverviewMetricKind.Warning));
+                OverviewMetricKind.Warning,
+                IssueId: "runs:read-error",
+                SourceKey: "runs",
+                IssueType: "read-error"));
             return;
         }
 
@@ -239,7 +286,10 @@ public static class DashboardRiskBuilder
                 $"已有 {anomalies:N0} 个历史批次被标记异常；恢复或对比当前数据前应确认隔离原因。",
                 "历史批次",
                 OverviewMetricKind.Warning,
-                anomalies));
+                anomalies,
+                IssueId: "runs:anomaly",
+                SourceKey: "runs",
+                IssueType: "anomaly"));
         }
     }
 }

@@ -25,6 +25,8 @@ public sealed class AreaGroupItemRow(AreaGroupItemRecord record)
 
     public string CardName { get; } = record.CardName;
 
+    public string DeviceUid { get; } = record.DeviceUid;
+
     public string RawNote { get; } = record.Note;
 
     public string Note { get; } = string.IsNullOrWhiteSpace(record.Note) ? "--" : record.Note;

@@ -54,6 +54,27 @@ public sealed class SqliteSchemaMigrator
                             "not-required:fresh-create",
                             cancellationToken)
                         .ConfigureAwait(false);
+                    await ApplyV3SchedulesAsync(
+                            connection,
+                            transaction,
+                            "fresh-empty-v0",
+                            "not-required:fresh-create",
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    await ApplyV4ScheduleIntegrityAsync(
+                            connection,
+                            transaction,
+                            "fresh-empty-v0",
+                            "not-required:fresh-create",
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    await ApplyV5AttentionQueueAsync(
+                            connection,
+                            transaction,
+                            "fresh-empty-v0",
+                            "not-required:fresh-create",
+                            cancellationToken)
+                        .ConfigureAwait(false);
                     await ExecuteAsync(
                             connection,
                             transaction,
@@ -110,7 +131,7 @@ public sealed class SqliteSchemaMigrator
             return new SchemaMigrationResult(
                 fullPath,
                 BackupPath: null,
-                AppliedVersions: [BaselineSchema.V1Version, BaselineSchema.V2Version],
+                AppliedVersions: [BaselineSchema.V1Version, BaselineSchema.V2Version, BaselineSchema.V3Version, BaselineSchema.V4Version, BaselineSchema.V5Version],
                 AppliedChanges:
                 [
                     new SchemaPendingChange(
@@ -216,6 +237,27 @@ public sealed class SqliteSchemaMigrator
                             cancellationToken)
                         .ConfigureAwait(false);
                     var identityReport = await ApplyV2IdentityAsync(
+                            connection,
+                            transaction,
+                            lockedAudit.DatabaseShape,
+                            completedBackupPath,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    await ApplyV3SchedulesAsync(
+                            connection,
+                            transaction,
+                            lockedAudit.DatabaseShape,
+                            completedBackupPath,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    await ApplyV4ScheduleIntegrityAsync(
+                            connection,
+                            transaction,
+                            lockedAudit.DatabaseShape,
+                            completedBackupPath,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    await ApplyV5AttentionQueueAsync(
                             connection,
                             transaction,
                             lockedAudit.DatabaseShape,
@@ -394,6 +436,69 @@ public sealed class SqliteSchemaMigrator
                 cancellationToken)
             .ConfigureAwait(false);
         return report;
+    }
+
+    private static async Task ApplyV3SchedulesAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string sourceShape,
+        string backupPath,
+        CancellationToken cancellationToken)
+    {
+        await ExecuteAsync(connection, transaction, ScheduleSql.Text, cancellationToken).ConfigureAwait(false);
+        await RecordMigrationAsync(
+                connection,
+                transaction,
+                BaselineSchema.V3Version,
+                "v3-schedule-groups",
+                sourceShape,
+                backupPath,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task ApplyV4ScheduleIntegrityAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string sourceShape,
+        string backupPath,
+        CancellationToken cancellationToken)
+    {
+        await ApplyAdditiveColumnsAsync(
+                connection,
+                transaction,
+                BaselineSchema.V4AdditiveColumns,
+                cancellationToken)
+            .ConfigureAwait(false);
+        await ExecuteAsync(connection, transaction, ScheduleIntegritySql.Text, cancellationToken).ConfigureAwait(false);
+        await RecordMigrationAsync(
+                connection,
+                transaction,
+                BaselineSchema.V4Version,
+                "v4-schedule-integrity",
+                sourceShape,
+                backupPath,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task ApplyV5AttentionQueueAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string sourceShape,
+        string backupPath,
+        CancellationToken cancellationToken)
+    {
+        await ExecuteAsync(connection, transaction, AttentionQueueSql.Text, cancellationToken).ConfigureAwait(false);
+        await RecordMigrationAsync(
+                connection,
+                transaction,
+                BaselineSchema.V5Version,
+                "v5-attention-queue",
+                sourceShape,
+                backupPath,
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private static async Task ApplyAdditiveColumnsAsync(

@@ -6,15 +6,16 @@ Playwright/Edge CDP collection.
 
 ## Current Product Shape
 
-The native app is a refactor, not a one-for-one port of the old web panel. It keeps seven top-level pages:
+The native app is a refactor, not a one-for-one port of the old web panel. Its five workflow destinations are:
 
-- Overview
-- Collection Tasks
-- Data Management
-- Audit Center
-- Group Settings
-- System Settings
-- Diagnostics
+- Workbench
+- Collection
+- Device Data
+- Rules And Plans
+- Audit
+
+System Settings and Diagnostics are footer tools. Date management is reached from
+Rules And Plans and remains selected under that workflow destination.
 
 Data Management filtered Excel export is the only user-facing export path. Legacy TXT, Markdown, and multi-report generation are not native UI actions.
 
@@ -27,6 +28,19 @@ npm run native:run
 ```
 
 Do not validate the app by directly running `bin\...\EmsScout.Desktop.exe`. The direct unpackaged executable can fail Windows App SDK runtime initialization without package identity. The `native:run` script closes any previous native app process, then launches through `dotnet run` with the MSIX package profile.
+
+Debug packaged launch is self-contained because Windows packaged activation cannot
+reliably discover a repository-local .NET runtime. `npm run native:run` still requires
+the .NET 10 SDK to build, but the activated Debug AppX carries its runtime.
+
+For runtime UI inspection, use an isolated temporary settings and data directory:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run-native.ps1 -UiValidation
+```
+
+The command prints `UI_VALIDATION_DIRECTORY=...` and does not rewrite the packaged
+user settings. It is intended for local UI validation, not real EMS end-to-end evidence.
 
 ## Validate
 

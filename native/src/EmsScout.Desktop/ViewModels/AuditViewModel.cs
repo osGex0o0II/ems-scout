@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.Input;
 using EmsScout.Application.Collection;
 using EmsScout.Application.Devices;
 using EmsScout.Application.Logging;
+using EmsScout.Application.Groups;
 using EmsScout.Application.Quality;
 using EmsScout.Application.Settings;
 using EmsScout.Application.Workflows;
@@ -22,9 +23,16 @@ public sealed partial class AuditViewModel(
     INavigationService navigationService,
     NodeCollectionTaskRunner runner,
     AppDataPathService pathService,
-    IApplicationLogger applicationLogger) : ObservableObject
+    IApplicationLogger applicationLogger,
+    DataContextService dataContext,
+    IAreaGroupRepository areaGroupRepository) : ObservableObject
 {
     private readonly DispatcherQueue _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
+    private bool _contextAttached;
+
+    public DataContextService DataContext { get; } = dataContext;
+
+    public IAreaGroupRepository AreaGroupRepository { get; } = areaGroupRepository;
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RefreshCommand))]
@@ -131,12 +139,22 @@ public sealed partial class AuditViewModel(
 
     public ObservableCollection<CollectionRunRow> Runs { get; } = [];
 
+    public ObservableCollection<ScheduleAuditRow> ScheduleAuditRows { get; } = [];
+
+    public string ScheduleAuditSummaryText { get; private set; } = "尚未读取计划状态审计";
+
+
     public bool CanDeleteSelectedRun => CanDeleteRun();
 
     public bool CanRestoreSelectedRun => CanRestoreRun();
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
+        AttachDataContext();
+        if (DataContext.Options.Count == 0)
+        {
+            await DataContext.RefreshAsync(cancellationToken).ConfigureAwait(true);
+        }
         SelectedReconciliationBuilding ??= ReconciliationBuildingOptions.FirstOrDefault();
         SelectedReconciliationType ??= ReconciliationTypeOptions.FirstOrDefault();
         await RefreshAsync(cancellationToken).ConfigureAwait(true);
@@ -151,10 +169,15 @@ public sealed partial class AuditViewModel(
         StatusText = "正在刷新审计中心";
         try
         {
+            if (DataContext.Options.Count == 0)
+            {
+                await DataContext.RefreshAsync(cancellationToken).ConfigureAwait(true);
+            }
             await RefreshQualityAsync(cancellationToken).ConfigureAwait(true);
             await RefreshRealtimeQualityAsync(cancellationToken).ConfigureAwait(true);
             await RefreshReconciliationAsync(cancellationToken).ConfigureAwait(true);
             await RefreshRunsAsync(cancellationToken).ConfigureAwait(true);
+            await RefreshScheduleAuditAsync(cancellationToken).ConfigureAwait(true);
             RefreshFacets();
             StatusText = "审计中心已刷新";
         }
@@ -171,8 +194,11 @@ public sealed partial class AuditViewModel(
         StatusText = "正在运行基础质量审计";
         try
         {
+            var request = DataContext.RunId is { } runId
+                ? NativeQualityAuditRequest.ForRun(runId)
+                : NativeQualityAuditRequest.LatestCompletedRun;
             var report = await qualityAuditService
-                .AuditAsync(NativeQualityAuditRequest.LatestCompletedRun, cancellationToken)
+                .AuditAsync(request, cancellationToken)
                 .ConfigureAwait(true);
             ApplyQualityReport(report);
             RefreshFacets();
@@ -268,13 +294,68 @@ public sealed partial class AuditViewModel(
     {
         try
         {
-            var report = await qualityAuditService.LoadLatestAsync(cancellationToken).ConfigureAwait(true);
+            var request = DataContext.RunId is { } runId
+                ? NativeQualityAuditRequest.ForRun(runId)
+                : NativeQualityAuditRequest.LatestCompletedRun;
+            var report = await qualityAuditService.AuditAsync(request, cancellationToken).ConfigureAwait(true);
             ApplyQualityReport(report);
         }
         catch (Exception ex)
         {
             ApplyQualityError(ex);
         }
+    }
+
+    private async Task RefreshScheduleAuditAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var records = await AreaGroupRepository
+                .EvaluateSchedulesAsync(DataContext.RunId, DateTimeOffset.Now, cancellationToken)
+                .ConfigureAwait(true);
+            ScheduleAuditRows.Clear();
+            foreach (var record in records)
+            {
+                ScheduleAuditRows.Add(new ScheduleAuditRow(record));
+            }
+
+            var issues = records.Count(record => record.ResultCode == "not_enabled");
+            var unexpected = records.Count(record => record.ResultCode == "unexpected_running");
+            var observedAt = records.FirstOrDefault()?.ObservedAt;
+            ScheduleAuditSummaryText = records.Count == 0
+                ? "所选数据时间没有可执行的计划规则"
+                : $"数据时间 {observedAt}，已检查 {records.Count:N0} 台设备；未按计划启用 {issues:N0} 台，计划外运行 {unexpected:N0} 台";
+            OnPropertyChanged(nameof(ScheduleAuditSummaryText));
+        }
+        catch (Exception ex)
+        {
+            ScheduleAuditRows.Clear();
+            ScheduleAuditSummaryText = "计划状态审计失败：" + applicationLogger.WriteFailure(ex, "schedule-audit").DisplayText;
+            OnPropertyChanged(nameof(ScheduleAuditSummaryText));
+        }
+    }
+
+    public async Task SelectDataContextAsync(DataContextOption? option, CancellationToken cancellationToken = default)
+    {
+        DataContext.Select(option);
+        await RefreshAsync(cancellationToken).ConfigureAwait(true);
+    }
+
+    private void AttachDataContext()
+    {
+        if (_contextAttached)
+        {
+            return;
+        }
+
+        DataContext.ContextChanged += async (_, _) =>
+        {
+            if (!IsBusy)
+            {
+                await RefreshAsync().ConfigureAwait(true);
+            }
+        };
+        _contextAttached = true;
     }
 
     private void ApplyQualityReport(QualityAuditReport? report)

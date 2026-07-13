@@ -141,11 +141,7 @@
                         HorizontalContentAlignment="Stretch"
                         IsEnabled="{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}">
                         <StackPanel Spacing="10">
-                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="采集行为" />
-                            <ComboBox Header="默认采集模式" SelectedIndex="{x:Bind ViewModel.DefaultCollectionModeIndex, Mode=TwoWay}">
-                                <ComboBoxItem Content="Edge CDP" />
-                                <ComboBoxItem Content="自动启动 Edge" />
-                            </ComboBox>
+                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="采集日志" />
                             <ComboBox Header="日志级别" SelectedIndex="{x:Bind ViewModel.LogLevelIndex, Mode=TwoWay}">
                                 <ComboBoxItem Content="ERROR" />
                                 <ComboBoxItem Content="INFO" />

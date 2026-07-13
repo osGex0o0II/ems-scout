@@ -31,8 +31,14 @@ public sealed class SqliteDeviceExportService(IDeviceReadRepository repository) 
                 $"Current export limit is {ExportLimit:N0} rows, but the query returned {result.Total:N0} rows.");
         }
 
-        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture);
-        var path = Path.Combine(outputDirectory, $"数据管理筛选结果_{timestamp}.xlsx");
+        if (result.Total != result.Rows.Count)
+        {
+            throw new InvalidOperationException(
+                $"Export query count mismatch: result total is {result.Total:N0}, but {result.Rows.Count:N0} rows were loaded.");
+        }
+
+        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture);
+        var path = CreateExportPath(outputDirectory, timestamp);
         var sheets = new[]
         {
             new SpreadsheetSheet("devices", DeviceRows(result.Rows)),
@@ -86,7 +92,7 @@ public sealed class SqliteDeviceExportService(IDeviceReadRepository repository) 
             row.PageLabel,
             row.Name,
             row.AreaType,
-            row.CommunicationStatusText,
+            row.OperatingStatusText,
             row.Mode,
             row.Fan,
             row.SetTemperature,
@@ -94,5 +100,18 @@ public sealed class SqliteDeviceExportService(IDeviceReadRepository repository) 
             row.RealtimeLockText,
         }));
         return values;
+    }
+
+    private static string CreateExportPath(string outputDirectory, string timestamp)
+    {
+        for (var suffix = 0; ; suffix++)
+        {
+            var discriminator = suffix == 0 ? string.Empty : $"_{suffix}";
+            var candidate = Path.Combine(outputDirectory, $"数据管理筛选结果_{timestamp}{discriminator}.xlsx");
+            if (!File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
     }
 }

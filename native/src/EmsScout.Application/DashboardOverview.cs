@@ -1,4 +1,5 @@
 using EmsScout.Domain;
+using EmsScout.Application.Attention;
 
 namespace EmsScout.Application;
 
@@ -35,8 +36,18 @@ public sealed record DashboardRiskItem(
     string RealtimeMatch = "",
     string RealtimePoints = "",
     string QuickFilter = "",
-    string WatchState = "")
+    string WatchState = "",
+    string IssueId = "",
+    string SourceKey = "",
+    string IssueType = "",
+    string Scope = "全部楼栋",
+    long? RunId = null,
+    string Status = AttentionIssueStatuses.Unprocessed,
+    string IgnoreReason = "",
+    DateTimeOffset? LastSeenAt = null)
 {
+    public bool IsActionable => !string.IsNullOrWhiteSpace(IssueId);
+
     public bool CanNavigate =>
         !string.IsNullOrWhiteSpace(CommunicationState) ||
         !string.IsNullOrWhiteSpace(RealtimeMatch) ||

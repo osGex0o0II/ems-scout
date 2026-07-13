@@ -24,7 +24,7 @@ public sealed class GroupSummaryRow(
             record.Total,
             string.IsNullOrWhiteSpace(record.Description) ? record.AreaLabel : record.Description,
             record.SystemKey == "public" ? DeviceAreaClassifier.PublicArea : record.SystemKey == "non_public" ? DeviceAreaClassifier.PrivateArea : string.Empty,
-            groupId: record.GroupKind.Equals("custom", StringComparison.OrdinalIgnoreCase) ? record.Id : null,
+            groupId: record.Id,
             isCustom: record.GroupKind.Equals("custom", StringComparison.OrdinalIgnoreCase),
             isLocked: record.Locked,
             isEnabled: record.Enabled,
@@ -84,7 +84,7 @@ public sealed class GroupSummaryRow(
 
     public int CoveredAreas { get; } = 0;
 
-    public string StateLabel => IsCustom ? IsEnabled ? "启用" : "停用" : "不可编辑";
+    public string StateLabel => IsCustom ? IsEnabled ? "启用" : "停用" : "规则分类";
 
     public bool CanOpenInData =>
         !string.IsNullOrWhiteSpace(AreaFilter) ||

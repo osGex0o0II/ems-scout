@@ -38,7 +38,7 @@ npm run native:run
 ### Node/契约测试
 
 ```bash
-node --test sidecar/test/*.test.js tests/architecture/*.test.js tests/contract-audit/*.test.js tests/enumeration/*.test.js tests/field-e2e/*.test.js tests/golden/*.test.js
+npm test
 npm run self-test
 ```
 

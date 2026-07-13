@@ -2,6 +2,7 @@
 
 const { BrowserWindow, shell } = require('electron');
 const path = require('path');
+const { isExternalBrowserUrl, isSamePanelOrigin } = require('./navigation-policy');
 
 function createMainWindow(options) {
   const url = options.url;
@@ -19,7 +20,7 @@ function createMainWindow(options) {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
     },
   });
 
@@ -36,14 +37,14 @@ function createMainWindow(options) {
   });
 
   win.webContents.setWindowOpenHandler(({ url: nextUrl }) => {
-    shell.openExternal(nextUrl);
+    if (isExternalBrowserUrl(nextUrl)) shell.openExternal(nextUrl);
     return { action: 'deny' };
   });
 
   win.webContents.on('will-navigate', (event, nextUrl) => {
-    if (nextUrl.startsWith(url)) return;
+    if (isSamePanelOrigin(nextUrl, url)) return;
     event.preventDefault();
-    shell.openExternal(nextUrl);
+    if (isExternalBrowserUrl(nextUrl)) shell.openExternal(nextUrl);
   });
 
   win.webContents.on('did-fail-load', (_event, code, desc) => {

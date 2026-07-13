@@ -2,7 +2,7 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { auditCollectedOutput, pageFromData } = require('../../src/capture-result');
+const { auditCollectedOutput, pageFromData, summarizeCardStates } = require('../../src/capture-result');
 
 function card(overrides = {}) {
   return {
@@ -111,4 +111,30 @@ test('final audit reports the source location and quality details', () => {
     reason: 'missing_quality_reason',
   });
   assert.match(issue.details, /ph=1\/1/);
+});
+
+test('final audit rejects structural errors and stale pages before card quality', () => {
+  const validPage = { page: '二页', count: 1, stale: true, cards: [card()] };
+  const output = outputWith(validPage);
+  output.buildings[0].subAreas[0].err = 'tab click failed';
+
+  const issues = auditCollectedOutput(output);
+
+  assert.equal(issues.some(issue => issue.reason === 'subarea_error'), true);
+  assert.equal(issues.some(issue => issue.reason === 'stale_page'), true);
+});
+
+test('verify summary uses authoritative communication state without href inference', () => {
+  const summary = summarizeCardStates([
+    card({ name: 'A', comm: '开机', indicator: 'red.png' }),
+    card({ name: 'B', comm: '关机', indicator: 'green.png' }),
+    card({ name: 'C', comm: '离线', indicator: 'gray.png' }),
+    card({ name: 'D', comm: '', indicator: 'mystery.png' }),
+  ]);
+
+  assert.deepEqual(summary.counts, { 开机: 1, 关机: 1, 离线: 1, 未知: 1 });
+  assert.deepEqual(Object.fromEntries(
+    Object.entries(summary.cardsByState).map(([state, cards]) => [state, cards.map(item => item.name)])), {
+    开机: ['A'], 关机: ['B'], 离线: ['C'], 未知: ['D'],
+  });
 });

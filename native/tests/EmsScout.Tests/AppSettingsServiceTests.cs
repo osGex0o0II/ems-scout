@@ -31,13 +31,33 @@ public sealed class AppSettingsServiceTests
         Assert.Equal(65535, loaded.EdgeCdpPort);
         Assert.Equal("data-out", loaded.DataDirectory);
         Assert.Equal(AppStorageDefaults.ExportDirectory, loaded.ExportDirectory);
-        Assert.Equal("auto-launch", loaded.DefaultCollectionMode);
+        Assert.Equal("edge-cdp", loaded.DefaultCollectionMode);
         Assert.Equal("DEBUG", loaded.LogLevel);
         Assert.Equal("dark", loaded.Theme);
         Assert.False(loaded.SaveNdjsonLog);
         Assert.True(loaded.ReduceMotion);
 
         Directory.Delete(tempDir, recursive: true);
+    }
+
+    [Fact]
+    public void LegacyAutoLaunchNormalizesToManualCdp()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ems-scout-settings-tests", Guid.NewGuid().ToString("N"));
+        var settingsPath = Path.Combine(tempDir, "settings.json");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            File.WriteAllText(settingsPath, """{"DefaultCollectionMode":"auto-launch"}""");
+
+            var loaded = new AppSettingsService(settingsPath).Load();
+
+            Assert.Equal("edge-cdp", loaded.DefaultCollectionMode);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
     }
 
     [Fact]

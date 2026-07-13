@@ -5,6 +5,8 @@
 const path = require('path');
 const { chromium } = require('playwright');
 const Database = require('better-sqlite3');
+const { filterFloorGroups } = require('./page-navigation');
+const { sanitizeUrlForDisplay } = require('./url-sanitizer');
 const { log: loggerLog, setLevel, setCategories, enableFileLog, close, LEVELS, CATEGORIES } = require('./logger');
 function log(...args) { loggerLog(LEVELS.INFO, 'ENUM', ...args); }
 
@@ -102,7 +104,7 @@ async function clickFloor(page, floorValue) {
   if (floorValue === undefined) return null;
   const floorNum = Number(floorValue);
   if (!Number.isFinite(floorNum)) throw new Error(`Invalid --floor value: ${floorValue}`);
-  let subAreas = await page.evaluate(() => window.__ems.findAllSubAreaGroups()).catch(() => []);
+  let subAreas = filterFloorGroups(await page.evaluate(() => window.__ems.findAllSubAreaGroups()).catch(() => []));
   const targetX = X_FILTER === undefined ? null : Number(X_FILTER);
   const targetY = Y_FILTER === undefined ? null : Number(Y_FILTER);
   let candidates = subAreas.filter(s => Number(s.floor) === floorNum);
@@ -116,7 +118,7 @@ async function clickFloor(page, floorValue) {
   let target = candidates[0];
   if (!target) {
     await waitForReady(page, 20);
-    subAreas = await page.evaluate(() => window.__ems.findAllSubAreaGroups()).catch(() => []);
+    subAreas = filterFloorGroups(await page.evaluate(() => window.__ems.findAllSubAreaGroups()).catch(() => []));
     candidates = subAreas.filter(s => Number(s.floor) === floorNum);
     if (Number.isFinite(targetX) || Number.isFinite(targetY)) {
       candidates = candidates.sort((a, b) => {
@@ -280,19 +282,7 @@ function injectHelpers(page) {
         });
 
         const switchImgs = imgList.filter(i => i.w >= 38 && i.w <= 50 && i.h >= 17 && i.h <= 30);
-        const switchByHref = {};
-        for (const si of switchImgs) {
-          if (!si.href) continue;
-          if (!switchByHref[si.href]) switchByHref[si.href] = 0;
-          switchByHref[si.href]++;
-        }
-        const hrefs = Object.keys(switchByHref);
         let offHref = null, onHref = null;
-        if (hrefs.length > 1) {
-          hrefs.sort((a, b) => switchByHref[b] - switchByHref[a]);
-          offHref = hrefs[0];
-          onHref = hrefs[1];
-        }
 
         const indicatorImgs = imgList.filter(i => i.w >= 25 && i.w <= 33 && i.h >= 23 && i.h <= 31);
 
@@ -507,7 +497,7 @@ function injectHelpers(page) {
                 }
               }
               if (f.fan) {
-                if (card.fan === '-' || /^\d$/.test(f.fan)) {
+                if (card.fan === '-' || /^\d$/.test(card.fan)) {
                   if (card.fan !== f.fan) log(LEVELS.DEBUG, 'VUE', `fan ${card.fan}→${f.fan}`, { card: card.name });
                   card.fan = f.fan;
                 }
@@ -605,7 +595,7 @@ async function main() {
   // Step 1: Show page state
   const state = await verifyPageState(page);
   log(`=== Page State ===`);
-  log(`URL: ${state.url}  |  Title: ${state.title}`);
+  log(`URL: ${sanitizeUrlForDisplay(state.url)}  |  Title: ${state.title}`);
   log(`Ready: ${state.ready}  |  Shadow: ${state.shadowDOM}  |  SVG texts: ${state.textCount}  |  WS data: ${state.wsDataCount}`);
 
   // Step 2: Read current view

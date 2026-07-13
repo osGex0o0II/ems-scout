@@ -95,14 +95,17 @@ public sealed class AreaGroupRepositoryTests
         Assert.Contains(options, option => option.Type == "sub_area" && option.SubAreaText == "1F A" && option.Count == 2);
         Assert.Contains(options, option => option.Type == "device" && option.CardName == "1-0101-KT");
         await Assert.ThrowsAsync<InvalidOperationException>(() => repository.DeleteGroupAsync(publicGroup.Id));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => repository.SaveItemAsync(new AreaGroupItemEdit(
+        var member = await repository.SaveItemAsync(new AreaGroupItemEdit(
             publicGroup.Id,
             "floor",
             "1号",
             "1F",
             string.Empty,
             string.Empty,
-            string.Empty)));
+            "人工维护的公区成员"));
+
+        Assert.Equal(publicGroup.Id, member.GroupId);
+        Assert.Contains((await repository.LoadAsync()).Items, item => item.Id == member.Id);
     }
 
     [Fact]
@@ -413,6 +416,87 @@ public sealed class AreaGroupRepositoryTests
         Assert.Contains(includeDisabled, floor => floor.Id == manual.Id && !floor.Enabled);
     }
 
+    [Fact]
+    public async Task ScheduleRulesUpsertMembersDeduplicateAndOverlapsAreRejected()
+    {
+        var databasePath = CreateDatabase();
+        var repository = new SqliteAreaGroupRepository(() => databasePath);
+        var area = await SaveCustomGroupAsync(repository, "公区巡检");
+        var item = await repository.SaveItemAsync(new AreaGroupItemEdit(
+            area.Id, "floor", "1号", "1F", string.Empty, string.Empty, "一层"));
+        var schedule = await repository.SaveScheduleGroupAsync(new ScheduleGroupEdit(
+            area.Id, "上午启用", "", true));
+
+        var firstRule = await repository.SaveScheduleRuleAsync(new ScheduleRuleEdit(
+            schedule.Id, "2026-07-12", "enabled",
+            [new ScheduleIntervalEdit("08:00", "12:00"), new ScheduleIntervalEdit("13:00", "18:00")], ""));
+        var updatedRule = await repository.SaveScheduleRuleAsync(new ScheduleRuleEdit(
+            schedule.Id, "2026-07-12", "enabled", [new ScheduleIntervalEdit("09:00", "11:00")], "调整"));
+        var firstMember = await repository.SaveScheduleMemberAsync(new ScheduleMemberEdit(
+            schedule.Id, item.Id, item.TargetType, item.Building, item.FloorLabel, item.SubAreaText,
+            item.CardName, item.DeviceUid, "normal", ""));
+        var duplicateMember = await repository.SaveScheduleMemberAsync(new ScheduleMemberEdit(
+            schedule.Id, item.Id, item.TargetType, item.Building, item.FloorLabel, item.SubAreaText,
+            item.CardName, item.DeviceUid, "not_open", "重复添加应更新"));
+
+        Assert.Equal(firstRule.Id, updatedRule.Id);
+        Assert.Single(updatedRule.Intervals);
+        Assert.Equal(firstMember.Id, duplicateMember.Id);
+        Assert.Equal("not_open", duplicateMember.ExpectedStatus);
+        var batch = await repository.SaveScheduleRulesAsync(new ScheduleRuleBatchEdit(
+            schedule.Id,
+            ["2026-07-14", "2026-07-15", "2026-07-14"],
+            "enabled",
+            [new ScheduleIntervalEdit("07:30", "09:30"), new ScheduleIntervalEdit("16:00", "18:00")],
+            "批量规则"));
+        Assert.Equal(2, batch.Count);
+        Assert.All(batch, rule => Assert.Equal(2, rule.Intervals.Count));
+        await Assert.ThrowsAsync<ArgumentException>(() => repository.SaveScheduleRuleAsync(new ScheduleRuleEdit(
+            schedule.Id, "2026-07-13", "enabled",
+            [new ScheduleIntervalEdit("08:00", "12:00"), new ScheduleIntervalEdit("11:00", "13:00")], "")));
+        await Assert.ThrowsAsync<ArgumentException>(() => repository.SaveScheduleRulesAsync(new ScheduleRuleBatchEdit(
+            schedule.Id, ["2026-07-16", "2026-07-17"], "enabled",
+            [new ScheduleIntervalEdit("08:00", "12:00"), new ScheduleIntervalEdit("11:00", "13:00")], "")));
+        var afterFailedBatch = await repository.LoadScheduleGroupsAsync(area.Id);
+        Assert.DoesNotContain(afterFailedBatch.Single().Rules, rule => rule.CalendarDate is "2026-07-16" or "2026-07-17");
+        await repository.DeleteScheduleRulesAsync(schedule.Id, ["2026-07-14", "2026-07-15"]);
+        Assert.DoesNotContain((await repository.LoadScheduleGroupsAsync(area.Id)).Single().Rules,
+            rule => rule.CalendarDate is "2026-07-14" or "2026-07-15");
+    }
+
+    [Fact]
+    public async Task ScheduleAuditEvaluatesEveryDeviceAndCascadesAreaMemberDeletion()
+    {
+        var databasePath = CreateDatabase();
+        var repository = new SqliteAreaGroupRepository(() => databasePath);
+        var area = await SaveCustomGroupAsync(repository, "设备启用核查");
+        var item = await repository.SaveItemAsync(new AreaGroupItemEdit(
+            area.Id, "floor", "1号", "1F", string.Empty, string.Empty, "一层"));
+        var schedule = await repository.SaveScheduleGroupAsync(new ScheduleGroupEdit(area.Id, "工作时段", "", true));
+        await repository.SaveScheduleRuleAsync(new ScheduleRuleEdit(
+            schedule.Id, "2026-07-12", "enabled", [new ScheduleIntervalEdit("08:00", "12:00")], ""));
+        var member = await repository.SaveScheduleMemberAsync(new ScheduleMemberEdit(
+            schedule.Id, item.Id, item.TargetType, item.Building, item.FloorLabel, item.SubAreaText,
+            item.CardName, item.DeviceUid, "normal", ""));
+
+        var audit = await repository.EvaluateSchedulesAsync(
+            null, new DateTimeOffset(2026, 7, 12, 10, 0, 0, TimeSpan.FromHours(8)));
+
+        Assert.Equal(2, audit.Count);
+        Assert.Contains(audit, row => row.TargetLabel.Contains("1-0101-KT") && row.ResultCode == "ok");
+        Assert.Contains(audit, row => row.TargetLabel.Contains("1-0102-KT") && row.ResultCode == "not_enabled");
+
+        await repository.SaveScheduleMemberAsync(new ScheduleMemberEdit(
+            schedule.Id, item.Id, item.TargetType, item.Building, item.FloorLabel, item.SubAreaText,
+            item.CardName, item.DeviceUid, "not_open", "", member.Id));
+        audit = await repository.EvaluateSchedulesAsync(
+            null, new DateTimeOffset(2026, 7, 12, 10, 0, 0, TimeSpan.FromHours(8)));
+        Assert.Contains(audit, row => row.TargetLabel.Contains("1-0101-KT") && row.ResultCode == "unexpected_running");
+
+        await repository.DeleteItemAsync(item.Id);
+        Assert.Empty((await repository.LoadScheduleGroupsAsync(area.Id)).Single().Members);
+    }
+
     private static Task<AreaGroupRecord> SaveCustomGroupAsync(SqliteAreaGroupRepository repository, string name)
     {
         return repository.SaveGroupAsync(new AreaGroupEdit(
@@ -458,7 +542,8 @@ public sealed class AreaGroupRepositoryTests
                 set_temp TEXT,
                 fan TEXT,
                 indicator TEXT,
-                comm TEXT
+                comm TEXT,
+                device_uid TEXT
             );
             CREATE TABLE monitor_groups (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -536,6 +621,7 @@ public sealed class AreaGroupRepositoryTests
                 (2, '非公区', '非公区', '系统非公区', '重点', 'system', 'non_public', 1, 1);
             """;
         command.ExecuteNonQuery();
+        TestScheduleSchema.Apply(connection);
         return path;
     }
 }

@@ -14,7 +14,7 @@ public sealed class GroupSettingsUiContractTests
         Assert.DoesNotContain("!string.IsNullOrWhiteSpace(QuickFilter)", source);
         Assert.Contains("!string.IsNullOrWhiteSpace(AreaFilter)", source);
         Assert.Contains("!string.IsNullOrWhiteSpace(CommunicationFilter)", source);
-        Assert.Contains("\"不可编辑\"", source);
+        Assert.Contains("\"规则分类\"", source);
     }
 
     [Fact]

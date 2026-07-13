@@ -1,6 +1,5 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
-using System.Net.Http;
 using System.Text.Json;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -34,7 +33,8 @@ public sealed partial class CollectionTaskViewModel(
     INativeQualityAuditService nativeQualityAuditService,
     ApplicationOperationState operationState,
     CollectionEnvironmentProbe environmentProbe,
-    IApplicationLogger applicationLogger) : ObservableObject
+    IRecaptureLocationSource recaptureLocationSource,
+    IApplicationLogger applicationLogger) : ObservableObject, IDisposable
 {
     private CancellationTokenSource? _activeTask;
     private bool _stopRequested;
@@ -47,6 +47,8 @@ public sealed partial class CollectionTaskViewModel(
     private bool _currentDataUpdatedThisRun;
     private string? _activeDataDirectory;
     private bool _buildingEventsAttached;
+    private DateTimeOffset? _activeRunStartedAt;
+    private DateTimeOffset? _lastActivityAt;
     private bool _environmentChecked;
     private bool _nodeReady;
     private bool _dependenciesReady;
@@ -59,12 +61,19 @@ public sealed partial class CollectionTaskViewModel(
     private bool _cdpReachable;
     private int _emsPageCount;
     private readonly DispatcherQueue _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
+    private DispatcherQueueTimer? _heartbeatTimer;
+    private Process? _ownedEdgeProcess;
+    private string? _ownedEdgeSessionRoot;
+    private int? _ownedEdgeCdpPort;
+    private IReadOnlyList<RecaptureLocation> _recaptureLocations = [];
+    private bool _syncingRecaptureBuildingSelection;
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(StartCommand))]
     [NotifyCanExecuteChangedFor(nameof(StopCommand))]
     [NotifyCanExecuteChangedFor(nameof(CheckEnvironmentCommand))]
-    [NotifyCanExecuteChangedFor(nameof(OpenEmsCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ToggleCollectionBrowserCommand))]
+    [NotifyCanExecuteChangedFor(nameof(OpenAuditCommand))]
     [NotifyCanExecuteChangedFor(nameof(OpenReconciliationItemCommand))]
     [NotifyCanExecuteChangedFor(nameof(MarkRunAnomalyCommand))]
     [NotifyCanExecuteChangedFor(nameof(ClearRunAnomalyCommand))]
@@ -75,17 +84,23 @@ public sealed partial class CollectionTaskViewModel(
     [NotifyPropertyChangedFor(nameof(CanDeleteSelectedRun))]
     [NotifyPropertyChangedFor(nameof(CanEditTaskOptions))]
     [NotifyPropertyChangedFor(nameof(CanEditCustomTaskOptions))]
+    [NotifyPropertyChangedFor(nameof(CanEditBuildingSelectionOptions))]
+    [NotifyPropertyChangedFor(nameof(CanSelectRecaptureSeat))]
+    [NotifyPropertyChangedFor(nameof(CanSelectRecaptureFloor))]
     [NotifyPropertyChangedFor(nameof(CanStartTask))]
     public partial bool IsRunning { get; private set; }
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(StartCommand))]
     [NotifyCanExecuteChangedFor(nameof(CheckEnvironmentCommand))]
-    [NotifyCanExecuteChangedFor(nameof(OpenEmsCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ToggleCollectionBrowserCommand))]
     [NotifyCanExecuteChangedFor(nameof(SelectAllBuildingsCommand))]
     [NotifyCanExecuteChangedFor(nameof(ClearBuildingSelectionCommand))]
     [NotifyPropertyChangedFor(nameof(CanEditTaskOptions))]
     [NotifyPropertyChangedFor(nameof(CanEditCustomTaskOptions))]
+    [NotifyPropertyChangedFor(nameof(CanEditBuildingSelectionOptions))]
+    [NotifyPropertyChangedFor(nameof(CanSelectRecaptureSeat))]
+    [NotifyPropertyChangedFor(nameof(CanSelectRecaptureFloor))]
     [NotifyPropertyChangedFor(nameof(CanStartTask))]
     public partial bool IsCheckingEnvironment { get; private set; }
 
@@ -105,6 +120,24 @@ public sealed partial class CollectionTaskViewModel(
     public partial string ProgressText { get; private set; } = "尚未开始";
 
     [ObservableProperty]
+    public partial string CurrentActivityText { get; private set; } = "尚未开始";
+
+    [ObservableProperty]
+    public partial string CurrentBuildingText { get; private set; } = "未开始";
+
+    [ObservableProperty]
+    public partial string CollectedCountText { get; private set; } = "--";
+
+    [ObservableProperty]
+    public partial string DataUpdateText { get; private set; } = "尚未更新";
+
+    [ObservableProperty]
+    public partial string RunDurationText { get; private set; } = "未开始";
+
+    [ObservableProperty]
+    public partial string LastHeartbeatText { get; private set; } = "尚未更新";
+
+    [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(StartCommand))]
     [NotifyPropertyChangedFor(nameof(CanStartTask))]
     public partial bool IsEnvironmentReady { get; private set; }
@@ -119,7 +152,22 @@ public sealed partial class CollectionTaskViewModel(
     public partial string ReadinessGlyph { get; private set; } = "\uE9D9";
 
     [ObservableProperty]
+    public partial string PreflightDetailsHeader { get; private set; } = "0/4 已通过";
+
+    [ObservableProperty]
+    public partial double PreflightProgressValue { get; private set; }
+
+    [ObservableProperty]
     public partial string CollectionBrowserActionText { get; private set; } = "打开采集浏览器";
+
+    [ObservableProperty]
+    public partial string CollectionBrowserActionGlyph { get; private set; } = "\uE774";
+
+    [ObservableProperty]
+    public partial string CollectionBrowserActionToolTip { get; private set; } = "打开 EMS Scout 专用采集浏览器";
+
+    [ObservableProperty]
+    public partial bool IsCollectionBrowserOpen { get; private set; }
 
     [ObservableProperty]
     public partial string SelectedBuildingsText { get; private set; } = "已选择 6 栋楼";
@@ -131,6 +179,10 @@ public sealed partial class CollectionTaskViewModel(
     [NotifyPropertyChangedFor(nameof(TaskModeDescription))]
     [NotifyPropertyChangedFor(nameof(StartButtonText))]
     [NotifyPropertyChangedFor(nameof(CanEditCustomTaskOptions))]
+    [NotifyPropertyChangedFor(nameof(IsRecaptureMode))]
+    [NotifyPropertyChangedFor(nameof(CanEditBuildingSelectionOptions))]
+    [NotifyCanExecuteChangedFor(nameof(SelectAllBuildingsCommand))]
+    [NotifyCanExecuteChangedFor(nameof(ClearBuildingSelectionCommand))]
     public partial CollectionTaskModeOption? SelectedTaskMode { get; set; }
 
     [ObservableProperty]
@@ -152,7 +204,21 @@ public sealed partial class CollectionTaskViewModel(
     public partial string LogCategory { get; set; } = string.Empty;
 
     [ObservableProperty]
-    public partial string RecaptureText { get; set; } = string.Empty;
+    public partial string RecaptureText { get; private set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string RecaptureLocationStatus { get; private set; } = "正在读取可补采位置";
+
+    [ObservableProperty]
+    public partial RecaptureLocationOption? SelectedRecaptureBuilding { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanSelectRecaptureSeat))]
+    public partial RecaptureLocationOption? SelectedRecaptureSeat { get; set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanSelectRecaptureFloor))]
+    public partial RecaptureLocationOption? SelectedRecaptureFloor { get; set; }
 
     [ObservableProperty]
     public partial bool EnableSelfDiagnose { get; set; }
@@ -235,16 +301,24 @@ public sealed partial class CollectionTaskViewModel(
 
     public ObservableCollection<CollectionBuildingOption> Buildings { get; } =
     [
-        new("1号", "1号 科研综合楼", true),
-        new("2号", "2号", true),
-        new("3号", "3号", true),
-        new("4号", "4号", true),
-        new("5号", "5号", true),
-        new("6号", "6号", true),
+        new("1号", "1号楼", true),
+        new("2号", "2号楼", true),
+        new("3号", "3号楼", true),
+        new("4号", "4号楼", true),
+        new("5号", "5号楼", true),
+        new("6号", "6号楼", true),
     ];
 
     public ObservableCollection<CollectionTaskModeOption> TaskModes { get; } =
-        new(CollectionTaskModeCatalog.Options.Where(option => option.Value != CollectionTaskModeValues.Custom));
+        new(CollectionTaskModeCatalog.Options.Where(option => option.Value is
+            CollectionTaskModeValues.Full or
+            CollectionTaskModeValues.Recapture));
+
+    public ObservableCollection<RecaptureLocationOption> RecaptureBuildingOptions { get; } = [];
+
+    public ObservableCollection<RecaptureLocationOption> RecaptureSeatOptions { get; } = [];
+
+    public ObservableCollection<RecaptureLocationOption> RecaptureFloorOptions { get; } = [];
 
     public ObservableCollection<CollectionTaskLogRow> Logs { get; } = [];
 
@@ -252,14 +326,10 @@ public sealed partial class CollectionTaskViewModel(
 
     public ObservableCollection<PreflightCheckRow> PreflightChecks { get; } =
     [
-        PreflightCheckRow.Pending("Node 运行时", "等待检查"),
-        PreflightCheckRow.Pending("Node 依赖", "等待检查"),
-        PreflightCheckRow.Pending("采集 Sidecar", "等待检查"),
-        PreflightCheckRow.Pending("原生数据流程", "等待检查"),
+        PreflightCheckRow.Pending("本地采集组件", "等待检查"),
         PreflightCheckRow.Pending("当前数据", "等待检查"),
-        PreflightCheckRow.Pending("Edge CDP", "等待检查"),
-        PreflightCheckRow.Pending("EMS 地址", "等待检查"),
-        PreflightCheckRow.Pending("EMS 登录态", "等待检查"),
+        PreflightCheckRow.Pending("采集浏览器", "等待检查"),
+        PreflightCheckRow.Pending("EMS 页面", "等待检查"),
     ];
 
     public ObservableCollection<QualityAuditIssueRow> QualityIssues { get; } = [];
@@ -300,11 +370,24 @@ public sealed partial class CollectionTaskViewModel(
 
     public bool CanEditTaskOptions => !IsRunning && !IsCheckingEnvironment;
 
+    public bool CanEditBuildingSelectionOptions => CanEditTaskOptions && !IsRecaptureMode;
+
+    public bool CanSelectRecaptureSeat => CanEditTaskOptions && RecaptureSeatOptions.Count > 1;
+
+    public bool CanSelectRecaptureFloor => CanEditTaskOptions && RecaptureFloorOptions.Count > 1;
+
     public bool CanEditCustomTaskOptions => CanEditTaskOptions && IsCustomTaskMode;
 
     public string TaskModeDescription => SelectedTaskMode?.Description ?? "请选择任务模式";
 
     public string StartButtonText => SelectedTaskMode?.StartButtonText ?? "开始任务";
+
+    public bool IsRecaptureMode => string.Equals(
+        SelectedTaskMode?.Value,
+        CollectionTaskModeValues.Recapture,
+        StringComparison.OrdinalIgnoreCase);
+
+    public bool CanOpenAudit => !IsRunning;
 
     private bool IsCustomTaskMode => string.Equals(SelectedTaskMode?.Value, CollectionTaskModeValues.Custom, StringComparison.OrdinalIgnoreCase);
 
@@ -312,9 +395,19 @@ public sealed partial class CollectionTaskViewModel(
 
     public bool CanStartTask => CanStart();
 
+    partial void OnIsRunningChanged(bool value)
+    {
+        UpdateCollectionBrowserPresentation();
+    }
+
     partial void OnSelectedTaskModeChanged(CollectionTaskModeOption? value)
     {
         ApplyTaskModePreset(value);
+        if (IsRecaptureMode)
+        {
+            EnsureRecaptureSelection();
+            SynchronizeBuildingSelectionWithRecapture();
+        }
         ResetStages(BuildExecutionPlan(value));
         UpdateEnvironmentReadiness();
         OnPropertyChanged(nameof(CanStartTask));
@@ -322,17 +415,20 @@ public sealed partial class CollectionTaskViewModel(
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
+        CleanupStaleBrowserSessions();
         LoadSettingsDefaults();
         SelectedTaskMode ??= TaskModes.FirstOrDefault(
-            mode => mode.Value == CollectionTaskModeValues.CollectImport);
+            mode => mode.Value == CollectionTaskModeValues.Full);
         ApplyTaskModePreset(SelectedTaskMode);
         AttachBuildingEvents();
+        await LoadRecaptureLocationsAsync(cancellationToken).ConfigureAwait(true);
         UpdateSelectedBuildingsText();
         ResetStages(BuildExecutionPlan(SelectedTaskMode));
 
         var settings = settingsService.Load();
         var dataDirectory = pathService.ResolveWorkspacePath(settings.DataDirectory);
         CanOpenDataAfterImport = File.Exists(Path.Combine(dataDirectory, "ac.db"));
+        DataUpdateText = CanOpenDataAfterImport ? "已有当前数据" : "首次采集后创建数据库";
         await Task.CompletedTask;
     }
 
@@ -352,6 +448,7 @@ public sealed partial class CollectionTaskViewModel(
         switch (mode.Value)
         {
             case CollectionTaskModeValues.Full:
+            case CollectionTaskModeValues.Recapture:
                 RunImportAfterCollect = true;
                 RunQualityAfterImport = true;
                 RunRealtimeDetailsAfterImport = true;
@@ -390,9 +487,7 @@ public sealed partial class CollectionTaskViewModel(
         StartCommand.NotifyCanExecuteChanged();
     }
 
-    private bool CanEditBuildingSelection() => CanEditTaskOptions;
-
-    [RelayCommand(CanExecute = nameof(CanEditBuildingSelection))]
+    [RelayCommand(CanExecute = nameof(CanEditBuildingSelectionOptions))]
     private void SelectAllBuildings()
     {
         foreach (var building in Buildings)
@@ -401,7 +496,7 @@ public sealed partial class CollectionTaskViewModel(
         }
     }
 
-    [RelayCommand(CanExecute = nameof(CanEditBuildingSelection))]
+    [RelayCommand(CanExecute = nameof(CanEditBuildingSelectionOptions))]
     private void ClearBuildingSelection()
     {
         foreach (var building in Buildings)
@@ -423,6 +518,10 @@ public sealed partial class CollectionTaskViewModel(
             {
                 if (args.PropertyName == nameof(CollectionBuildingOption.IsSelected))
                 {
+                    if (IsRecaptureMode && !_syncingRecaptureBuildingSelection)
+                    {
+                        SynchronizeBuildingSelectionWithRecapture();
+                    }
                     UpdateSelectedBuildingsText();
                     StartCommand.NotifyCanExecuteChanged();
                     OnPropertyChanged(nameof(CanStartTask));
@@ -431,6 +530,122 @@ public sealed partial class CollectionTaskViewModel(
         }
 
         _buildingEventsAttached = true;
+    }
+
+    partial void OnSelectedRecaptureBuildingChanged(RecaptureLocationOption? value)
+    {
+        ReplaceOptions(
+            RecaptureSeatOptions,
+            value is null
+                ? []
+                : RecaptureLocationCatalog.SeatOptions(_recaptureLocations, value.Value));
+        SelectedRecaptureSeat = RecaptureSeatOptions.FirstOrDefault();
+        SynchronizeBuildingSelectionWithRecapture();
+        RefreshRecaptureTarget();
+    }
+
+    partial void OnSelectedRecaptureSeatChanged(RecaptureLocationOption? value)
+    {
+        ReplaceOptions(
+            RecaptureFloorOptions,
+            SelectedRecaptureBuilding is null
+                ? []
+                : RecaptureLocationCatalog.FloorOptions(
+                    _recaptureLocations,
+                    SelectedRecaptureBuilding.Value,
+                    value?.Value));
+        SelectedRecaptureFloor = RecaptureFloorOptions.FirstOrDefault();
+        OnPropertyChanged(nameof(CanSelectRecaptureSeat));
+        RefreshRecaptureTarget();
+    }
+
+    partial void OnSelectedRecaptureFloorChanged(RecaptureLocationOption? value)
+    {
+        OnPropertyChanged(nameof(CanSelectRecaptureFloor));
+        RefreshRecaptureTarget();
+    }
+
+    private async Task LoadRecaptureLocationsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            _recaptureLocations = await recaptureLocationSource.LoadAsync(cancellationToken).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            _recaptureLocations = [];
+            AddLog("补采位置读取失败：" + ApplicationFailureClassifier.Classify(ex).DisplayText);
+        }
+
+        ReplaceOptions(
+            RecaptureBuildingOptions,
+            RecaptureLocationCatalog.BuildingOptions(_recaptureLocations));
+        EnsureRecaptureSelection();
+        RefreshRecaptureTarget();
+    }
+
+    private void EnsureRecaptureSelection()
+    {
+        if (SelectedRecaptureBuilding is null && RecaptureBuildingOptions.Count > 0)
+        {
+            SelectedRecaptureBuilding = RecaptureBuildingOptions[0];
+        }
+    }
+
+    private void SynchronizeBuildingSelectionWithRecapture()
+    {
+        if (!IsRecaptureMode || SelectedRecaptureBuilding is null || _syncingRecaptureBuildingSelection)
+        {
+            return;
+        }
+
+        _syncingRecaptureBuildingSelection = true;
+        try
+        {
+            foreach (var building in Buildings)
+            {
+                building.IsSelected = building.Value == SelectedRecaptureBuilding.Value;
+            }
+        }
+        finally
+        {
+            _syncingRecaptureBuildingSelection = false;
+        }
+    }
+
+    private void RefreshRecaptureTarget()
+    {
+        RecaptureText = RecaptureLocationCatalog.BuildTargetArgument(
+            _recaptureLocations,
+            SelectedRecaptureBuilding?.Value,
+            SelectedRecaptureSeat?.Value,
+            SelectedRecaptureFloor?.Value);
+        if (RecaptureText.Length == 0)
+        {
+            RecaptureLocationStatus = "当前数据中没有可用的补采位置，请先完成一次采集";
+        }
+        else
+        {
+            var seat = string.IsNullOrEmpty(SelectedRecaptureSeat?.Value) ? "全部座号" : SelectedRecaptureSeat.Label;
+            var floor = string.IsNullOrEmpty(SelectedRecaptureFloor?.Value) ? "全部楼层" : SelectedRecaptureFloor.Label;
+            var count = RecaptureText.Count(character => character == ',') + 1;
+            RecaptureLocationStatus = $"已定位 {SelectedRecaptureBuilding?.Label} · {seat} · {floor}，共 {count} 个区域";
+        }
+
+        UpdateEnvironmentReadiness();
+        StartCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(CanStartTask));
+    }
+
+    private static void ReplaceOptions(
+        ObservableCollection<RecaptureLocationOption> target,
+        IReadOnlyList<RecaptureLocationOption> source)
+    {
+        target.Clear();
+        foreach (var item in source)
+        {
+            target.Add(item);
+        }
     }
 
     private void UpdateSelectedBuildingsText()
@@ -493,6 +708,7 @@ public sealed partial class CollectionTaskViewModel(
         if (state == "进行中")
         {
             _activeStageKey = key;
+            CurrentActivityText = detail;
         }
 
         Stages[index] = new CollectionStageRow(key, Stages[index].Label, state, detail);
@@ -725,13 +941,14 @@ public sealed partial class CollectionTaskViewModel(
         try
         {
             var settings = settingsService.Load();
+            RefreshCollectionBrowserState();
             var dataDirectory = pathService.ResolveWorkspacePath(settings.DataDirectory);
             var sidecarRoot = runner.ApplicationRoot;
             var probe = await environmentProbe.ProbeAsync(new CollectionEnvironmentProbeRequest(
                 runner.RuntimePath,
                 sidecarRoot,
                 dataDirectory,
-                settings.EdgeCdpPort,
+                GetEffectiveCdpPort(settings),
                 settings.EmsUrl)).ConfigureAwait(true);
             var cdpStatus = probe.Cdp;
 
@@ -747,40 +964,7 @@ public sealed partial class CollectionTaskViewModel(
             _cdpReachable = cdpStatus.IsReachable;
             _emsPageCount = cdpStatus.EmsPageCount;
 
-            PreflightChecks.Clear();
-            PreflightChecks.Add(!_nodeReady
-                ? PreflightCheckRow.Warning("Node 运行时", "未检测到 node")
-                : PreflightCheckRow.Ok("Node 运行时", runner.UsesBundledRuntime ? $"内置 {probe.NodeVersion}" : probe.NodeVersion));
-            PreflightChecks.Add(_dependenciesReady
-                ? PreflightCheckRow.Ok("Node 依赖", "Playwright 可加载")
-                : PreflightCheckRow.Warning(
-                    "Node 依赖",
-                    $"node_modules {(probe.NodeModulesPresent ? "存在" : "缺失")}；运行依赖 {probe.NodeDependencies}"));
-            PreflightChecks.Add(_enumScriptReady
-                ? PreflightCheckRow.Ok("采集 Sidecar", "枚举器和快照适配器可用")
-                : PreflightCheckRow.Warning(
-                    "采集 Sidecar",
-                    "缺少枚举器、采集入口或快照适配器"));
-            PreflightChecks.Add(PreflightCheckRow.Ok(
-                "原生数据流程",
-                "CollectionSnapshot 校验、SQLite 导入和基础质量检查可用"));
-            PreflightChecks.Add(probe.DatabaseReady
-                ? PreflightCheckRow.Ok("当前数据", probe.SnapshotReady ? "数据库和采集快照可用" : "数据库可用；尚无采集快照")
-                : PreflightCheckRow.Unknown("当前数据", probe.SnapshotReady ? "采集快照可用；导入时创建数据库" : "首次采集后创建数据库"));
-            PreflightChecks.Add(cdpStatus.IsReachable
-                ? PreflightCheckRow.Ok("采集浏览器", cdpStatus.Detail)
-                : settings.DefaultCollectionMode.Equals("auto-launch", StringComparison.OrdinalIgnoreCase)
-                    ? PreflightCheckRow.Ok("采集浏览器", "开始任务时自动打开 Edge")
-                    : PreflightCheckRow.Warning("采集浏览器", "尚未启动，请点击“打开采集浏览器”"));
-            PreflightChecks.Add(_emsUrlReady
-                ? cdpStatus.EmsPageCount > 0
-                    ? PreflightCheckRow.Ok("EMS 页面", cdpStatus.LoginDetail)
-                    : PreflightCheckRow.Unknown("EMS 页面", cdpStatus.LoginDetail)
-                : PreflightCheckRow.Warning("EMS 页面", "系统设置中的 EMS 地址无效"));
             EnvironmentText = $"Node {probe.NodeVersion}；依赖 {probe.NodeDependencies}；浏览器 {cdpStatus.Detail}";
-            CollectionBrowserActionText = settings.DefaultCollectionMode.Equals("auto-launch", StringComparison.OrdinalIgnoreCase)
-                ? "采集时自动打开 EMS"
-                : "打开采集浏览器";
             UpdateEnvironmentReadiness();
             StatusText = IsEnvironmentReady ? "等待任务启动" : "采集准备未完成";
             AddLog(EnvironmentText);
@@ -813,56 +997,115 @@ public sealed partial class CollectionTaskViewModel(
         }
 
         var plan = BuildExecutionPlan(SelectedTaskMode);
-        return !plan.RequiresBuildings || Buildings.Any(building => building.IsSelected);
+        return (!plan.RequiresBuildings || Buildings.Any(building => building.IsSelected)) &&
+               (!IsRecaptureMode || RecaptureText.Length > 0);
     }
 
     private void UpdateEnvironmentReadiness()
     {
         var plan = BuildExecutionPlan(SelectedTaskMode);
         var settings = settingsService.Current;
-        var missing = new List<string>();
 
         if (!_environmentChecked)
         {
             IsEnvironmentReady = false;
-            ReadinessTitle = "正在检查采集环境";
+            ReadinessTitle = "正在检查";
             ReadinessDetail = "检查完成后才能开始任务";
             ReadinessGlyph = "\uE9D9";
+            PreflightDetailsHeader = "0/4 已通过";
+            PreflightProgressValue = 0;
             return;
         }
 
         var usesNode = plan.RunEnumeration || plan.RunRealtimeDetails || plan.RunRealtimeAudit;
-        if (usesNode && !_nodeReady) missing.Add("Node 运行时");
-        if (usesNode && !_dependenciesReady) missing.Add("运行依赖");
-        if (plan.RunEnumeration && !_enumScriptReady) missing.Add("采集脚本");
-        if (plan.RunRealtimeDetails && !_realtimeScriptReady) missing.Add("实时详情脚本");
-        if (plan.RunRealtimeAudit && !_realtimeAuditScriptReady) missing.Add("实时审计脚本");
-        if (!plan.RunEnumeration && (plan.RunValidation || plan.RunImport) && !_snapshotReady) missing.Add("CollectionSnapshot 采集快照");
-        if (!plan.RunImport && (plan.RunQuality || plan.RunRealtimeDetails || plan.RunRealtimeAudit) && !_databaseReady) missing.Add("当前数据库");
-        if ((plan.RunEnumeration || plan.RunRealtimeDetails) && !_emsUrlReady) missing.Add("有效 EMS 地址");
-
         var usesBrowser = plan.RunEnumeration || plan.RunRealtimeDetails;
-        var autoLaunch = settings.DefaultCollectionMode.Equals("auto-launch", StringComparison.OrdinalIgnoreCase);
-        if (usesBrowser && !autoLaunch)
+        var localFailures = new List<string>();
+        if (usesNode && !_nodeReady) localFailures.Add("Node 运行时不可用");
+        if (usesNode && !_dependenciesReady) localFailures.Add("Playwright 依赖不可用");
+        if (plan.RunEnumeration && !_enumScriptReady) localFailures.Add("采集脚本缺失");
+        if (plan.RunRealtimeDetails && !_realtimeScriptReady) localFailures.Add("实时详情脚本缺失");
+        if (plan.RunRealtimeAudit && !_realtimeAuditScriptReady) localFailures.Add("实时审计脚本缺失");
+        var localReady = localFailures.Count == 0;
+
+        var dataReady = true;
+        var dataDetail = _databaseReady
+            ? _snapshotReady ? "当前数据库和采集快照可用" : "当前数据库可用"
+            : "首次采集后创建当前数据库";
+        if (!plan.RunEnumeration && (plan.RunValidation || plan.RunImport) && !_snapshotReady)
         {
-            if (!_cdpReachable)
-            {
-                missing.Add("采集浏览器");
-            }
-            else if (settings.CheckLoginBeforeCollection && _emsPageCount == 0)
-            {
-                missing.Add("已打开的 EMS 页面");
-            }
+            dataReady = false;
+            dataDetail = "缺少可用的采集快照";
+        }
+        else if (!plan.RunImport &&
+                 (plan.RunQuality || plan.RunRealtimeDetails || plan.RunRealtimeAudit) &&
+                 !_databaseReady)
+        {
+            dataReady = false;
+            dataDetail = "缺少当前数据库";
+        }
+        if (IsRecaptureMode && RecaptureText.Length == 0)
+        {
+            dataReady = false;
+            dataDetail = "当前数据中没有可用的补采位置，请先完成一次采集";
         }
 
-        IsEnvironmentReady = missing.Count == 0;
-        ReadinessTitle = IsEnvironmentReady ? "可以开始任务" : "需要完成采集准备";
-        ReadinessGlyph = IsEnvironmentReady ? "\uE930" : "\uE7BA";
-        ReadinessDetail = IsEnvironmentReady
-            ? autoLaunch && usesBrowser
-                ? "开始后将自动打开 Edge，请在浏览器中完成 EMS 登录"
-                : "采集浏览器和本地运行环境均已就绪"
-            : "待处理：" + string.Join("、", missing.Distinct());
+        var browserReady = !usesBrowser || _cdpReachable;
+        var browserDetail = usesBrowser
+            ? browserReady ? "采集浏览器已连接" : "请先打开采集浏览器"
+            : "当前任务不需要采集浏览器";
+        var emsReady = !usesBrowser ||
+                       (_emsUrlReady && (!settings.CheckLoginBeforeCollection || _emsPageCount > 0));
+        var emsDetail = !usesBrowser
+            ? "当前任务不需要 EMS 页面"
+            : !_emsUrlReady
+                ? "请在系统设置中填写有效的 EMS 地址"
+                : _emsPageCount == 0 && settings.CheckLoginBeforeCollection
+                    ? "请在采集浏览器中完成 EMS 登录"
+                    : "EMS 页面和登录态可用";
+
+        PreflightChecks.Clear();
+        PreflightChecks.Add(localReady
+            ? PreflightCheckRow.Ok("本地采集组件", "运行时、依赖和任务脚本可用")
+            : PreflightCheckRow.Warning("本地采集组件", string.Join("；", localFailures)));
+        PreflightChecks.Add(dataReady
+            ? PreflightCheckRow.Ok("当前数据", dataDetail)
+            : PreflightCheckRow.Warning("当前数据", dataDetail));
+        PreflightChecks.Add(browserReady
+            ? PreflightCheckRow.Ok("采集浏览器", browserDetail)
+            : PreflightCheckRow.Warning("采集浏览器", browserDetail));
+        PreflightChecks.Add(emsReady
+            ? PreflightCheckRow.Ok("EMS 页面", emsDetail)
+            : PreflightCheckRow.Warning("EMS 页面", emsDetail));
+
+        var localRequirement = new CollectionPreflightRequirement(
+            "本地采集组件",
+            localReady ? string.Empty : string.Join("；", localFailures),
+            localReady);
+        var dataRequirement = new CollectionPreflightRequirement("当前数据", dataDetail, dataReady);
+        var browserRequirement = new CollectionPreflightRequirement("采集浏览器", browserDetail, browserReady);
+        var emsRequirement = new CollectionPreflightRequirement(
+            _emsUrlReady ? "EMS 登录" : "EMS 地址",
+            emsDetail,
+            emsReady);
+        IReadOnlyList<CollectionPreflightRequirement> requirements;
+        if (!_emsUrlReady && usesBrowser)
+        {
+            requirements = [localRequirement, emsRequirement, browserRequirement, dataRequirement];
+        }
+        else
+        {
+            requirements = [localRequirement, browserRequirement, emsRequirement, dataRequirement];
+        }
+
+        var summary = CollectionPreflightSummaryBuilder.Build(requirements);
+        IsEnvironmentReady = summary.IsReady;
+        ReadinessTitle = summary.Title;
+        ReadinessDetail = summary.Detail;
+        ReadinessGlyph = summary.IsReady ? "\uE930" : "\uE7BA";
+        PreflightDetailsHeader = summary.DetailsHeader;
+        PreflightProgressValue = summary.TotalCount == 0
+            ? 0
+            : summary.PassedCount * 100d / summary.TotalCount;
         StartCommand.NotifyCanExecuteChanged();
     }
 
@@ -917,6 +1160,13 @@ public sealed partial class CollectionTaskViewModel(
         IsProgressIndeterminate = false;
         ProgressValue = 0;
         ProgressText = "准备采集";
+        CurrentActivityText = "正在准备采集";
+        CurrentBuildingText = "准备中";
+        CollectedCountText = "--";
+        DataUpdateText = "尚未更新";
+        RunDurationText = "0 秒";
+        LastHeartbeatText = "正在启动";
+        StartHeartbeat();
         ResetStages(plan);
         var settings = settingsService.Load();
         _activeDataDirectory = pathService.Capture(settings).DataDirectory;
@@ -937,12 +1187,10 @@ public sealed partial class CollectionTaskViewModel(
         var realtimeMaxDevices = ClampInt(RealtimeMaxDevices, 0, 20000);
         var refreshInventoryBeforeRealtime = RefreshInventoryBeforeRealtime;
         var skipInventoryCheck = SkipInventoryCheck;
-        if (runEnumeration &&
-            settings.CheckLoginBeforeCollection &&
-            settings.DefaultCollectionMode.Equals("edge-cdp", StringComparison.OrdinalIgnoreCase))
+        if (runEnumeration && settings.CheckLoginBeforeCollection)
         {
             var cdpStatus = await environmentProbe
-                .CheckEdgeCdpAsync(settings.EdgeCdpPort, settings.EmsUrl)
+                .CheckEdgeCdpAsync(GetEffectiveCdpPort(settings), settings.EmsUrl)
                 .ConfigureAwait(true);
             if (!cdpStatus.IsReachable || cdpStatus.EmsPageCount == 0)
             {
@@ -1015,9 +1263,11 @@ public sealed partial class CollectionTaskViewModel(
             if (runValidation)
             {
                 SetStageState("validate", "进行中", "正在检查采集结果完整性");
+                IsProgressIndeterminate = true;
                 ProgressValue = Math.Max(ProgressValue, runImportAfterCollect ? enumProgressCeiling + 2 : 20);
                 ProgressText = "正在校验采集 JSON";
                 await RunValidationAsync(_activeTask.Token);
+                IsProgressIndeterminate = false;
                 SetStageState("validate", "已完成", "采集结果校验通过");
                 ProgressValue = Math.Max(ProgressValue, runImportAfterCollect ? enumProgressCeiling + 4 : 100);
                 ProgressText = runImportAfterCollect ? "JSON 校验通过，准备导入 SQLite" : "JSON 校验通过";
@@ -1026,15 +1276,18 @@ public sealed partial class CollectionTaskViewModel(
             if (runImportAfterCollect)
             {
                 SetStageState("import", "进行中", "正在更新所选楼栋的当前数据");
+                IsProgressIndeterminate = true;
                 var importProgress = runRealtimeDetailsAfterImport
                     ? 68
                     : runQualityAfterImport ? 88 : 94;
                 ProgressValue = Math.Max(ProgressValue, importProgress - 2);
                 ProgressText = "正在导入 SQLite";
                 await RunImportAsync(selectedBuildings, _activeTask.Token);
+                IsProgressIndeterminate = false;
                 _currentDataUpdatedThisRun = true;
                 _databaseReady = true;
                 CanOpenDataAfterImport = true;
+                DataUpdateText = "当前数据已更新";
                 SetStageState("import", "已完成", "当前数据已更新");
                 ProgressValue = Math.Max(ProgressValue, importProgress);
                 ProgressText = runQualityAfterImport || runRealtimeDetailsAfterImport ? "SQLite 已导入" : "100%";
@@ -1043,10 +1296,12 @@ public sealed partial class CollectionTaskViewModel(
             if (runImportAfterCollect && runQualityAfterImport)
             {
                 SetStageState("quality", "进行中", "正在检查数据质量");
+                IsProgressIndeterminate = true;
                 var qualityProgress = runRealtimeDetailsAfterImport ? 74 : 96;
                 ProgressValue = Math.Max(ProgressValue, qualityProgress - 2);
                 ProgressText = "正在运行数据质量检查";
                 await RunQualityAsync(_activeTask.Token);
+                IsProgressIndeterminate = false;
                 ProgressValue = qualityProgress;
                 await RefreshAuditAsync(_activeTask.Token, ActiveDatabasePath).ConfigureAwait(true);
                 SetStageState(
@@ -1058,6 +1313,7 @@ public sealed partial class CollectionTaskViewModel(
             if (runRealtimeDetailsAfterImport)
             {
                 SetStageState("realtime", "进行中", "正在更新实时详情");
+                IsProgressIndeterminate = true;
                 var realtimeBase = Math.Max(ProgressValue, runImportAfterCollect || runQualityAfterImport ? 74 : enumProgressCeiling);
                 ProgressValue = realtimeBase;
                 ProgressText = "正在更新实时详情";
@@ -1074,6 +1330,7 @@ public sealed partial class CollectionTaskViewModel(
                     realtimeBase,
                     23,
                     _activeTask.Token);
+                IsProgressIndeterminate = false;
                 ProgressValue = Math.Max(ProgressValue, 97);
                 ProgressText = runRealtimeAuditAfterDetails ? "实时详情已更新，准备审计" : "实时详情已更新";
                 if (!runRealtimeAuditAfterDetails)
@@ -1085,9 +1342,11 @@ public sealed partial class CollectionTaskViewModel(
             if (runRealtimeAuditAfterDetails)
             {
                 SetStageState("realtime", "进行中", "正在运行实时点位审计");
+                IsProgressIndeterminate = true;
                 ProgressValue = Math.Max(ProgressValue, 98);
                 ProgressText = "正在运行实时点位审计";
                 await RunRealtimeAuditAsync(settings, _activeTask.Token);
+                IsProgressIndeterminate = false;
                 ProgressValue = 99;
                 await RefreshRealtimeAuditAsync(_activeTask.Token).ConfigureAwait(true);
                 SetStageState("realtime", "已完成", "实时详情和点位审计已完成");
@@ -1106,20 +1365,27 @@ public sealed partial class CollectionTaskViewModel(
                     ? "任务完成，当前数据已更新，存在待复核质量问题"
                     : "任务完成，当前数据已更新"
                 : plan.CompletedStatus(runImportAfterCollect, runRealtimeDetailsAfterImport);
+            CurrentActivityText = StatusText;
+            DataUpdateText = _currentDataUpdatedThisRun ? "当前数据已更新" : DataUpdateText;
             AddLog(StatusText);
+            StopHeartbeat();
         }
         catch (OperationCanceledException)
         {
+            StopHeartbeat();
             IsProgressIndeterminate = false;
             ProgressText = "已停止";
             SetActiveStageTerminalState("已停止", "用户停止了任务");
             StatusText = _currentDataUpdatedThisRun
                 ? "任务已停止；当前数据已经更新，后续检查未完成"
                 : "任务已停止；当前数据未更改";
+            CurrentActivityText = StatusText;
+            DataUpdateText = _currentDataUpdatedThisRun ? "当前数据已更新；后续步骤未完成" : "当前数据未更改";
             AddLog(StatusText);
         }
         catch (Exception ex)
         {
+            StopHeartbeat();
             var failure = ApplicationFailureClassifier.Classify(ex);
             IsProgressIndeterminate = false;
             var cancelled = failure.Category == ApplicationErrorCategory.Cancelled;
@@ -1131,6 +1397,8 @@ public sealed partial class CollectionTaskViewModel(
                     : "任务失败；当前数据已经更新，后续步骤未完成："
                 : cancelled ? "任务已停止；当前数据未更改：" : "任务失败；当前数据未更改：") +
                 failure.DisplayText;
+            CurrentActivityText = StatusText;
+            DataUpdateText = _currentDataUpdatedThisRun ? "当前数据已更新；后续步骤未完成" : "当前数据未更改";
             AddFailureLog(failure, ex);
             AddLog(StatusText);
         }
@@ -1163,52 +1431,103 @@ public sealed partial class CollectionTaskViewModel(
         navigationService.NavigateToData(new DataNavigationRequest());
     }
 
-    private bool CanOpenEms()
+    [RelayCommand(CanExecute = nameof(CanOpenAudit))]
+    private void OpenAudit()
     {
-        var settings = settingsService.Load();
-        return !IsRunning && !IsCheckingEnvironment &&
-               settings.DefaultCollectionMode.Equals("edge-cdp", StringComparison.OrdinalIgnoreCase);
+        navigationService.NavigateToAudit();
     }
 
-    [RelayCommand(CanExecute = nameof(CanOpenEms))]
-    private async Task OpenEmsAsync()
+    private bool CanToggleCollectionBrowser() => !IsRunning && !IsCheckingEnvironment;
+
+    [RelayCommand(CanExecute = nameof(CanToggleCollectionBrowser))]
+    private async Task ToggleCollectionBrowserAsync()
+    {
+        RefreshCollectionBrowserState();
+        if (IsCollectionBrowserOpen)
+        {
+            if (!TryDisposeOwnedBrowser())
+            {
+                StatusText = "无法关闭采集浏览器，请关闭其中的页面后重试";
+                UpdateCollectionBrowserPresentation();
+                return;
+            }
+
+            StatusText = "采集浏览器已关闭";
+            AddLog(StatusText);
+            UpdateCollectionBrowserPresentation();
+            await CheckEnvironmentAsync().ConfigureAwait(true);
+            return;
+        }
+
+        await OpenOwnedCollectionBrowserAsync().ConfigureAwait(true);
+    }
+
+    private async Task OpenOwnedCollectionBrowserAsync()
     {
         var settings = settingsService.Load();
         try
         {
+            if (!TryDisposeOwnedBrowser())
+            {
+                throw new InvalidOperationException("The previous owned Edge process is still running.");
+            }
             var edgePath = ResolveEdgePath();
-            var profilePath = Path.Combine(
-                pathService.ResolveWorkspacePath(settings.DataDirectory),
-                ".edge_cdp_profile");
+            _ownedEdgeSessionRoot = Path.Combine(
+                AppStorageDefaults.ProductDirectory,
+                "browser-sessions",
+                Guid.NewGuid().ToString("N"));
+            var profilePath = Path.Combine(_ownedEdgeSessionRoot, "profile");
             Directory.CreateDirectory(profilePath);
             var startInfo = new ProcessStartInfo
             {
                 FileName = edgePath,
                 UseShellExecute = false,
             };
-            startInfo.ArgumentList.Add($"--remote-debugging-port={settings.EdgeCdpPort}");
+            startInfo.ArgumentList.Add("--edge-skip-compat-layer-relaunch");
+            startInfo.ArgumentList.Add("--remote-debugging-port=0");
             startInfo.ArgumentList.Add("--remote-debugging-address=127.0.0.1");
             startInfo.ArgumentList.Add("--user-data-dir=" + profilePath);
-            startInfo.ArgumentList.Add(settings.EmsUrl);
-            Process.Start(startInfo);
+            startInfo.ArgumentList.Add("about:blank");
+            _ownedEdgeProcess = Process.Start(startInfo)
+                ?? throw new InvalidOperationException("Edge process could not be started.");
+            _ownedEdgeCdpPort = await OwnedEdgeCdpEndpoint
+                .WaitForPortAsync(profilePath, _ownedEdgeProcess)
+                .ConfigureAwait(true);
+            IsCollectionBrowserOpen = true;
+            UpdateCollectionBrowserPresentation();
             StatusText = "采集浏览器已打开，请在其中完成 EMS 登录";
-            AddLog($"已启动采集专用 Edge，CDP 端口 {settings.EdgeCdpPort}");
+            AddLog($"已启动采集专用 Edge，CDP 端口 {_ownedEdgeCdpPort}");
 
+            var emsOpened = false;
             for (var attempt = 0; attempt < 5; attempt++)
             {
                 await Task.Delay(800).ConfigureAwait(true);
                 var cdpStatus = await environmentProbe
-                    .CheckEdgeCdpAsync(settings.EdgeCdpPort, settings.EmsUrl)
+                    .CheckEdgeCdpAsync(GetEffectiveCdpPort(settings), settings.EmsUrl)
                     .ConfigureAwait(true);
                 if (cdpStatus.IsReachable)
                 {
+                    if (_ownedEdgeProcess.HasExited)
+                    {
+                        throw new InvalidOperationException("Owned Edge exited before EMS navigation.");
+                    }
+                    await CollectionEnvironmentProbe
+                        .OpenEmsPageAsync(GetEffectiveCdpPort(settings), settings.EmsUrl)
+                        .ConfigureAwait(true);
+                    emsOpened = true;
                     await CheckEnvironmentAsync().ConfigureAwait(true);
                     break;
                 }
             }
+            if (!emsOpened)
+            {
+                throw new InvalidOperationException("Owned Edge CDP did not become reachable before EMS navigation.");
+            }
         }
         catch (Exception ex)
         {
+            TryDisposeOwnedBrowser();
+            RefreshCollectionBrowserState();
             var failure = ApplicationFailureClassifier.Classify(ex);
             StatusText = "无法打开采集浏览器：" + failure.DisplayText;
             AddFailureLog(failure, ex);
@@ -1326,9 +1645,7 @@ public sealed partial class CollectionTaskViewModel(
         double progressSpan,
         CancellationToken cancellationToken)
     {
-        var mode = settings.DefaultCollectionMode.Equals("auto-launch", StringComparison.OrdinalIgnoreCase)
-            ? "--auto-launch"
-            : "--edge";
+        var mode = "--edge";
         var args = new List<string>
         {
             mode,
@@ -1336,8 +1653,7 @@ public sealed partial class CollectionTaskViewModel(
             "--bldg=" + string.Join(",", buildings),
             "--log-level=" + settings.LogLevel,
             "--out-dir=" + ActiveDataDirectory,
-            "--ems-url=" + settings.EmsUrl,
-            "--cdp-url=http://127.0.0.1:" + settings.EdgeCdpPort,
+            "--cdp-url=http://127.0.0.1:" + GetEffectiveCdpPort(settings),
         };
         if (!settings.CheckLoginBeforeCollection)
         {
@@ -1374,7 +1690,7 @@ public sealed partial class CollectionTaskViewModel(
             Path.Combine("sidecar", "collect.js"),
             args,
             cancellationToken,
-            BuildDataEnvironment(ActiveDataDirectory),
+            BuildTaskEnvironment(settings),
             progressBase: 0,
             progressSpan: progressSpan);
     }
@@ -1447,9 +1763,7 @@ public sealed partial class CollectionTaskViewModel(
         double progressSpan,
         CancellationToken cancellationToken)
     {
-        var browserMode = settings.DefaultCollectionMode.Equals("edge-cdp", StringComparison.OrdinalIgnoreCase)
-            ? "cdp"
-            : "persistent";
+        var browserMode = "cdp";
         var args = new List<string>
         {
             "--buildings=" + string.Join(",", buildings),
@@ -1505,16 +1819,27 @@ public sealed partial class CollectionTaskViewModel(
         var environment = new Dictionary<string, string>(BuildDataEnvironment(ActiveDataDirectory))
         {
             ["EMS_URL"] = settings.EmsUrl,
-            ["CDP_URL"] = "http://127.0.0.1:" + settings.EdgeCdpPort,
-            ["REALTIME_BROWSER_MODE"] = settings.DefaultCollectionMode.Equals("edge-cdp", StringComparison.OrdinalIgnoreCase)
-                ? "cdp"
-                : "persistent",
+            ["CDP_URL"] = "http://127.0.0.1:" + GetEffectiveCdpPort(settings),
+            ["REALTIME_BROWSER_MODE"] = "cdp",
         };
         return environment;
     }
 
     private string ActiveDataDirectory => _activeDataDirectory
         ?? throw new InvalidOperationException("The collection task data directory has not been initialized.");
+
+    private int GetEffectiveCdpPort(AppSettings settings)
+    {
+        if (_ownedEdgeCdpPort is not { } ownedPort)
+        {
+            return settings.EdgeCdpPort;
+        }
+        if (_ownedEdgeProcess is null || _ownedEdgeProcess.HasExited)
+        {
+            throw new InvalidOperationException("Owned Edge is no longer running.");
+        }
+        return ownedPort;
+    }
 
     private string ActiveSnapshotPath => Path.Combine(ActiveDataDirectory, "collection_snapshot_v1.json");
 
@@ -1607,6 +1932,7 @@ public sealed partial class CollectionTaskViewModel(
         var row = new CollectionTaskLogRow(DateTime.Now.ToString("HH:mm:ss"), normalized);
         _dispatcherQueue.TryEnqueue(() =>
         {
+            MarkActivity();
             ApplyProgressEvent(message);
             Logs.Add(row);
             while (Logs.Count > 300)
@@ -1656,7 +1982,14 @@ public sealed partial class CollectionTaskViewModel(
         if (!progress.IsValid)
         {
             IsProgressIndeterminate = true;
+            CurrentActivityText = progress.LogText;
             return;
+        }
+
+        CurrentActivityText = progress.LogText;
+        if (!string.IsNullOrWhiteSpace(progress.Building))
+        {
+            CurrentBuildingText = progress.Building;
         }
 
         if (progress.Percent is { } percent)
@@ -1666,6 +1999,10 @@ public sealed partial class CollectionTaskViewModel(
             ProgressText = string.IsNullOrWhiteSpace(progress.ProgressMessage)
                 ? $"{ProgressValue:0}% · {_activeProgressLabel}"
                 : $"{ProgressValue:0}% · {progress.ProgressMessage}";
+            if (progress.Current > 0 && progress.Total > 0)
+            {
+                CollectedCountText = $"{progress.Current:N0} / {progress.Total:N0}";
+            }
             IsProgressIndeterminate = false;
             return;
         }
@@ -1682,7 +2019,203 @@ public sealed partial class CollectionTaskViewModel(
         var enumeratorPercent = _activeProgressBase + collectionRatio * _activeProgressSpan;
         ProgressValue = enumeratorPercent;
         ProgressText = $"{enumeratorPercent:0}% · {progress.Building} 子区 {progress.Current}/{progress.Total}";
+        if (progress.AccumulatedCards > 0)
+        {
+            CollectedCountText = $"{progress.AccumulatedCards:N0} 张（本页 {progress.PageCards:N0} 张）";
+        }
         IsProgressIndeterminate = false;
+    }
+
+    public void Dispose()
+    {
+        StopHeartbeat();
+        _activeTask?.Cancel();
+        TryDisposeOwnedBrowser();
+    }
+
+    private void RefreshCollectionBrowserState()
+    {
+        if (_ownedEdgeProcess is not null && !IsOwnedBrowserProcessRunning())
+        {
+            TryDisposeOwnedBrowser();
+        }
+
+        IsCollectionBrowserOpen = IsOwnedBrowserProcessRunning();
+        UpdateCollectionBrowserPresentation();
+    }
+
+    private void UpdateCollectionBrowserPresentation()
+    {
+        if (IsCollectionBrowserOpen)
+        {
+            CollectionBrowserActionText = "关闭采集浏览器";
+            CollectionBrowserActionGlyph = "\uE711";
+            CollectionBrowserActionToolTip = IsRunning
+                ? "采集期间不能关闭浏览器"
+                : "关闭 EMS Scout 专用采集浏览器";
+            return;
+        }
+
+        CollectionBrowserActionText = "打开采集浏览器";
+        CollectionBrowserActionGlyph = "\uE774";
+        CollectionBrowserActionToolTip = "打开 EMS Scout 专用采集浏览器";
+    }
+
+    private bool IsOwnedBrowserProcessRunning()
+    {
+        try
+        {
+            return _ownedEdgeProcess is not null && !_ownedEdgeProcess.HasExited;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private bool TryDisposeOwnedBrowser()
+    {
+        if (_ownedEdgeProcess is not null)
+        {
+            try
+            {
+                if (!_ownedEdgeProcess.HasExited) _ownedEdgeProcess.Kill(entireProcessTree: true);
+                _ownedEdgeProcess.WaitForExit(5000);
+            }
+            catch (Exception ex)
+            {
+                applicationLogger.Write(new ApplicationLogEvent(
+                    ApplicationLogLevel.Warning,
+                    "collection",
+                    "owned_edge_stop_failed",
+                    "Failed to stop the owned Edge process during cleanup.",
+                    Exception: ex));
+            }
+
+            if (IsOwnedBrowserProcessRunning())
+            {
+                IsCollectionBrowserOpen = true;
+                return false;
+            }
+
+            _ownedEdgeProcess.Dispose();
+            _ownedEdgeProcess = null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(_ownedEdgeSessionRoot))
+        {
+            DeleteBrowserSessionWithRetry(_ownedEdgeSessionRoot);
+        }
+        _ownedEdgeSessionRoot = null;
+        _ownedEdgeCdpPort = null;
+        IsCollectionBrowserOpen = false;
+        return true;
+    }
+
+    private void CleanupStaleBrowserSessions()
+    {
+        var root = Path.Combine(AppStorageDefaults.ProductDirectory, "browser-sessions");
+        if (!Directory.Exists(root))
+        {
+            return;
+        }
+        foreach (var directory in Directory.EnumerateDirectories(root))
+        {
+            if (Directory.GetCreationTimeUtc(directory) < DateTime.UtcNow.AddDays(-1))
+            {
+                DeleteBrowserSessionWithRetry(directory);
+            }
+        }
+    }
+
+    private void DeleteBrowserSessionWithRetry(string directory)
+    {
+        var ownedRoot = Path.GetFullPath(Path.Combine(AppStorageDefaults.ProductDirectory, "browser-sessions"));
+        var target = Path.GetFullPath(directory);
+        if (!target.StartsWith(ownedRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            applicationLogger.Write(new ApplicationLogEvent(
+                ApplicationLogLevel.Warning,
+                "collection",
+                "browser_session_cleanup_refused",
+                "Refused to delete a browser session outside the owned session root."));
+            return;
+        }
+
+        for (var attempt = 0; attempt < 5 && Directory.Exists(target); attempt++)
+        {
+            try
+            {
+                Directory.Delete(target, recursive: true);
+            }
+            catch (IOException)
+            {
+                if (attempt < 4) Thread.Sleep(100 * (attempt + 1));
+            }
+            catch (UnauthorizedAccessException)
+            {
+                if (attempt < 4) Thread.Sleep(100 * (attempt + 1));
+            }
+        }
+        if (Directory.Exists(target))
+        {
+            applicationLogger.Write(new ApplicationLogEvent(
+                ApplicationLogLevel.Warning,
+                "collection",
+                "browser_session_cleanup_failed",
+                "The owned browser session directory could not be removed after retries."));
+        }
+    }
+
+    private void StartHeartbeat()
+    {
+        _activeRunStartedAt = DateTimeOffset.Now;
+        _lastActivityAt = _activeRunStartedAt;
+        _heartbeatTimer ??= _dispatcherQueue.CreateTimer();
+        _heartbeatTimer.Interval = TimeSpan.FromSeconds(1);
+        _heartbeatTimer.Tick -= OnHeartbeatTick;
+        _heartbeatTimer.Tick += OnHeartbeatTick;
+        _heartbeatTimer.Start();
+        UpdateHeartbeatText();
+    }
+
+    private void StopHeartbeat()
+    {
+        _heartbeatTimer?.Stop();
+        UpdateHeartbeatText();
+    }
+
+    private void MarkActivity()
+    {
+        if (_activeRunStartedAt is null)
+        {
+            return;
+        }
+
+        _lastActivityAt = DateTimeOffset.Now;
+        UpdateHeartbeatText();
+    }
+
+    private void OnHeartbeatTick(DispatcherQueueTimer sender, object args)
+    {
+        UpdateHeartbeatText();
+    }
+
+    private void UpdateHeartbeatText()
+    {
+        if (_activeRunStartedAt is not { } startedAt)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.Now;
+        var elapsed = now - startedAt;
+        RunDurationText = elapsed.TotalHours >= 1
+            ? $"{(int)elapsed.TotalHours:00}:{elapsed.Minutes:00}:{elapsed.Seconds:00}"
+            : $"{elapsed.Minutes:00}:{elapsed.Seconds:00}";
+        LastHeartbeatText = _lastActivityAt is { } lastActivity
+            ? $"最近活动 {Math.Max(0, (int)(now - lastActivity).TotalSeconds)} 秒前"
+            : "尚未更新";
     }
 
     private int FindActiveBuildingIndex(string building)

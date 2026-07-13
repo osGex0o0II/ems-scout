@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using EmsScout.Application.Workflows;
@@ -15,10 +16,12 @@ public sealed record NodeWorkflowRunResult(
         WorkflowTerminalOutcome.SucceededWithFindings;
 }
 
-public sealed class NodeCollectionTaskRunner
+public sealed class NodeCollectionTaskRunner : IDisposable
 {
     private static readonly TimeSpan DefaultCancellationGracePeriod = TimeSpan.FromSeconds(8);
     private readonly TimeSpan cancellationGracePeriod;
+    private readonly ConcurrentDictionary<int, Process> activeProcesses = new();
+    private int disposed;
 
     public NodeCollectionTaskRunner(
         string workspaceRoot,
@@ -51,6 +54,7 @@ public sealed class NodeCollectionTaskRunner
         IReadOnlyDictionary<string, string>? environment = null,
         bool exitCodeTwoMeansFindings = false)
     {
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref disposed) != 0, this);
         var layout = ResolveLayout();
         var scriptPath = Path.Combine(layout.ApplicationRoot, relativeScriptPath);
         if (!File.Exists(scriptPath))
@@ -105,6 +109,12 @@ public sealed class NodeCollectionTaskRunner
         {
             throw new InvalidOperationException("Failed to start the EMS Scout sidecar process.");
         }
+        activeProcesses.TryAdd(process.Id, process);
+        if (Volatile.Read(ref disposed) != 0)
+        {
+            TryKill(process);
+            throw new ObjectDisposedException(nameof(NodeCollectionTaskRunner));
+        }
 
         var cancellationRequested = 0;
         var cancellationSignal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -153,6 +163,7 @@ public sealed class NodeCollectionTaskRunner
         {
             processExitedSignal.TrySetResult();
             await cancellationWatchdog.ConfigureAwait(false);
+            activeProcesses.TryRemove(process.Id, out _);
         }
 
         validator.EnsureComplete();
@@ -179,6 +190,19 @@ public sealed class NodeCollectionTaskRunner
             process.ExitCode,
             terminal.Outcome ?? throw new WorkflowEventParseException("Sidecar terminal outcome is missing."),
             terminal.Message);
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref disposed, 1) != 0)
+        {
+            return;
+        }
+
+        foreach (var process in activeProcesses.Values)
+        {
+            TryKill(process);
+        }
     }
 
     private SidecarLayout ResolveLayout()

@@ -109,7 +109,7 @@ public sealed class AppSettingsService
         output.ExportDirectory = string.IsNullOrWhiteSpace(output.ExportDirectory)
             ? AppStorageDefaults.ExportDirectory
             : output.ExportDirectory.Trim();
-        output.DefaultCollectionMode = NormalizeOption(output.DefaultCollectionMode, "edge-cdp", "edge-cdp", "auto-launch");
+        output.DefaultCollectionMode = "edge-cdp";
         output.LogLevel = NormalizeOption(output.LogLevel, "INFO", "ERROR", "INFO", "DEBUG");
         output.Theme = NormalizeOption(output.Theme, "system", "system", "light", "dark");
         return output;

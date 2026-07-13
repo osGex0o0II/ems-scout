@@ -101,3 +101,14 @@ test('project rules and Windows handoff define clean-clone and evidence gates', 
   assert.match(readme, /\[项目规范\]\(docs\/项目规范\.md\)/);
   assert.match(readme, /\[Windows 验证清单\]\(docs\/Windows验证清单\.md\)/);
 });
+
+test('the documented Node gate includes every test directory', () => {
+  const packageJson = JSON.parse(read('package.json'));
+  const workflow = read('.github/workflows/windows-x64.yml');
+  const documents = [read('README.md'), read('docs/项目规范.md'), read('docs/交接.md'), read('docs/Windows验证清单.md')];
+
+  assert.match(packageJson.scripts.test || '', /tests\/\*\*\/\*\.test\.js/);
+  assert.match(packageJson.scripts.test || '', /sidecar\/test\/\*\.test\.js/);
+  assert.match(workflow, /npm test/);
+  for (const document of documents) assert.match(document, /npm test/);
+});

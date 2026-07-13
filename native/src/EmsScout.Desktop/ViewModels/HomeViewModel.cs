@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using EmsScout.Application;
+using EmsScout.Application.Attention;
 using EmsScout.Application.Logging;
 using EmsScout.Domain;
 using EmsScout.Desktop.Services;
@@ -12,7 +13,9 @@ namespace EmsScout.Desktop.ViewModels;
 public sealed partial class HomeViewModel(
     DashboardOverviewService overviewService,
     INavigationService navigationService,
-    IApplicationLogger applicationLogger) : ObservableObject
+    IApplicationLogger applicationLogger,
+    DataContextService dataContext,
+    IAttentionIssueRepository attentionIssueRepository) : ObservableObject
 {
     private string _pageStatus = "正在读取当前采集数据";
     private string _sourcePath = string.Empty;
@@ -26,6 +29,9 @@ public sealed partial class HomeViewModel(
     private InfoBarSeverity _overviewSeverity = InfoBarSeverity.Informational;
     private bool _hasLoadError;
     private bool _isLoading;
+    private bool _contextAttached;
+
+    public DataContextService DataContext { get; } = dataContext;
 
     public string PageStatus
     {
@@ -101,11 +107,14 @@ public sealed partial class HomeViewModel(
             if (SetProperty(ref _isLoading, value))
             {
                 OnPropertyChanged(nameof(CanRefresh));
+                OnPropertyChanged(nameof(CanChangeAttentionState));
             }
         }
     }
 
     public bool CanRefresh => !IsLoading;
+
+    public bool CanChangeAttentionState => !IsLoading && !DataContext.IsReadOnly;
 
     public ObservableCollection<MetricItem> Metrics { get; } = [];
 
@@ -126,7 +135,12 @@ public sealed partial class HomeViewModel(
         PageStatus = "正在读取当前采集数据";
         try
         {
-            var overview = await overviewService.LoadAsync(cancellationToken).ConfigureAwait(true);
+            AttachDataContext();
+            if (DataContext.Options.Count == 0)
+            {
+                await DataContext.RefreshAsync(cancellationToken).ConfigureAwait(true);
+            }
+            var overview = await overviewService.LoadAsync(DataContext.RunId, cancellationToken).ConfigureAwait(true);
             Metrics.Clear();
             Risks.Clear();
             StatusDistribution.Clear();
@@ -139,7 +153,7 @@ public sealed partial class HomeViewModel(
 
             foreach (var risk in overview.Risks)
             {
-                Risks.Add(new DashboardRiskRow(risk));
+                Risks.Add(new DashboardRiskRow(risk, !DataContext.IsReadOnly));
             }
 
             var summary = overview.Summary;
@@ -177,6 +191,29 @@ public sealed partial class HomeViewModel(
         }
     }
 
+    public async Task SelectDataContextAsync(DataContextOption? option, CancellationToken cancellationToken = default)
+    {
+        DataContext.Select(option);
+        await LoadAsync(cancellationToken).ConfigureAwait(true);
+    }
+
+    private void AttachDataContext()
+    {
+        if (_contextAttached)
+        {
+            return;
+        }
+
+        DataContext.ContextChanged += async (_, _) =>
+        {
+            if (!IsLoading)
+            {
+                await LoadAsync().ConfigureAwait(true);
+            }
+        };
+        _contextAttached = true;
+    }
+
     public void OpenMetric(MetricItem? item)
     {
         if (item?.NavigationRequest is null)
@@ -199,12 +236,62 @@ public sealed partial class HomeViewModel(
 
     public void OpenRisk(DashboardRiskRow? row)
     {
-        if (row?.NavigationRequest is null)
+        if (row is null)
         {
             return;
         }
 
-        navigationService.NavigateToData(row.NavigationRequest);
+        if (row.NavigationRequest is not null)
+        {
+            navigationService.NavigateToData(row.NavigationRequest);
+            return;
+        }
+
+        if (row.CanNavigate)
+        {
+            navigationService.NavigateToAudit();
+        }
+    }
+
+    public Task AcknowledgeAttentionAsync(DashboardRiskRow row) =>
+        UpdateAttentionStatusAsync(row, AttentionIssueStatuses.Acknowledged);
+
+    public Task IgnoreAttentionAsync(DashboardRiskRow row, string reason) =>
+        UpdateAttentionStatusAsync(row, AttentionIssueStatuses.Ignored, reason);
+
+    public Task ReopenAttentionAsync(DashboardRiskRow row) =>
+        UpdateAttentionStatusAsync(row, AttentionIssueStatuses.Unprocessed);
+
+    private async Task UpdateAttentionStatusAsync(
+        DashboardRiskRow row,
+        string status,
+        string? reason = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (!CanChangeAttentionState || string.IsNullOrWhiteSpace(row.IssueId))
+        {
+            return;
+        }
+
+        IsLoading = true;
+        try
+        {
+            await attentionIssueRepository
+                .SetStatusAsync(row.IssueId, status, reason, cancellationToken)
+                .ConfigureAwait(true);
+            PageStatus = "待处理状态已更新";
+        }
+        catch (Exception ex)
+        {
+            PageStatus = applicationLogger.WriteFailure(ex, "attention-queue").DisplayText;
+            return;
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+
+        await LoadAsync(cancellationToken).ConfigureAwait(true);
     }
 
     private void ApplyOverviewStatus(FleetSummary summary, IReadOnlyList<DashboardRiskItem> risks)
@@ -219,7 +306,9 @@ public sealed partial class HomeViewModel(
         }
 
         var actionableRisks = risks
-            .Where(risk => risk.Kind is OverviewMetricKind.Danger or OverviewMetricKind.Warning)
+            .Where(risk =>
+                risk.Status is AttentionIssueStatuses.Unprocessed or AttentionIssueStatuses.Acknowledged &&
+                risk.Kind is OverviewMetricKind.Danger or OverviewMetricKind.Warning)
             .ToList();
         if (actionableRisks.Any(risk => risk.Kind == OverviewMetricKind.Danger))
         {
@@ -300,8 +389,10 @@ public sealed class MetricItem(OverviewMetric metric)
     public string ActionText => CanNavigate ? "查看筛选" : string.Empty;
 }
 
-public sealed class DashboardRiskRow(DashboardRiskItem risk)
+public sealed class DashboardRiskRow(DashboardRiskItem risk, bool allowStateChanges)
 {
+    public string IssueId { get; } = risk.IssueId;
+
     public string Title { get; } = risk.Title;
 
     public string Detail { get; } = risk.Detail;
@@ -309,6 +400,20 @@ public sealed class DashboardRiskRow(DashboardRiskItem risk)
     public string Source { get; } = risk.Source;
 
     public string CountText { get; } = risk.Count > 0 ? risk.Count.ToString("N0") : "--";
+
+    public string Scope { get; } = risk.Scope;
+
+    public string StatusText { get; } = risk.Status switch
+    {
+        AttentionIssueStatuses.Acknowledged => "已确认",
+        AttentionIssueStatuses.Ignored => "已忽略",
+        AttentionIssueStatuses.Resolved => "已解决",
+        _ => "未处理",
+    };
+
+    public string UpdatedText { get; } = risk.LastSeenAt?.ToLocalTime().ToString("MM-dd HH:mm") ?? "--";
+
+    public string IgnoreReason { get; } = risk.IgnoreReason;
 
     public string SeverityText { get; } = risk.Kind switch
     {
@@ -331,7 +436,14 @@ public sealed class DashboardRiskRow(DashboardRiskItem risk)
         ? null
         : new DataNavigationRequest(CommunicationState: risk.CommunicationState);
 
-    public string ActionText { get; } = string.IsNullOrWhiteSpace(risk.CommunicationState)
-        ? string.Empty
-        : string.IsNullOrWhiteSpace(risk.ActionLabel) ? "查看数据" : risk.ActionLabel;
+    public bool CanNavigate { get; } = risk.IsActionable || risk.CanNavigate;
+
+    public bool CanAcknowledge { get; } = allowStateChanges &&
+        risk.Status == AttentionIssueStatuses.Unprocessed;
+
+    public bool CanIgnore { get; } = allowStateChanges &&
+        risk.Status is not AttentionIssueStatuses.Ignored and not AttentionIssueStatuses.Resolved;
+
+    public bool CanReopen { get; } = allowStateChanges &&
+        risk.Status is AttentionIssueStatuses.Acknowledged or AttentionIssueStatuses.Ignored or AttentionIssueStatuses.Resolved;
 }

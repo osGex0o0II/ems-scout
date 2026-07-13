@@ -32,11 +32,54 @@ function pageFromData(pageName, data, extra = {}) {
   };
 }
 
+function summarizeCardStates(cards = []) {
+  const counts = { 开机: 0, 关机: 0, 离线: 0, 未知: 0 };
+  const cardsByState = { 开机: [], 关机: [], 离线: [], 未知: [] };
+  for (const card of cards) {
+    const state = ['开机', '关机', '离线'].includes(card && card.comm) ? card.comm : '未知';
+    counts[state]++;
+    cardsByState[state].push(card);
+  }
+  return { counts, cardsByState };
+}
+
 function auditCollectedOutput(output) {
   const issues = [];
   for (const building of output.buildings || []) {
+    if (building.err) {
+      issues.push({ building: building.building, reason: 'building_error', details: String(building.err) });
+    }
     for (const subArea of building.subAreas || []) {
+      if (subArea.err && subArea.err !== 'bm inline') {
+        issues.push({
+          building: building.building,
+          floor: subArea.floor,
+          subArea: subArea.text,
+          reason: 'subarea_error',
+          details: String(subArea.err),
+        });
+      }
       for (const pageRow of subArea.pages || []) {
+        if (pageRow.err) {
+          issues.push({
+            building: building.building,
+            floor: subArea.floor,
+            subArea: subArea.text,
+            page: pageRow.page,
+            reason: 'page_error',
+            details: String(pageRow.err),
+          });
+        }
+        if (pageRow.stale) {
+          issues.push({
+            building: building.building,
+            floor: subArea.floor,
+            subArea: subArea.text,
+            page: pageRow.page,
+            reason: 'stale_page',
+            details: '页面内容与前一页相同，未确认翻页完成。',
+          });
+        }
         const cards = Array.isArray(pageRow.cards) ? pageRow.cards : [];
         const qc = checkCardQuality(cards, pageRow);
         const reason = pageRow.qualityReason || pageRow.quality_reason || '';
@@ -63,4 +106,4 @@ function auditCollectedOutput(output) {
   return issues;
 }
 
-module.exports = { auditCollectedOutput, pageFromData };
+module.exports = { auditCollectedOutput, pageFromData, summarizeCardStates };

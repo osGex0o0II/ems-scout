@@ -21,7 +21,7 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel Spacing="3">
-                <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="分组设置" />
+                <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="规则与计划" />
                 <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
@@ -528,6 +528,161 @@
                         </StackPanel>
                     </Border>
 
+                    <Border Style="{StaticResource WorkbenchCardStyle}">
+                        <Grid ColumnSpacing="12">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                            <StackPanel Spacing="3">
+                                <TextBlock Style="{StaticResource SectionTitleStyle}" Text="日期计划" />
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="日期和启用时段已移到独立的“日期管理”；请先在这里维护区域组成员，再到月历中批量设置日期。" TextWrapping="WrapWholeWords" />
+                            </StackPanel>
+                            <Button Grid.Column="1" Click="OpenDateManagement_Click" Style="{StaticResource PrimaryToolbarButtonStyle}" Content="打开日期管理" />
+                        </Grid>
+                    </Border>
+
+                    <!-- Legacy inline schedule editor intentionally retired; date planning now has its own page.
+                    <Border Visibility="Collapsed" Style="{StaticResource WorkbenchCardStyle}">
+                        <StackPanel Spacing="10">
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Spacing="2">
+                                    <TextBlock Style="{StaticResource SectionTitleStyle}" Text="时间组" />
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.ScheduleGroupEditorMessage, Mode=OneWay}" TextWrapping="WrapWholeWords" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                                    <Button
+                                        AutomationProperties.Name="新建时间组"
+                                        Command="{x:Bind ViewModel.NewScheduleGroupCommand}"
+                                        IsEnabled="{x:Bind ViewModel.CanMaintainSchedules, Mode=OneWay}"
+                                        Style="{StaticResource PrimaryToolbarButtonStyle}">
+                                        <TextBlock Text="新建时间组" />
+                                    </Button>
+                                    <Button
+                                        AutomationProperties.Name="删除时间组"
+                                        Click="DeleteScheduleGroup_Click"
+                                        IsEnabled="{x:Bind ViewModel.CanDeleteScheduleGroup, Mode=OneWay}">
+                                        <TextBlock Text="删除" />
+                                    </Button>
+                                </StackPanel>
+                            </Grid>
+
+                            <Grid ColumnSpacing="10">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="1.2*" />
+                                    <ColumnDefinition Width="1.5*" />
+                                </Grid.ColumnDefinitions>
+                                <ListView
+                                    MaxHeight="180"
+                                    ItemsSource="{x:Bind ViewModel.ScheduleGroups, Mode=OneWay}"
+                                    SelectedItem="{x:Bind ViewModel.SelectedScheduleGroup, Mode=TwoWay}">
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate x:DataType="vm:ScheduleGroupRow">
+                                            <StackPanel Padding="0,5" Spacing="2">
+                                                <TextBlock FontWeight="SemiBold" Text="{x:Bind Name}" />
+                                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind RuleSummary}" />
+                                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind MemberSummary}" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
+                                <StackPanel Grid.Column="1" Spacing="8">
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="1.4*" />
+                                            <ColumnDefinition Width="1.6*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox Header="时间组名称" Text="{x:Bind ViewModel.ScheduleGroupName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBox Grid.Column="1" Header="说明" Text="{x:Bind ViewModel.ScheduleGroupDescription, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                        <ToggleSwitch Grid.Column="2" Header="启用" IsOn="{x:Bind ViewModel.ScheduleGroupEnabled, Mode=TwoWay}" />
+                                    </Grid>
+                                    <Button
+                                        HorizontalAlignment="Left"
+                                        Command="{x:Bind ViewModel.SaveScheduleGroupCommand}"
+                                        IsEnabled="{x:Bind ViewModel.CanSaveScheduleGroup, Mode=OneWay}"
+                                        Style="{StaticResource PrimaryToolbarButtonStyle}">
+                                        <TextBlock Text="保存时间组" />
+                                    </Button>
+                                </StackPanel>
+                            </Grid>
+
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="1.1*" />
+                                    <ColumnDefinition Width="1*" />
+                                    <ColumnDefinition Width="2.4*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox Header="具体日期" PlaceholderText="2026-07-15" Text="{x:Bind ViewModel.ScheduleDate, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <ComboBox Grid.Column="1" Header="计划" SelectedValue="{x:Bind ViewModel.ScheduleStatus, Mode=TwoWay}" SelectedValuePath="Tag">
+                                    <ComboBoxItem Content="按时间启用" Tag="enabled" />
+                                    <ComboBoxItem Content="全天不启用" Tag="not_open" />
+                                </ComboBox>
+                                <TextBox Grid.Column="2" Header="启用时间段" PlaceholderText="08:00-12:00;14:00-18:00；全天不启用可留空" Text="{x:Bind ViewModel.ScheduleIntervals, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <Button Grid.Column="3" VerticalAlignment="Bottom" Command="{x:Bind ViewModel.SaveScheduleRuleCommand}" IsEnabled="{x:Bind ViewModel.CanSaveScheduleRule, Mode=OneWay}" Style="{StaticResource PrimaryToolbarButtonStyle}">
+                                    <TextBlock Text="保存日期规则" />
+                                </Button>
+                            </Grid>
+                            <TextBox Header="规则备注" Text="{x:Bind ViewModel.ScheduleNote, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+
+                            <ListView MaxHeight="150" ItemsSource="{x:Bind ViewModel.ScheduleRules, Mode=OneWay}">
+                                <ListView.Header>
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="120" /><ColumnDefinition Width="120" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                        <TextBlock FontWeight="SemiBold" Text="日期" />
+                                        <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="计划" />
+                                        <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="时间段" />
+                                        <TextBlock Grid.Column="3" FontWeight="SemiBold" Text="操作" />
+                                    </Grid>
+                                </ListView.Header>
+                                <ListView.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:ScheduleRuleRow">
+                                        <Grid ColumnSpacing="12" Padding="0,4">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="120" /><ColumnDefinition Width="120" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                            <TextBlock Text="{x:Bind Date}" />
+                                            <TextBlock Grid.Column="1" Text="{x:Bind StatusLabel}" />
+                                            <TextBlock Grid.Column="2" Text="{x:Bind IntervalsText}" />
+                                            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4">
+                                                <Button Click="EditScheduleRule_Click" Content="编辑" />
+                                                <Button Click="DeleteScheduleRule_Click" Content="删除" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+
+                            <ListView MaxHeight="180" ItemsSource="{x:Bind ViewModel.ScheduleMembers, Mode=OneWay}">
+                                <ListView.Header>
+                                    <Grid ColumnSpacing="12">
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="80" /><ColumnDefinition Width="*" /><ColumnDefinition Width="110" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                        <TextBlock FontWeight="SemiBold" Text="类型" />
+                                        <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="对象 / 来源" />
+                                        <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="预期状态" />
+                                        <TextBlock Grid.Column="3" FontWeight="SemiBold" Text="操作" />
+                                    </Grid>
+                                </ListView.Header>
+                                <ListView.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:ScheduleMemberRow">
+                                        <Grid ColumnSpacing="12" Padding="0,4">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="80" /><ColumnDefinition Width="*" /><ColumnDefinition Width="110" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                                            <TextBlock Text="{x:Bind TargetTypeLabel}" />
+                                            <TextBlock Grid.Column="1" Text="{x:Bind TargetLabel}" TextWrapping="WrapWholeWords" />
+                                            <TextBlock Grid.Column="2" Text="{x:Bind ExpectedStatusLabel}" />
+                                            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4">
+                                                <Button Click="MarkScheduleMemberNotOpen_Click" Content="未开放" />
+                                                <Button Click="MarkScheduleMemberNormal_Click" Content="正常" />
+                                                <Button Click="DeleteScheduleMember_Click" Content="移除" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                        </StackPanel>
+                    </Border>
+
+                    -->
                     <Border Style="{StaticResource WorkbenchCardStyle}">
                         <StackPanel Spacing="10">
                             <Grid ColumnSpacing="12">

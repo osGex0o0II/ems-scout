@@ -317,6 +317,7 @@ public sealed class CustomGroupExportTests
                 (10, 'floor', '1号', '1F', 1, NULL, NULL, '一层');
             """;
         command.ExecuteNonQuery();
+        TestScheduleSchema.Apply(connection);
         return path;
     }
 

@@ -5,6 +5,15 @@ const { ensureMonitorSchema } = require('../src/panel/monitor');
 const { ensureHistorySchema, createRunFromCurrent, syncFloorCatalogFromCurrent } = require('../src/panel/history');
 const { validateEnumData, formatValidation } = require('../src/enum-validator');
 
+if (require.main === module && process.argv.includes('--help')) {
+  console.log('Usage: EMS_JSON_PATH=<snapshot.json> EMS_DB_PATH=<target.db> node scripts/import.js [--bldg=1号,2号]');
+  process.exit(0);
+}
+process.on('uncaughtException', error => {
+  console.error('ERROR: ' + (error && error.message ? error.message : String(error)));
+  process.exit(1);
+});
+
 const ROOT = path.join(__dirname, '..');
 const JSON_PATH = process.env.EMS_JSON_PATH || path.join(ROOT, 'out', 'enum_full_v5.json');
 const DB_PATH = process.env.EMS_DB_PATH || path.join(ROOT, 'out', 'ac.db');
@@ -30,7 +39,7 @@ if (process.env.EMS_SKIP_ENUM_VALIDATION !== '1') {
 
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = OFF');
+db.pragma('foreign_keys = ON');
 
 function ensureSchema() {
   db.exec(`
@@ -190,22 +199,26 @@ const importCurrent = db.transaction(() => {
   if (IMPORT_FILTER) clearBuildings(IMPORT_FILTER);
   else clearAll();
 
-  insertBuildings();
-
   for (const bldg of buildings) {
     upsert.run(bldg.building, (bldg.subAreas||[]).length, bldg.menuClicked||'', now);
   }
+  insertBuildings();
   for (const bldg of buildings) {
     if (!IMPORT_FILTER || IMPORT_FILTER.includes(bldg.building)) updateTs.run(now, bldg.building);
   }
 
   syncFloorCatalogFromCurrent(db);
-  return createRunFromCurrent(db, {
+  const runId = createRunFromCurrent(db, {
     buildings: IMPORT_FILTER || buildings.map(b => b.building),
     completedAt: now,
     jsonPath: JSON_PATH,
     note: IMPORT_FILTER ? '面板/脚本单栋或多栋导入' : '面板/脚本全量导入',
   });
+  const foreignKeyErrors = db.pragma('foreign_key_check');
+  if (foreignKeyErrors.length) {
+    throw new Error(`导入结果包含 ${foreignKeyErrors.length} 个外键错误。`);
+  }
+  return runId;
 });
 const runId = importCurrent();
 console.log(`History run: ${runId || 'none'}`);
