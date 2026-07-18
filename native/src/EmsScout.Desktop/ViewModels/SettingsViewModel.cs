@@ -2,6 +2,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EmsScout.Application.Logging;
 using EmsScout.Application.Settings;
+using EmsScout.Application.Updates;
 using EmsScout.Application.Workflows;
 using EmsScout.Infrastructure.Logging;
 using EmsScout.Infrastructure.Migrations;
@@ -15,9 +16,12 @@ public sealed partial class SettingsViewModel(
     LegacyOutMigrationService legacyOutMigrationService,
     SqliteSchemaMigrator schemaMigrator,
     ApplicationOperationState operationState,
+    AppUpdateService appUpdateService,
+    IAppVersionProvider appVersionProvider,
     IApplicationLogger applicationLogger) : ObservableObject
 {
     private bool _operationStateAttached;
+    private AppUpdateCheckResult? _lastUpdateCheck;
 
     public event EventHandler? SettingsApplied;
 
@@ -55,11 +59,29 @@ public sealed partial class SettingsViewModel(
     public partial bool ReduceMotion { get; set; }
 
     [ObservableProperty]
+    public partial string CurrentVersionText { get; private set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string AvailableVersionText { get; private set; } = "尚未检查";
+
+    [ObservableProperty]
+    public partial string UpdateStatusText { get; private set; } = "点击检查更新获取最新版本";
+
+    [ObservableProperty]
+    public partial bool IsCheckingForUpdate { get; private set; }
+
+    [ObservableProperty]
     public partial string StatusText { get; private set; } = "设置尚未加载";
 
     public string SettingsPath => settingsService.SettingsPath;
 
     public bool CanEditCriticalSettings => !operationState.IsCollectionTaskRunning;
+
+    public bool CanInstallUpdate =>
+        _lastUpdateCheck?.IsUpdateAvailable == true &&
+        !IsCheckingForUpdate &&
+        !operationState.IsCollectionTaskRunning &&
+        !operationState.IsUpdateInstallPending;
 
     public async Task MigrateLegacyOutAsync(
         string legacyOutDirectory,
@@ -119,7 +141,67 @@ public sealed partial class SettingsViewModel(
     {
         AttachOperationState();
         Apply(settingsService.Load());
+        CurrentVersionText = FormatVersion(appVersionProvider.CurrentVersion);
         StatusText = CanEditCriticalSettings ? "已加载设置" : "采集任务运行中，关键设置已锁定";
+    }
+
+    [RelayCommand(CanExecute = nameof(CanCheckForUpdate))]
+    private async Task CheckForUpdateAsync()
+    {
+        IsCheckingForUpdate = true;
+        UpdateStatusText = "正在检查更新";
+        NotifyUpdateCommandState();
+
+        try
+        {
+            var result = await appUpdateService.CheckAsync().ConfigureAwait(true);
+            _lastUpdateCheck = result;
+            AvailableVersionText = FormatVersion(result.AvailableVersion);
+            UpdateStatusText = result.IsUpdateAvailable
+                ? operationState.IsCollectionTaskRunning
+                    ? "发现新版本，采集结束后可安装"
+                    : "发现新版本，可以安装更新"
+                : "当前已是最新版本";
+        }
+        catch (Exception ex)
+        {
+            _lastUpdateCheck = null;
+            AvailableVersionText = "检查失败";
+            applicationLogger.WriteFailure(ex, "update");
+            UpdateStatusText = "检查更新失败，请确认网络后重试";
+        }
+        finally
+        {
+            IsCheckingForUpdate = false;
+            NotifyUpdateCommandState();
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanInstallUpdateNow))]
+    private async Task InstallUpdateAsync()
+    {
+        if (!CanInstallUpdate)
+        {
+            UpdateStatusText = operationState.IsCollectionTaskRunning
+                ? "采集任务运行中，采集结束后可安装"
+                : "请先检查更新";
+            return;
+        }
+
+        try
+        {
+            using var updateInstallLease = operationState.BeginUpdateInstall();
+            UpdateStatusText = "正在打开 Windows 安装器";
+            var launched = await appUpdateService.InstallAsync().ConfigureAwait(true);
+            UpdateStatusText = launched
+                ? "已打开 Windows 安装器，请按提示完成更新"
+                : "无法打开 Windows 安装器，请重试";
+        }
+        catch (Exception ex)
+        {
+            applicationLogger.WriteFailure(ex, "update");
+            UpdateStatusText = "无法打开 Windows 安装器，请重试";
+        }
     }
 
     [RelayCommand(CanExecute = nameof(CanChangeSettings))]
@@ -261,6 +343,21 @@ public sealed partial class SettingsViewModel(
 
     private bool CanChangeSettings() => CanEditCriticalSettings;
 
+    private bool CanCheckForUpdate() => !IsCheckingForUpdate;
+
+    private bool CanInstallUpdateNow() => CanInstallUpdate;
+
+    private static string FormatVersion(Version version) => version.Revision == 0
+        ? $"v{version.Major}.{version.Minor}.{version.Build}"
+        : $"v{version.Major}.{version.Minor}.{version.Build}.{version.Revision}";
+
+    private void NotifyUpdateCommandState()
+    {
+        OnPropertyChanged(nameof(CanInstallUpdate));
+        CheckForUpdateCommand.NotifyCanExecuteChanged();
+        InstallUpdateCommand.NotifyCanExecuteChanged();
+    }
+
     private void AttachOperationState()
     {
         if (_operationStateAttached)
@@ -273,6 +370,13 @@ public sealed partial class SettingsViewModel(
             OnPropertyChanged(nameof(CanEditCriticalSettings));
             SaveCommand.NotifyCanExecuteChanged();
             ResetCommand.NotifyCanExecuteChanged();
+            NotifyUpdateCommandState();
+            if (_lastUpdateCheck?.IsUpdateAvailable == true)
+            {
+                UpdateStatusText = CanEditCriticalSettings
+                    ? "发现新版本，可以安装更新"
+                    : "发现新版本，采集结束后可安装";
+            }
             StatusText = CanEditCriticalSettings
                 ? "采集任务已结束，可以修改关键设置"
                 : "采集任务运行中，关键设置已锁定";

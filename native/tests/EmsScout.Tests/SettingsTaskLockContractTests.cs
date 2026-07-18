@@ -23,7 +23,7 @@ public sealed class SettingsTaskLockContractTests
         Assert.DoesNotMatch(@"<(?:Border|StackPanel)\b[^>]*\bIsEnabled=", xaml);
         Assert.True(Count(xaml, "<ContentControl") >= 3);
         Assert.Contains("Interlocked.Exchange(ref _owner, null)", state);
-        Assert.Contains("Interlocked.CompareExchange(ref _activeCollectionTasks, 1, 0)", state);
+        Assert.Contains("Interlocked.CompareExchange(ref _activeOperation, CollectionOperation, Idle)", state);
     }
 
     private static int Count(string source, string value) =>

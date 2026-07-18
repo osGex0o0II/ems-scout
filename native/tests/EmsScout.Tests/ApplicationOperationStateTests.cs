@@ -58,4 +58,28 @@ public sealed class ApplicationOperationStateTests
         Assert.Single(outcomes, outcome => outcome);
         Assert.False(state.IsCollectionTaskRunning);
     }
+
+    [Fact]
+    public void CollectionAndUpdateInstallLeasesExcludeEachOther()
+    {
+        var state = new ApplicationOperationState();
+
+        using (state.BeginUpdateInstall())
+        {
+            Assert.True(state.IsUpdateInstallPending);
+            Assert.False(state.IsCollectionTaskRunning);
+            Assert.Throws<InvalidOperationException>(() => state.BeginCollectionTask());
+            Assert.Throws<InvalidOperationException>(() => state.BeginUpdateInstall());
+        }
+
+        using (state.BeginCollectionTask())
+        {
+            Assert.True(state.IsCollectionTaskRunning);
+            Assert.False(state.IsUpdateInstallPending);
+            Assert.Throws<InvalidOperationException>(() => state.BeginUpdateInstall());
+        }
+
+        Assert.False(state.IsCollectionTaskRunning);
+        Assert.False(state.IsUpdateInstallPending);
+    }
 }

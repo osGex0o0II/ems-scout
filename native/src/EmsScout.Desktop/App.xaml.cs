@@ -10,6 +10,7 @@ using EmsScout.Application.Groups;
 using EmsScout.Application.Logging;
 using EmsScout.Application.Quality;
 using EmsScout.Application.Settings;
+using EmsScout.Application.Updates;
 using EmsScout.Application.Workflows;
 using EmsScout.Desktop.Services;
 using EmsScout.Desktop.ViewModels;
@@ -85,6 +86,18 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<SqliteSchemaMigrator>();
         services.AddSingleton<StartupDatabaseInitializer>();
         services.AddSingleton<ApplicationOperationState>();
+        services.AddSingleton<IAppVersionProvider, PackageAppVersionProvider>();
+        services.AddSingleton<IAppUpdateLauncher, WindowsAppUpdateLauncher>();
+        services.AddSingleton(new AppUpdateOptions(
+            new Uri("https://github.com/osGex0o0II/ems-scout/releases/latest/download/EmsScout.appinstaller"),
+            "1FACE092-146B-4AE5-83DB-3990E6AE8371",
+            "CN=EMS Scout",
+            ["github.com"]));
+        services.AddSingleton(new HttpClient
+        {
+            Timeout = TimeSpan.FromSeconds(10),
+        });
+        services.AddSingleton<AppUpdateService>();
         services.AddSingleton<AppUiSettingsService>();
         services.AddSingleton<IInventorySnapshotSource>(provider => new SqliteInventorySnapshotSource(
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath));

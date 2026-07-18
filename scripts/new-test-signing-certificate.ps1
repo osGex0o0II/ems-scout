@@ -46,7 +46,7 @@ try {
 }
 catch {
   if (Test-Path -LiteralPath $personalStorePath) {
-    Remove-Item -LiteralPath $personalStorePath -Force
+    Remove-Item -LiteralPath $personalStorePath -DeleteKey -Force
   }
   if (Test-Path -LiteralPath $trustedPeopleStorePath) {
     Remove-Item -LiteralPath $trustedPeopleStorePath -Force
@@ -66,7 +66,7 @@ finally {
 if (-not (Test-Path -LiteralPath $trustedPeopleStorePath) -or
     ($TrustForInstall -and -not (Test-Path -LiteralPath $installRootStorePath))) {
   if (Test-Path -LiteralPath $personalStorePath) {
-    Remove-Item -LiteralPath $personalStorePath -Force
+    Remove-Item -LiteralPath $personalStorePath -DeleteKey -Force
   }
   if (Test-Path -LiteralPath $trustedPeopleStorePath) {
     Remove-Item -LiteralPath $trustedPeopleStorePath -Force

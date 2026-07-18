@@ -1,0 +1,230 @@
+name: Release Windows x64
+
+on:
+  push:
+    tags:
+      - 'v*.*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows-x64:
+    if: github.ref_type == 'tag'
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      NUGET_XMLDOC_MODE: skip
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Validate release version
+        id: version
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'
+          if ($tag -notmatch '^v(\d+\.\d+\.\d+\.\d+)$') {
+            throw "Release tag must use vA.B.C.D format: $tag"
+          }
+          "value=$($Matches[1])" >> $env:GITHUB_OUTPUT
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+          cache: npm
+
+      - name: Install .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore dependencies
+        shell: pwsh
+        run: |
+          npm ci
+          if ($LASTEXITCODE -ne 0) { throw "npm restore failed with exit code $LASTEXITCODE" }
+          dotnet restore native/EmsScout.Native.slnx -r win-x64
+          if ($LASTEXITCODE -ne 0) { throw ".NET restore failed with exit code $LASTEXITCODE" }
+
+      - name: Validate packaging PowerShell syntax
+        shell: pwsh
+        run: |
+          foreach ($path in 'scripts/new-appinstaller.ps1',
+                            'scripts/package-native.ps1',
+                            'scripts/verify-msix-signature.ps1') {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path -LiteralPath $path),
+              [ref]$tokens,
+              [ref]$errors)
+            if ($errors.Count -gt 0) {
+              throw "PowerShell syntax validation failed for ${path}: $($errors.Message -join '; ')"
+            }
+          }
+
+      - name: Test release source
+        shell: pwsh
+        run: |
+          npm test
+          if ($LASTEXITCODE -ne 0) { throw "Node tests failed with exit code $LASTEXITCODE" }
+          npm run self-test
+          if ($LASTEXITCODE -ne 0) { throw "Collector tests failed with exit code $LASTEXITCODE" }
+          dotnet test native/tests/EmsScout.Tests/EmsScout.Tests.csproj `
+            -c Release `
+            --no-restore `
+            /p:UseSharedCompilation=false `
+            --filter 'Fixture!=ProductionEvidence'
+          if ($LASTEXITCODE -ne 0) { throw "Native tests failed with exit code $LASTEXITCODE" }
+          dotnet format native/EmsScout.Native.slnx --verify-no-changes --no-restore
+          if ($LASTEXITCODE -ne 0) { throw "Formatting verification failed with exit code $LASTEXITCODE" }
+
+      - name: Stage bundled Sidecar
+        shell: pwsh
+        run: ./scripts/prepare-sidecar.ps1
+
+      - name: Import production signing certificate
+        id: signing
+        shell: pwsh
+        env:
+          SIGNING_CERTIFICATE_BASE64: ${{ secrets.EMS_SIGNING_CERTIFICATE_BASE64 }}
+          SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.EMS_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_BASE64) -or
+              [string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_PASSWORD)) {
+            throw 'Production signing certificate secrets are not configured.'
+          }
+
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'ems-scout-release-signing.pfx'
+          try {
+            $bytes = [Convert]::FromBase64String($env:SIGNING_CERTIFICATE_BASE64)
+            [IO.File]::WriteAllBytes($pfxPath, $bytes)
+          }
+          finally {
+            $bytes = $null
+          }
+
+          $candidate = [Security.Cryptography.X509Certificates.X509Certificate2]::new(
+            $pfxPath,
+            $env:SIGNING_CERTIFICATE_PASSWORD,
+            [Security.Cryptography.X509Certificates.X509KeyStorageFlags]::EphemeralKeySet)
+          try {
+            if (-not $candidate.HasPrivateKey) {
+              throw 'Production signing certificate has no private key.'
+            }
+            if ($candidate.Subject -ne 'CN=EMS Scout') {
+              throw "Production signing certificate Subject is invalid: $($candidate.Subject)"
+            }
+            if ($candidate.NotBefore.ToUniversalTime() -gt [DateTime]::UtcNow) {
+              throw "Production signing certificate is not valid yet: $($candidate.NotBefore.ToUniversalTime())"
+            }
+            if ($candidate.NotAfter -lt [DateTime]::UtcNow.AddDays(30)) {
+              throw "Production signing certificate expires too soon: $($candidate.NotAfter.ToUniversalTime())"
+            }
+            $signerThumbprint = $candidate.Thumbprint
+          }
+          finally {
+            $candidate.Dispose()
+          }
+
+          $thumbprintPath = Join-Path $env:RUNNER_TEMP 'ems-scout-release-thumbprint.txt'
+          Set-Content -LiteralPath $thumbprintPath -Value $signerThumbprint -Encoding ascii
+          $password = ConvertTo-SecureString $env:SIGNING_CERTIFICATE_PASSWORD -AsPlainText -Force
+          Import-PfxCertificate `
+            -FilePath $pfxPath `
+            -CertStoreLocation 'Cert:\CurrentUser\My' `
+            -Password $password | Out-Null
+          $certificate = Get-Item -LiteralPath "Cert:\CurrentUser\My\$signerThumbprint"
+          "thumbprint=$($certificate.Thumbprint)" >> $env:GITHUB_OUTPUT
+
+      - name: Build signed release package
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.value }}'
+          if (Test-Path -LiteralPath artifacts/packages/win-x64) {
+            Remove-Item -LiteralPath artifacts/packages/win-x64 -Recurse -Force
+          }
+          ./scripts/package-native.ps1 `
+            -Configuration Release `
+            -SkipTests `
+            -SkipSidecarPrepare `
+            -PackageCertificateThumbprint '${{ steps.signing.outputs.thumbprint }}' `
+            -PackageTimestampServerUrl 'http://timestamp.digicert.com' `
+            -PackageVersion '${{ steps.version.outputs.value }}'
+
+          $packages = @(
+            Get-ChildItem -LiteralPath artifacts/packages/win-x64 -Recurse -File -Filter '*.msix' |
+              Where-Object { $_.FullName -notmatch '[\\/]Dependencies[\\/]' }
+          )
+          if ($packages.Count -ne 1) {
+            throw "Expected one release MSIX, found $($packages.Count)."
+          }
+
+          New-Item -ItemType Directory -Force artifacts/release | Out-Null
+          $releasePackage = "artifacts/release/EmsScout-${version}-x64.msix"
+          Copy-Item -LiteralPath $packages[0].FullName -Destination $releasePackage -Force
+          ./scripts/new-appinstaller.ps1 `
+            -Version $version `
+            -AppInstallerUri 'https://github.com/${{ github.repository }}/releases/latest/download/EmsScout.appinstaller' `
+            -PackageUri "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/EmsScout-${version}-x64.msix" `
+            -OutputPath artifacts/release/EmsScout.appinstaller
+
+      - name: Verify release package signature
+        shell: pwsh
+        run: |
+          $version = '${{ steps.version.outputs.value }}'
+          ./scripts/verify-msix-signature.ps1 `
+            -PackagePath "artifacts/release/EmsScout-${version}-x64.msix" `
+            -ExpectedSignerThumbprint '${{ steps.signing.outputs.thumbprint }}' `
+            -RequireTimestamp
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $version = '${{ steps.version.outputs.value }}'
+          gh release view $tag --json tagName 2>$null | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --draft --generate-notes --title "EMS Scout $version"
+            if ($LASTEXITCODE -ne 0) { throw "Release creation failed with exit code $LASTEXITCODE" }
+          }
+          gh release upload $tag `
+            "artifacts/release/EmsScout-${version}-x64.msix" `
+            artifacts/release/EmsScout.appinstaller `
+            --clobber
+          if ($LASTEXITCODE -ne 0) { throw "Release upload failed with exit code $LASTEXITCODE" }
+          gh release edit $tag --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw "Release publication failed with exit code $LASTEXITCODE" }
+
+      - name: Cleanup production signing material
+        if: always()
+        shell: pwsh
+        run: |
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'ems-scout-release-signing.pfx'
+          $thumbprintPath = Join-Path $env:RUNNER_TEMP 'ems-scout-release-thumbprint.txt'
+          if (Test-Path -LiteralPath $pfxPath) {
+            Remove-Item -LiteralPath $pfxPath -Force
+          }
+          $thumbprint = '${{ steps.signing.outputs.thumbprint }}'
+          if ([string]::IsNullOrWhiteSpace($thumbprint) -and
+              (Test-Path -LiteralPath $thumbprintPath)) {
+            $thumbprint = Get-Content -LiteralPath $thumbprintPath -Raw
+          }
+          if (-not [string]::IsNullOrWhiteSpace($thumbprint)) {
+            $thumbprint = $thumbprint.Trim()
+            $certificatePath = "Cert:\CurrentUser\My\$thumbprint"
+            if (Test-Path -LiteralPath $certificatePath) {
+              Remove-Item -LiteralPath $certificatePath -DeleteKey -Force
+            }
+          }
+          if (Test-Path -LiteralPath $thumbprintPath) {
+            Remove-Item -LiteralPath $thumbprintPath -Force
+          }

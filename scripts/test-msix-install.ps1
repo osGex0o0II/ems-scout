@@ -41,11 +41,11 @@ if ($existingPackages.Count -gt 0) {
 }
 
 $dependencyDirectory = Join-Path $mainPackage.Directory.FullName 'Dependencies\x64'
-$dependencyPackages = @(
-  Get-ChildItem -LiteralPath $dependencyDirectory -File -Filter '*.msix' -ErrorAction Stop
-)
-if ($dependencyPackages.Count -eq 0) {
-  throw "No x64 MSIX dependencies were found: $dependencyDirectory"
+$dependencyPackages = @()
+if (Test-Path -LiteralPath $dependencyDirectory -PathType Container) {
+  $dependencyPackages = @(
+    Get-ChildItem -LiteralPath $dependencyDirectory -File -Filter '*.msix' -ErrorAction Stop
+  )
 }
 
 $OwnershipMarkerPath = [IO.Path]::GetFullPath($OwnershipMarkerPath)
@@ -107,11 +107,15 @@ function Get-InstalledPackage {
 }
 
 function Install-TestPackage {
-  Add-AppxPackage `
-    -Path $mainPackage.FullName `
-    -DependencyPath $dependencyPackages.FullName `
-    -ForceApplicationShutdown `
-    -ErrorAction Stop
+  $installArguments = @{
+    Path = $mainPackage.FullName
+    ForceApplicationShutdown = $true
+    ErrorAction = 'Stop'
+  }
+  if ($dependencyPackages.Count -gt 0) {
+    $installArguments.DependencyPath = $dependencyPackages.FullName
+  }
+  Add-AppxPackage @installArguments
 
   $installed = Get-InstalledPackage
   if ($null -eq $installed) {

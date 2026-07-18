@@ -45,6 +45,10 @@
     <Manifest Include="$(ApplicationManifest)" />
   </ItemGroup>
 
+  <ItemGroup Condition="'$(EmsScoutPackageManifestPath)' != ''">
+    <AppxManifest Include="$(EmsScoutPackageManifestPath)" />
+  </ItemGroup>
+
   <!--
     Defining the "Msix" ProjectCapability here allows the Single-project MSIX Packaging
     Tools extension to be activated for this project even if the Windows App SDK Nuget
@@ -88,6 +92,7 @@
   <PropertyGroup>
     <PublishReadyToRun Condition="'$(Configuration)' == 'Debug'">False</PublishReadyToRun>
     <PublishReadyToRun Condition="'$(Configuration)' != 'Debug'">True</PublishReadyToRun>
+    <WindowsAppSDKSelfContained Condition="'$(Configuration)' != 'Debug'">true</WindowsAppSDKSelfContained>
     <!-- WinUI/WinRT and the current JSON contract paths rely on reflection metadata. -->
     <PublishTrimmed>false</PublishTrimmed>
   </PropertyGroup>

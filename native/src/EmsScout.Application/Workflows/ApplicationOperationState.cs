@@ -2,35 +2,61 @@ namespace EmsScout.Application.Workflows;
 
 public sealed class ApplicationOperationState
 {
-    private int _activeCollectionTasks;
+    private const int Idle = 0;
+    private const int CollectionOperation = 1;
+    private const int UpdateInstallOperation = 2;
+    private int _activeOperation;
 
     public event EventHandler? CollectionTaskStateChanged;
 
-    public bool IsCollectionTaskRunning => Volatile.Read(ref _activeCollectionTasks) > 0;
+    public event EventHandler? OperationStateChanged;
+
+    public bool IsCollectionTaskRunning => Volatile.Read(ref _activeOperation) == CollectionOperation;
+
+    public bool IsUpdateInstallPending => Volatile.Read(ref _activeOperation) == UpdateInstallOperation;
 
     public IDisposable BeginCollectionTask()
     {
-        if (Interlocked.CompareExchange(ref _activeCollectionTasks, 1, 0) != 0)
+        if (Interlocked.CompareExchange(ref _activeOperation, CollectionOperation, Idle) != Idle)
         {
-            throw new InvalidOperationException("Another collection task is already running.");
+            throw new InvalidOperationException("Another application operation is already running.");
         }
 
         CollectionTaskStateChanged?.Invoke(this, EventArgs.Empty);
-        return new CollectionTaskLease(this);
+        OperationStateChanged?.Invoke(this, EventArgs.Empty);
+        return new OperationLease(this, CollectionOperation);
     }
 
-    private void EndCollectionTask()
+    public IDisposable BeginUpdateInstall()
     {
-        if (Interlocked.Exchange(ref _activeCollectionTasks, 0) == 1)
+        if (Interlocked.CompareExchange(ref _activeOperation, UpdateInstallOperation, Idle) != Idle)
+        {
+            throw new InvalidOperationException("Another application operation is already running.");
+        }
+
+        OperationStateChanged?.Invoke(this, EventArgs.Empty);
+        return new OperationLease(this, UpdateInstallOperation);
+    }
+
+    private void EndOperation(int operation)
+    {
+        if (Interlocked.CompareExchange(ref _activeOperation, Idle, operation) != operation)
+        {
+            return;
+        }
+
+        if (operation == CollectionOperation)
         {
             CollectionTaskStateChanged?.Invoke(this, EventArgs.Empty);
         }
+
+        OperationStateChanged?.Invoke(this, EventArgs.Empty);
     }
 
-    private sealed class CollectionTaskLease(ApplicationOperationState owner) : IDisposable
+    private sealed class OperationLease(ApplicationOperationState owner, int operation) : IDisposable
     {
         private ApplicationOperationState? _owner = owner;
 
-        public void Dispose() => Interlocked.Exchange(ref _owner, null)?.EndCollectionTask();
+        public void Dispose() => Interlocked.Exchange(ref _owner, null)?.EndOperation(operation);
     }
 }
