@@ -745,9 +745,10 @@ public sealed class AreaGroupRepositoryTests
         var member = await repository.SaveScheduleMemberAsync(new ScheduleMemberEdit(
             schedule.Id, item.Id, item.TargetType, item.Building, item.FloorLabel, item.SubAreaText,
             item.CardName, item.DeviceUid, "normal", ""));
+        var auditDate = new DateTime(2026, 7, 12, 10, 0, 0, DateTimeKind.Unspecified);
+        var localAuditTime = new DateTimeOffset(auditDate, TimeZoneInfo.Local.GetUtcOffset(auditDate));
 
-        var audit = await repository.EvaluateSchedulesAsync(
-            null, new DateTimeOffset(2026, 7, 12, 10, 0, 0, TimeSpan.FromHours(8)));
+        var audit = await repository.EvaluateSchedulesAsync(null, localAuditTime);
 
         Assert.Equal(2, audit.Count);
         Assert.Contains(audit, row => row.TargetLabel.Contains("1-0101-KT") && row.ResultCode == "ok");
@@ -756,8 +757,7 @@ public sealed class AreaGroupRepositoryTests
         await repository.SaveScheduleMemberAsync(new ScheduleMemberEdit(
             schedule.Id, item.Id, item.TargetType, item.Building, item.FloorLabel, item.SubAreaText,
             item.CardName, item.DeviceUid, "not_open", "", member.Id));
-        audit = await repository.EvaluateSchedulesAsync(
-            null, new DateTimeOffset(2026, 7, 12, 10, 0, 0, TimeSpan.FromHours(8)));
+        audit = await repository.EvaluateSchedulesAsync(null, localAuditTime);
         Assert.Contains(audit, row => row.TargetLabel.Contains("1-0101-KT") && row.ResultCode == "unexpected_running");
 
         await repository.DeleteItemAsync(item.Id);
