@@ -152,10 +152,17 @@ jobs:
       - name: Install, launch, reinstall, and uninstall package
         shell: pwsh
         run: |
-          ./scripts/test-msix-install.ps1 `
-            -PackageRoot artifacts/packages/win-x64 `
-            -OwnershipMarkerPath artifacts/ci/msix-install-owned.json `
-            -ExpectedSignerThumbprint '${{ steps.test_signing.outputs.thumbprint }}'
+          try {
+            ./scripts/test-msix-install.ps1 `
+              -PackageRoot artifacts/packages/win-x64 `
+              -OwnershipMarkerPath artifacts/ci/msix-install-owned.json `
+              -ExpectedSignerThumbprint '${{ steps.test_signing.outputs.thumbprint }}'
+          }
+          catch {
+            $message = $_.Exception.Message.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=MSIX lifecycle failed::$message"
+            throw
+          }
 
       - name: Cleanup owned test package
         if: always()
