@@ -46,6 +46,8 @@ public sealed class WindowsPackagingWorkflowTests
         Assert.Contains("ExpectedSignerThumbprint", script);
         Assert.Contains("Add-AppxPackage", script);
         Assert.Contains("IApplicationActivationManager", script);
+        Assert.Contains("PackageActivator", script);
+        Assert.DoesNotContain("[EmsScout.PackageSmoke.IApplicationActivationManager]$activationManager", script);
         Assert.Contains("Remove-AppxPackage", script);
         Assert.Contains("foreach ($round in 1..2)", script);
         Assert.Contains("OwnershipMarkerPath", script);
