@@ -3,6 +3,9 @@ param(
   [string]$PackageRoot,
   [Parameter(Mandatory)]
   [string]$OwnershipMarkerPath,
+  [Parameter(Mandatory)]
+  [ValidatePattern('^[A-Fa-f0-9]{40}$')]
+  [string]$ExpectedSignerThumbprint,
   [int]$LaunchTimeoutSeconds = 30
 )
 
@@ -10,7 +13,6 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $PackageIdentityName = '1FACE092-146B-4AE5-83DB-3990E6AE8371'
-$ExpectedSigner = 'CN=EMS Scout'
 
 if ($LaunchTimeoutSeconds -lt 5 -or $LaunchTimeoutSeconds -gt 120) {
   throw 'LaunchTimeoutSeconds must be between 5 and 120.'
@@ -29,13 +31,9 @@ if ($mainPackages.Count -ne 1) {
 }
 
 $mainPackage = $mainPackages[0]
-$signature = Get-AuthenticodeSignature -LiteralPath $mainPackage.FullName
-if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
-  throw "MSIX signature status is $($signature.Status), expected Valid: $($mainPackage.FullName)"
-}
-if ($null -eq $signature.SignerCertificate -or $signature.SignerCertificate.Subject -ne $ExpectedSigner) {
-  throw "MSIX signer must be $ExpectedSigner."
-}
+$null = & (Join-Path $PSScriptRoot 'verify-msix-signature.ps1') `
+  -PackagePath $mainPackage.FullName `
+  -ExpectedSignerThumbprint $ExpectedSignerThumbprint
 
 $existingPackages = @(Get-AppxPackage -Name $PackageIdentityName -ErrorAction Stop)
 if ($existingPackages.Count -gt 0) {

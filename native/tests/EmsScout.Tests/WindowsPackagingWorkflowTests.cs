@@ -11,6 +11,7 @@ public sealed class WindowsPackagingWorkflowTests
         Assert.Contains("CN=EMS Scout", script);
         Assert.Contains("Cert:\\CurrentUser\\My", script);
         Assert.Contains("TrustedPeople", script);
+        Assert.DoesNotContain("Cert:\\CurrentUser\\Root", script);
         Assert.Contains("X509Store", script);
         Assert.Contains("-KeyExportPolicy NonExportable", script);
         Assert.Contains("catch", script);
@@ -27,9 +28,7 @@ public sealed class WindowsPackagingWorkflowTests
         Assert.Contains("PackageCertificateThumbprint", script);
         Assert.Contains("AppxPackageSigningEnabled=true", script);
         Assert.Contains("PackageCertificateThumbprint=$PackageCertificateThumbprint", script);
-        Assert.Contains("Get-AuthenticodeSignature", script);
-        Assert.Contains("Signature status", script);
-        Assert.Contains("Valid", script);
+        Assert.Contains("verify-msix-signature.ps1", script);
     }
 
     [Fact]
@@ -40,7 +39,8 @@ public sealed class WindowsPackagingWorkflowTests
         Assert.Contains("1FACE092-146B-4AE5-83DB-3990E6AE8371", script);
         Assert.Contains("Get-AppxPackage", script);
         Assert.Contains("already registered", script);
-        Assert.Contains("Get-AuthenticodeSignature", script);
+        Assert.Contains("verify-msix-signature.ps1", script);
+        Assert.Contains("ExpectedSignerThumbprint", script);
         Assert.Contains("Add-AppxPackage", script);
         Assert.Contains("IApplicationActivationManager", script);
         Assert.Contains("Remove-AppxPackage", script);
@@ -56,6 +56,19 @@ public sealed class WindowsPackagingWorkflowTests
         var dependencyValidation = script.IndexOf("No x64 MSIX dependencies were found", StringComparison.Ordinal);
         var markerWrite = script.IndexOf("Set-Content -LiteralPath $OwnershipMarkerPath", StringComparison.Ordinal);
         Assert.True(markerWrite > dependencyValidation, "Ownership marker must follow dependency validation.");
+    }
+
+    [Fact]
+    public void SignatureVerifierAllowsOnlyTheExpectedSelfSignedUntrustedRootStatus()
+    {
+        var script = ReadRequiredFile("scripts", "verify-msix-signature.ps1");
+
+        Assert.Contains("Get-AuthenticodeSignature", script);
+        Assert.Contains("SignerCertificate.Thumbprint", script);
+        Assert.Contains("WinVerifyTrust", script);
+        Assert.Contains("0x800B0109", script);
+        Assert.Contains("Cert:\\CurrentUser\\TrustedPeople", script);
+        Assert.Contains("throw", script);
     }
 
     [Fact]
@@ -86,9 +99,11 @@ public sealed class WindowsPackagingWorkflowTests
         Assert.Contains("id: test_signing", workflow);
         Assert.Contains("Validate packaging PowerShell syntax", workflow);
         Assert.Contains("System.Management.Automation.Language.Parser", workflow);
+        Assert.Contains("scripts/verify-msix-signature.ps1", workflow);
         Assert.Contains("steps.test_signing.outputs.thumbprint", workflow);
         Assert.Contains("-PackageCertificateThumbprint", workflow);
         Assert.Contains("test-msix-install.ps1", workflow);
+        Assert.Contains("-ExpectedSignerThumbprint '${{ steps.test_signing.outputs.thumbprint }}'", workflow);
         Assert.Contains("-OwnershipMarkerPath artifacts/ci/msix-install-owned.json", workflow);
         Assert.Contains("if: always()", workflow);
         Assert.Contains("Cert:\\CurrentUser\\My", workflow);

@@ -153,7 +153,7 @@ public sealed class GroupSettingsUiContractTests
         var path = new[] { LocateRepositoryRoot(), "native", "src", "EmsScout.Desktop" }
             .Concat(pathParts)
             .ToArray();
-        return File.ReadAllText(Path.Combine(path));
+        return File.ReadAllText(Path.Combine(path)).ReplaceLineEndings("\n");
     }
 
     private static string LocateRepositoryRoot()

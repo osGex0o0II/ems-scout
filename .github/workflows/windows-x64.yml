@@ -43,7 +43,8 @@ jobs:
         run: |
           foreach ($path in 'scripts/new-test-signing-certificate.ps1',
                             'scripts/package-native.ps1',
-                            'scripts/test-msix-install.ps1') {
+                            'scripts/test-msix-install.ps1',
+                            'scripts/verify-msix-signature.ps1') {
             $tokens = $null
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile(
@@ -141,7 +142,8 @@ jobs:
         run: |
           ./scripts/test-msix-install.ps1 `
             -PackageRoot artifacts/packages/win-x64 `
-            -OwnershipMarkerPath artifacts/ci/msix-install-owned.json
+            -OwnershipMarkerPath artifacts/ci/msix-install-owned.json `
+            -ExpectedSignerThumbprint '${{ steps.test_signing.outputs.thumbprint }}'
 
       - name: Cleanup owned test package
         if: always()

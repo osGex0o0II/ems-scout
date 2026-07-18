@@ -88,12 +88,11 @@ if (-not [string]::IsNullOrWhiteSpace($PackageCertificateThumbprint)) {
     throw "Expected one EMS Scout MSIX, found $($mainPackages.Count) in $PackageOutput."
   }
 
-  $signature = Get-AuthenticodeSignature -LiteralPath $mainPackages[0].FullName
-  if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
-    throw "Signature status for $($mainPackages[0].FullName) is $($signature.Status), expected Valid."
-  }
+  $signatureVerification = & (Join-Path $PSScriptRoot 'verify-msix-signature.ps1') `
+    -PackagePath $mainPackages[0].FullName `
+    -ExpectedSignerThumbprint $PackageCertificateThumbprint
 
-  Write-Host "Signed MSIX verified: $($mainPackages[0].FullName)"
+  Write-Host "Signed MSIX verified ($($signatureVerification.Status)): $($mainPackages[0].FullName)"
 }
 
 Write-Host "Native x64 package output: $PackageOutput"
