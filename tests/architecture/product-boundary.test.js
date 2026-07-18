@@ -227,5 +227,5 @@ test('build and CI artifacts never package archived or production EMS data', () 
   assert.doesNotMatch(packagedFiles, /^(?:data|out)\//m);
   assert.doesNotMatch(workflow, /data\/1号楼\/ac\.db/);
   assert.doesNotMatch(workflow, /artifacts\/ci\/\*\*/);
-  assert.match(workflow, /tests\/contract-audit\/fixtures\/schema-v0\.sql/);
+  assert.match(workflow, /tests\/fixtures\/schema-baselines\/archived-core-v0\.sql/);
 });

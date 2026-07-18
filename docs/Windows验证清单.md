@@ -120,6 +120,14 @@ Get-ChildItem artifacts\packages\win-x64 -Recurse -File |
 如果包未签名或证书不受信任，记录具体错误和使用的测试证书流程；不得关闭系统安全策略后
 把结果描述成正式安装通过。
 
+GitHub Actions 使用 `scripts\new-test-signing-certificate.ps1` 创建不可导出的短期测试证书，
+由 `scripts\package-native.ps1 -PackageCertificateThumbprint <thumbprint>` 签名 Release MSIX，
+再用 `scripts\test-msix-install.ps1` 在干净 runner 上完成两轮安装、AUMID 启动和卸载。
+安装烟测发现同身份应用已存在时必须直接失败，不得自动删除开发机上的现有包。
+
+该自动化只证明测试签名包的干净用户安装生命周期。正式生产证书、跨版本升级、安装包内置
+Sidecar 实采和真实 EMS 仍按本清单后续步骤独立验收。
+
 ## 8. 可选生产证据测试
 
 `out/` 不在 Git 中。只有在确认文件来源、权限和哈希后，才把所需 run17 DB、JSON、
