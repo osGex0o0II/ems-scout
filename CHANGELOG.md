@@ -2,10 +2,11 @@
 修改记录 — 2026-07-18
 ===============================================================================
 
-- Windows x64 云端门禁新增临时不可导出代码签名证书，证书主题与 MSIX Publisher 固定为 `CN=EMS Scout`，作业结束后清理 CurrentUser 证书存储。
-- `package-native.ps1` 支持显式证书指纹并在构建后强制验证主 MSIX 签名；本机 Release 签名构建成功，签名状态为 Valid。
-- 新增干净用户 MSIX 生命周期烟测：拒绝覆盖已有同身份应用，通过 AUMID 激活并确认进程存活，完成两轮安装、启动和卸载，失败时执行归属明确的清理。
-- 新增 5 项 Windows 打包工作流契约，覆盖证书失败清理、安装归属标记和合格的 archived-core-v0 迁移 fixture；Artifact 上传继续采用允许清单并显式排除 PFX/PVK 私钥文件。
+- GitHub Actions Run #14（`29636547447`）完成 Windows x64 全链路：339 项原生非生产测试、Node 120 pass/2 skip、自检、格式、NuGet 漏洞审计、迁移幂等、Sidecar、签名 MSIX、两轮安装/AUMID 启动/卸载及清理全部通过。
+- 临时 `CN=EMS Scout` 证书保持私钥不可导出；安装门禁仅在提升的云端 runner 写入短期 `LocalMachine\Root` 信任，并由独立 `always()` 步骤清理用户证书、机器 Root 和已安装包。
+- 新增共享 MSIX 签名验证器：精确核对签名者指纹，并通过 `WinVerifyTrust` 区分有效自签根与摘要/格式错误；本地篡改包负向验证均被拒绝。
+- 安装烟测拒绝覆盖已有同身份应用，通过 C# COM 辅助类调用 `IApplicationActivationManager`，确认进程存活后完成两轮安装、启动和卸载；归属标记绑定 MSIX SHA-256。
+- 修复 Windows CRLF 契约测试和 UTC runner 的计划审计测试时区假设；失败测试名与 MSIX 生命周期异常会写入 GitHub 注解。Run #14 制品 `ems-scout-windows-x64-14` 为 237 MB，摘要 `sha256:e1bbf56fd3feb10754a538310947ef0b1b1b5b979ae26eba6600be233cc395d2`。
 
 ================================================================================
 修改记录 — 2026-07-16

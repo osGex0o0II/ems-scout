@@ -253,6 +253,8 @@ Dispatch design-system/functional and CJK/layout reviewers with every changed pa
 
 Run full native tests, `npm test`, native build and changed-file diagnostics. Then dispatch the HEAVY code reviewer with goal, diff, evidence and ultrawork notepad.
 
-- [ ] **Step 6: Cleanup**
+- [x] **Step 6: Cleanup**
 
 Close the QA app, verify its process is gone, delete only the temporary QA database/settings, and record the receipt. Do not commit unless the user separately authorizes it.
+
+Cleanup receipt (2026-07-18 16:05 +08:00): no `EmsScout.Desktop` process remained; `%TEMP%\ems-scout-ulw\qa-settings.json` and `qa-data\ac.db` were deleted. Repository production databases and WAL/SHM files were not touched.
