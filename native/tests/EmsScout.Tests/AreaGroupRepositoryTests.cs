@@ -109,6 +109,253 @@ public sealed class AreaGroupRepositoryTests
     }
 
     [Fact]
+    public async Task PhysicalDeviceUidCollapsesPageOccurrencesAndPersistsMembership()
+    {
+        var databasePath = CreateDatabase();
+        ExecuteSql(databasePath, """
+            UPDATE cards
+            SET name = 'MOVE-OLD-KT', source_key = 'source-a-primary', device_uid = 'uid-a'
+            WHERE id = 1;
+            UPDATE cards
+            SET name = 'SAME-LABEL-KT', source_key = 'source-b', device_uid = 'uid-b'
+            WHERE id = 2;
+            INSERT INTO pages (id, sub_area_id, page_name, layout)
+            VALUES (4, 1, '二页', 'grid');
+            INSERT INTO cards
+                (id, page_id, name, switch, mode, indoor, set_temp, fan, indicator, comm, source_key, device_uid)
+            VALUES
+                (6, 4, 'MOVE-OLD-KT', 'ON', '制冷', '26', '24', '中', 'red.png', '开机', 'source-a-secondary', 'uid-a'),
+                (7, 1, 'SAME-LABEL-KT', 'OFF', '制冷', '25', '24', '中', 'green.png', '关机', 'source-c', 'uid-c');
+            """);
+        var repository = new SqliteAreaGroupRepository(() => databasePath);
+
+        var options = (await repository.LoadTargetOptionsAsync("1号", "1F"))
+            .Where(option => option.Type == "device")
+            .ToArray();
+        var physical = Assert.Single(options, option => ReadStringProperty(option, "DeviceUid") == "uid-a");
+        Assert.Equal(2, physical.Count);
+        Assert.Equal("default", ReadStringProperty(physical, "PageName"));
+        Assert.Equal("source-a-primary", ReadStringProperty(physical, "SourceKey"));
+        Assert.Equal(1, ReadIntProperty(physical, "Occurrence"));
+        var sameLabel = options.Where(option => option.CardName == "SAME-LABEL-KT").ToArray();
+        Assert.Equal(2, sameLabel.Length);
+        Assert.Equal(["uid-b", "uid-c"], sameLabel.Select(option => ReadStringProperty(option, "DeviceUid")).Order().ToArray());
+        Assert.Equal([1, 2], sameLabel.Select(option => ReadIntProperty(option, "Occurrence")).Order().ToArray());
+
+        var group = await SaveCustomGroupAsync(repository, "UID 设备组");
+        var legacy = await repository.SaveItemAsync(DeviceItemEdit(
+            group.Id, "1F", "1F A", "MOVE-OLD-KT", "legacy", deviceUid: string.Empty));
+        var schedule = await repository.SaveScheduleGroupAsync(new ScheduleGroupEdit(group.Id, "UID 计划", "", true));
+        await repository.SaveScheduleMemberAsync(new ScheduleMemberEdit(
+            schedule.Id, legacy.Id, legacy.TargetType, legacy.Building, legacy.FloorLabel,
+            legacy.SubAreaText, legacy.CardName, legacy.DeviceUid, "normal", ""));
+
+        var promoted = await repository.SaveItemAsync(DeviceItemEdit(
+            group.Id, "1F", "1F A", "MOVE-OLD-KT", "promoted", deviceUid: "uid-a"));
+        var uidB = await repository.SaveItemAsync(DeviceItemEdit(
+            group.Id, "1F", "1F A", "SAME-LABEL-KT", "B", deviceUid: "uid-b"));
+        var uidC = await repository.SaveItemAsync(DeviceItemEdit(
+            group.Id, "1F", "1F A", "SAME-LABEL-KT", "C", deviceUid: "uid-c"));
+
+        Assert.Equal(legacy.Id, promoted.Id);
+        Assert.Equal("uid-a", promoted.DeviceUid);
+        Assert.NotEqual(uidB.Id, uidC.Id);
+        ExecuteSql(databasePath, "UPDATE cards SET page_id = 3, name = 'MOVED-KT' WHERE device_uid = 'uid-a';");
+
+        var movedSet = await repository.LoadAsync();
+        var movedSummary = Assert.Single(movedSet.Groups, item => item.Id == group.Id);
+        Assert.Equal(3, movedSummary.Total);
+        Assert.Equal(movedSummary.Total,
+            movedSummary.OnCount + movedSummary.OffCount + movedSummary.OfflineCount + movedSummary.UnknownCount);
+        var moved = await repository.SaveItemAsync(DeviceItemEdit(
+            group.Id, "3F", "3F C", "MOVED-KT", "moved", deviceUid: "uid-a"));
+        Assert.Equal(promoted.Id, moved.Id);
+        Assert.Equal("3F C", moved.SubAreaText);
+        Assert.Equal("uid-a", moved.DeviceUid);
+
+        var linkedMember = Assert.Single((await repository.LoadScheduleGroupsAsync(group.Id)).Single().Members);
+        Assert.Equal("uid-a", linkedMember.DeviceUid);
+        Assert.Equal("MOVED-KT", linkedMember.CardName);
+        var nonDevice = await repository.SaveItemAsync(CreateAreaGroupItemEdit(
+            group.Id, "sub_area", "1号", "1F", "1F A", string.Empty, "clear UID", uidC.Id, "uid-c"));
+        Assert.Equal(string.Empty, nonDevice.DeviceUid);
+    }
+
+    [Fact]
+    public async Task TargetCandidatesPartitionNonblankUidBeforeCanonicalDisplayFields()
+    {
+        var databasePath = CreateDatabase();
+        ExecuteSql(databasePath, """
+            UPDATE cards
+            SET name = 'UID-OLD-KT', source_key = 'source-old', device_uid = 'uid-shared'
+            WHERE id = 1;
+            INSERT INTO sub_areas (id, building, floor, text, sub_idx, x, y)
+            VALUES (10, '1号', 1, '1F MOVED', 10, 200, 100);
+            INSERT INTO pages (id, sub_area_id, page_name, layout)
+            VALUES
+                (10, 10, 'moved-page', 'grid'),
+                (11, 1, 'duplicate-label-page', 'grid');
+            INSERT INTO cards
+                (id, page_id, name, switch, mode, indoor, set_temp, fan, indicator, comm, source_key, device_uid)
+            VALUES
+                (10, 10, 'UID-MOVED-KT', 'ON', '制冷', '26', '24', '中', 'red.png', '开机', 'source-moved', 'uid-shared'),
+                (11, 11, 'UID-RENAMED-KT', 'ON', '制冷', '26', '24', '中', 'red.png', '开机', 'source-renamed', 'uid-shared'),
+                (12, 11, 'SAME-LABEL-KT', 'OFF', '制冷', '25', '24', '中', 'green.png', '关机', 'source-b', 'uid-b'),
+                (13, 11, 'SAME-LABEL-KT', 'OFF', '制冷', '25', '24', '中', 'green.png', '关机', 'source-c', 'uid-c');
+            """);
+        var repository = new SqliteAreaGroupRepository(() => databasePath);
+
+        var candidates = (await repository.LoadTargetOptionsAsync("1号", "1F"))
+            .Where(option => option.Type == "device")
+            .ToArray();
+
+        var shared = Assert.Single(candidates, option => option.DeviceUid == "uid-shared");
+        Assert.Equal(3, shared.Count);
+        Assert.Equal("UID-OLD-KT", shared.CardName);
+        Assert.Equal("1F A", shared.SubAreaText);
+        Assert.Equal("default", shared.PageName);
+        Assert.Equal("source-old", shared.SourceKey);
+        var sameLabel = candidates.Where(option => option.CardName == "SAME-LABEL-KT").ToArray();
+        Assert.Equal(2, sameLabel.Length);
+        Assert.Equal(["uid-b", "uid-c"], sameLabel.Select(option => option.DeviceUid).Order().ToArray());
+        Assert.Equal([1, 2], sameLabel.Select(option => option.Occurrence).Order().ToArray());
+    }
+
+    [Fact]
+    public async Task TargetOptionsExposeDevicesAfterFormerTwoThousandRowBoundary()
+    {
+        var databasePath = CreateDatabase();
+        ExecuteSql(databasePath, """
+            INSERT INTO sub_areas (id, building, floor, text, sub_idx, x, y)
+            VALUES (20, '6号', 31, '31F Z', 20, 100, 100);
+            INSERT INTO pages (id, sub_area_id, page_name, layout)
+            VALUES (20, 20, '批量设备', 'grid');
+            WITH RECURSIVE sequence(number) AS (
+                VALUES(1)
+                UNION ALL
+                SELECT number + 1 FROM sequence WHERE number < 2480
+            )
+            INSERT INTO cards
+                (id, page_id, name, switch, mode, indoor, set_temp, fan, indicator, comm, source_key, device_uid)
+            SELECT 100 + number, 20, printf('6-%04d-KT', number), 'OFF', '制冷', '25', '24', '中',
+                   'green.png', '关机', printf('source-6-%04d', number), printf('uid-6-%04d', number)
+            FROM sequence;
+            """);
+        var repository = new SqliteAreaGroupRepository(() => databasePath);
+
+        var devices = (await repository.LoadTargetOptionsAsync(string.Empty, string.Empty))
+            .Where(option => option.Type == "device")
+            .ToArray();
+
+        Assert.Equal(2485, devices.Length);
+        Assert.Contains(devices, option => option.DeviceUid == "uid-6-2480" && option.CardName == "6-2480-KT");
+    }
+
+    [Fact]
+    public async Task TargetOptionsRejectIncompleteDirectoryAboveSafetyLimit()
+    {
+        var databasePath = CreateDatabase();
+        ExecuteSql(databasePath, """
+            INSERT INTO sub_areas (id, building, floor, text, sub_idx, x, y)
+            VALUES (20, '6号', 31, '31F Z', 20, 100, 100);
+            INSERT INTO pages (id, sub_area_id, page_name, layout)
+            VALUES (20, 20, '超限设备', 'grid');
+            WITH RECURSIVE sequence(number) AS (
+                VALUES(1)
+                UNION ALL
+                SELECT number + 1 FROM sequence WHERE number < 10001
+            )
+            INSERT INTO cards
+                (id, page_id, name, switch, mode, indoor, set_temp, fan, indicator, comm, source_key, device_uid)
+            SELECT 100 + number, 20, printf('6-%05d-KT', number), 'OFF', '制冷', '25', '24', '中',
+                   'green.png', '关机', printf('source-6-%05d', number), printf('uid-6-%05d', number)
+            FROM sequence;
+            """);
+        var repository = new SqliteAreaGroupRepository(() => databasePath);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            repository.LoadTargetOptionsAsync(string.Empty, string.Empty));
+
+        Assert.Contains("超过一次可安全加载", error.Message);
+        Assert.Contains("选择楼栋或楼层", error.Message);
+        Assert.Contains("未显示任何不完整目录", error.Message);
+    }
+
+    [Fact]
+    public async Task SystemGroupStatsUnionClassifierAndManualMembersWithoutDoubleCounting()
+    {
+        var databasePath = CreateDatabase();
+        ExecuteSql(databasePath, """
+            UPDATE cards SET source_key = 'source-1', device_uid = 'uid-manual' WHERE id = 1;
+            UPDATE cards SET source_key = 'source-2', device_uid = 'uid-nonpublic' WHERE id = 2;
+            UPDATE cards SET source_key = 'source-3', device_uid = 'uid-offline' WHERE id = 3;
+            UPDATE cards SET source_key = 'source-4', device_uid = 'uid-public' WHERE id = 4;
+            UPDATE cards SET source_key = 'source-5', device_uid = 'uid-extra' WHERE id = 5;
+            INSERT INTO pages (id, sub_area_id, page_name, layout) VALUES (4, 3, '二页', 'grid');
+            INSERT INTO cards
+                (id, page_id, name, switch, mode, indoor, set_temp, fan, indicator, comm, source_key, device_uid)
+            VALUES
+                (6, 4, 'GQ-0301-KT', '-', '-', '', '', '', '', '', 'source-public-2', 'uid-public'),
+                (7, 4, 'GQ-0301-KT', '-', '-', '', '', '', '', '', 'source-public-3', 'uid-public');
+            INSERT INTO monitor_group_items
+                (group_id, target_type, building, floor_label, floor_value, sub_area_text, card_name, device_uid, note)
+            VALUES
+                (1, 'device', '1号', '1F', 1, '1F A', '1-0101-KT', 'uid-manual', '人工扩展'),
+                (1, 'device', '1号', '3F', 3, '3F C', 'GQ-0301-KT', 'uid-public', '与分类器重叠'),
+                (2, 'device', '1号', '1F', 1, '1F A', '1-0101-KT', 'uid-manual', '与分类器重叠'),
+                (2, 'device', '1号', '3F', 3, '3F C', 'GQ-0301-KT', 'uid-public', '人工扩展');
+            """);
+        var repository = new SqliteAreaGroupRepository(() => databasePath);
+
+        var groups = (await repository.LoadAsync()).Groups;
+        var publicGroup = Assert.Single(groups, item => item.SystemKey == "public");
+        var nonPublicGroup = Assert.Single(groups, item => item.SystemKey == "non_public");
+
+        Assert.Equal(2, publicGroup.Total);
+        Assert.Equal(1, publicGroup.OnCount);
+        Assert.Equal(1, publicGroup.UnknownCount);
+        Assert.Equal(publicGroup.Total,
+            publicGroup.OnCount + publicGroup.OffCount + publicGroup.OfflineCount + publicGroup.UnknownCount);
+        Assert.Equal(5, nonPublicGroup.Total);
+        Assert.Equal(1, nonPublicGroup.OnCount);
+        Assert.Equal(1, nonPublicGroup.OffCount);
+        Assert.Equal(1, nonPublicGroup.OfflineCount);
+        Assert.Equal(2, nonPublicGroup.UnknownCount);
+        Assert.Equal(nonPublicGroup.Total,
+            nonPublicGroup.OnCount + nonPublicGroup.OffCount + nonPublicGroup.OfflineCount + nonPublicGroup.UnknownCount);
+    }
+
+    [Fact]
+    public async Task RepositoryLoadDoesNotReseedOrRewriteEditablePresetDescriptions()
+    {
+        var databasePath = CreateDatabase();
+        const string retiredPublic = "规则识别的公区；可维护人工成员，并在日期管理中设置计划。";
+        const string retiredNonPublic = "规则识别的非公区；可维护人工成员，并在日期管理中设置计划。";
+        const string custom = "  现场自定义说明；保留空格。  ";
+        ExecuteSql(databasePath, $"""
+            UPDATE monitor_groups SET description = '{retiredPublic}' WHERE system_key = 'public';
+            UPDATE monitor_groups SET description = '{custom}' WHERE system_key = 'non_public';
+            """);
+        var repository = new SqliteAreaGroupRepository(() => databasePath);
+
+        var first = (await repository.LoadAsync()).Groups;
+        Assert.Equal(retiredPublic, Assert.Single(first, item => item.SystemKey == "public").Description);
+        Assert.Equal(custom, Assert.Single(first, item => item.SystemKey == "non_public").Description);
+
+        ExecuteSql(databasePath, $"""
+            UPDATE monitor_groups SET description = '{custom}' WHERE system_key = 'public';
+            UPDATE monitor_groups SET description = '{retiredNonPublic}' WHERE system_key = 'non_public';
+            """);
+        var second = (await repository.LoadAsync()).Groups;
+        Assert.Equal(custom, Assert.Single(second, item => item.SystemKey == "public").Description);
+        Assert.Equal(retiredNonPublic, Assert.Single(second, item => item.SystemKey == "non_public").Description);
+
+        ExecuteSql(databasePath, "UPDATE monitor_groups SET description = '' WHERE system_key = 'public';");
+        Assert.Equal(string.Empty,
+            Assert.Single((await repository.LoadAsync()).Groups, item => item.SystemKey == "public").Description);
+    }
+
+    [Fact]
     public async Task RejectsDuplicateGroupNameWhenCreating()
     {
         var databasePath = CreateDatabase();
@@ -417,6 +664,26 @@ public sealed class AreaGroupRepositoryTests
     }
 
     [Fact]
+    public async Task DiscoveredFloorRemainsDisabledAcrossResync()
+    {
+        var databasePath = CreateDatabase();
+        var repository = new SqliteAreaGroupRepository(() => databasePath);
+        var discovered = Assert.Single(
+            await repository.LoadFloorsAsync("1号"),
+            floor => floor.FloorLabel == "1F" && floor.Source == "discovered");
+
+        await repository.DeleteFloorAsync(discovered.Id);
+        await repository.LoadAsync();
+        var enabledOnly = await repository.LoadFloorsAsync("1号");
+        var includeDisabled = await repository.LoadFloorsAsync("1号", includeDisabled: true);
+
+        Assert.DoesNotContain(enabledOnly, floor => floor.Id == discovered.Id);
+        var disabled = Assert.Single(includeDisabled, floor => floor.Id == discovered.Id);
+        Assert.False(disabled.Enabled);
+        Assert.Equal("discovered", disabled.Source);
+    }
+
+    [Fact]
     public async Task ScheduleRulesUpsertMembersDeduplicateAndOverlapsAreRejected()
     {
         var databasePath = CreateDatabase();
@@ -508,6 +775,71 @@ public sealed class AreaGroupRepositoryTests
             Enabled: true));
     }
 
+    private static AreaGroupItemEdit DeviceItemEdit(
+        long groupId,
+        string floorLabel,
+        string subAreaText,
+        string cardName,
+        string note,
+        string deviceUid,
+        long? id = null) =>
+        CreateAreaGroupItemEdit(
+            groupId, "device", "1号", floorLabel, subAreaText, cardName, note, id, deviceUid);
+
+    private static AreaGroupItemEdit CreateAreaGroupItemEdit(
+        long groupId,
+        string targetType,
+        string building,
+        string floorLabel,
+        string subAreaText,
+        string cardName,
+        string note,
+        long? id,
+        string deviceUid)
+    {
+        var constructor = Assert.Single(typeof(AreaGroupItemEdit).GetConstructors());
+        var parameters = constructor.GetParameters();
+        Assert.Contains(parameters, parameter =>
+            string.Equals(parameter.Name, "DeviceUid", StringComparison.OrdinalIgnoreCase));
+        var values = parameters.Select(parameter => parameter.Name?.ToLowerInvariant() switch
+        {
+            "groupid" => (object)groupId,
+            "targettype" => targetType,
+            "building" => building,
+            "floorlabel" => floorLabel,
+            "subareatext" => subAreaText,
+            "cardname" => cardName,
+            "note" => note,
+            "id" => id,
+            "deviceuid" => deviceUid,
+            _ => throw new InvalidOperationException("Unexpected AreaGroupItemEdit parameter: " + parameter.Name),
+        }).ToArray();
+        return Assert.IsType<AreaGroupItemEdit>(constructor.Invoke(values));
+    }
+
+    private static string ReadStringProperty(object instance, string propertyName)
+    {
+        var property = instance.GetType().GetProperty(propertyName);
+        Assert.NotNull(property);
+        return Assert.IsType<string>(property.GetValue(instance));
+    }
+
+    private static int ReadIntProperty(object instance, string propertyName)
+    {
+        var property = instance.GetType().GetProperty(propertyName);
+        Assert.NotNull(property);
+        return Assert.IsType<int>(property.GetValue(instance));
+    }
+
+    private static void ExecuteSql(string databasePath, string sql)
+    {
+        using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadWrite");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.ExecuteNonQuery();
+    }
+
     private static string CreateDatabase()
     {
         var root = Path.Combine(Path.GetTempPath(), "ems-scout-area-group-tests", Guid.NewGuid().ToString("N"));
@@ -543,6 +875,7 @@ public sealed class AreaGroupRepositoryTests
                 fan TEXT,
                 indicator TEXT,
                 comm TEXT,
+                source_key TEXT,
                 device_uid TEXT
             );
             CREATE TABLE monitor_groups (

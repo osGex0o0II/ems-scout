@@ -4,6 +4,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:groups="using:EmsScout.Application.Groups"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:vm="using:EmsScout.Desktop.ViewModels"
     Loaded="Page_Loaded"
@@ -21,23 +22,17 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel Spacing="3">
-                <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="规则与计划" />
+                <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="区域组" />
                 <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-                <Button
-                    AutomationProperties.Name="新建分组"
-                    Command="{x:Bind ViewModel.NewGroupCommand}"
-                    Style="{StaticResource PrimaryToolbarButtonStyle}">
+                <Button AutomationProperties.Name="新建区域组" Command="{x:Bind ViewModel.NewGroupCommand}" Style="{StaticResource PrimaryToolbarButtonStyle}">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon FontSize="14" Glyph="&#xE710;" />
-                        <TextBlock Text="新建分组" />
+                        <TextBlock Text="新建区域组" />
                     </StackPanel>
                 </Button>
-                <Button
-                    AutomationProperties.Name="刷新"
-                    Command="{x:Bind ViewModel.RefreshCommand}"
-                    Style="{StaticResource ToolbarButtonStyle}">
+                <Button AutomationProperties.Name="刷新区域组" Command="{x:Bind ViewModel.RefreshCommand}" Style="{StaticResource ToolbarButtonStyle}">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon FontSize="14" Glyph="&#xE72C;" />
                         <TextBlock Text="刷新" />
@@ -51,78 +46,81 @@
             IsClosable="False"
             IsOpen="True"
             Severity="Informational"
-            Title="{x:Bind ViewModel.GroupEditorTitle, Mode=OneWay}"
-            Message="{x:Bind ViewModel.GroupEditorMessage, Mode=OneWay}" />
+            Title="规则匹配只产生待确认变更"
+            Message="公区、非公区与自建组都可改名、停用或删除。采集后匹配到的加入/移除会进入审计，本页只显示提醒。" />
 
-        <Grid Grid.Row="2" ColumnSpacing="14">
+        <Grid x:Name="MasterDetailGrid" Grid.Row="2" ColumnSpacing="14">
+            <VisualStateManager.VisualStateGroups>
+                <VisualStateGroup x:Name="AreaLayoutStates">
+                    <VisualState x:Name="NarrowAreaLayout">
+                        <VisualState.StateTriggers>
+                            <AdaptiveTrigger MinWindowWidth="0" />
+                        </VisualState.StateTriggers>
+                        <VisualState.Setters>
+                            <Setter Target="GroupListColumn.Width" Value="240" />
+                        </VisualState.Setters>
+                    </VisualState>
+                    <VisualState x:Name="WideAreaLayout">
+                        <VisualState.StateTriggers>
+                            <AdaptiveTrigger MinWindowWidth="1100" />
+                        </VisualState.StateTriggers>
+                        <VisualState.Setters>
+                            <Setter Target="GroupListColumn.Width" Value="280" />
+                        </VisualState.Setters>
+                    </VisualState>
+                </VisualStateGroup>
+            </VisualStateManager.VisualStateGroups>
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="360" MinWidth="280" />
-                <ColumnDefinition Width="*" MinWidth="620" />
+                <ColumnDefinition x:Name="GroupListColumn" Width="280" MinWidth="220" />
+                <ColumnDefinition x:Name="DetailColumn" Width="*" />
             </Grid.ColumnDefinitions>
 
-            <Border Style="{StaticResource WorkbenchCardStyle}" Padding="0">
-                <Grid RowSpacing="0">
+            <Border Padding="0" Style="{StaticResource WorkbenchCardStyle}">
+                <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
-                    <StackPanel Padding="16,14,16,8" Spacing="2">
+                    <StackPanel Padding="16,14,16,8" Spacing="3">
                         <TextBlock Style="{StaticResource SectionTitleStyle}" Text="区域组" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="系统规则和自定义分组统一管理。" TextWrapping="WrapWholeWords" />
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="预设组与自建组统一维护。" />
                     </StackPanel>
-                    <Grid Grid.Row="1">
-                        <ListView
-                            ItemsSource="{x:Bind ViewModel.Groups, Mode=OneWay}"
-                            SelectedItem="{x:Bind ViewModel.SelectedGroup, Mode=TwoWay}"
-                            SelectionChanged="GroupList_SelectionChanged"
-                            SelectionMode="Single">
-                            <ListView.ItemTemplate>
-                                <DataTemplate x:DataType="vm:GroupSummaryRow">
-                                    <Grid Padding="16,9" ColumnSpacing="12">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Spacing="3">
-                                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                                <TextBlock FontWeight="SemiBold" Text="{x:Bind Name}" />
-                                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind Kind}" />
-                                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind StateLabel}" />
-                                            </StackPanel>
-                                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind Description}" TextTrimming="CharacterEllipsis" />
+                    <ListView
+                        Grid.Row="1"
+                        ItemsSource="{x:Bind ViewModel.Groups, Mode=OneWay}"
+                        SelectedItem="{x:Bind ViewModel.SelectedGroup, Mode=TwoWay}"
+                        SelectionMode="Single">
+                        <ListView.ItemTemplate>
+                            <DataTemplate x:DataType="vm:GroupSummaryRow">
+                                <Grid Padding="14,9" ColumnSpacing="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="3">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <TextBlock FontWeight="SemiBold" Text="{x:Bind Name}" />
+                                            <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind StateLabel}" />
                                         </StackPanel>
-                                        <StackPanel Grid.Column="1" HorizontalAlignment="Right" Spacing="2">
-                                            <TextBlock HorizontalAlignment="Right" FontWeight="SemiBold" Text="{x:Bind CountText}" />
-                                            <TextBlock HorizontalAlignment="Right" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind ItemCountText}" />
-                                        </StackPanel>
-                                    </Grid>
-                                </DataTemplate>
-                            </ListView.ItemTemplate>
-                        </ListView>
-                        <StackPanel
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Center"
-                            Spacing="8"
-                            Visibility="{x:Bind ViewModel.LoadingStateVisibility, Mode=OneWay}">
-                            <ProgressRing
-                                Width="28"
-                                Height="28"
-                                IsActive="{x:Bind ViewModel.IsLoading, Mode=OneWay}" />
-                            <TextBlock
-                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                Text="正在计算分组命中数量" />
-                        </StackPanel>
-                        <TextBlock
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Center"
-                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                            Text="暂无区域组"
-                            Visibility="{x:Bind ViewModel.GroupListEmptyVisibility, Mode=OneWay}" />
-                    </Grid>
+                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind Description}" TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" HorizontalAlignment="Right" Spacing="2">
+                                        <TextBlock HorizontalAlignment="Right" FontWeight="SemiBold" Text="{x:Bind CountText}" />
+                                        <TextBlock HorizontalAlignment="Right" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="正式成员" />
+                                    </StackPanel>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
                 </Grid>
             </Border>
 
-            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+            <ScrollViewer
+                x:Name="DetailScrollViewer"
+                Grid.Column="1"
+                HorizontalScrollBarVisibility="Disabled"
+                HorizontalScrollMode="Disabled"
+                VerticalScrollBarVisibility="Auto">
                 <StackPanel Spacing="12">
                     <Border Style="{StaticResource WorkbenchCardStyle}">
                         <StackPanel Spacing="12">
@@ -133,750 +131,256 @@
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Spacing="2">
                                     <TextBlock Style="{StaticResource SectionTitleStyle}" Text="{x:Bind ViewModel.GroupEditorTitle, Mode=OneWay}" />
-                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.SelectedGroup.Description, Mode=OneWay, FallbackValue='保存分组后即可维护成员'}" TextWrapping="WrapWholeWords" />
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="名称、状态和说明均可随时调整。" />
                                 </StackPanel>
                                 <Button
-                                    AutomationProperties.Name="数据管理"
+                                    x:Name="OpenAuditButton"
                                     Grid.Column="1"
-                                    Click="OpenInData_Click"
-                                    IsEnabled="{x:Bind ViewModel.CanOpenSelectedInData, Mode=OneWay}"
+                                    AutomationProperties.Name="打开分组审计"
+                                    Click="NavigateToAudit_Click"
                                     Style="{StaticResource ToolbarButtonStyle}">
                                     <StackPanel Orientation="Horizontal" Spacing="6">
-                                        <FontIcon FontSize="14" Glyph="&#xE8A5;" />
-                                        <TextBlock Text="数据管理" />
+                                        <FontIcon FontSize="14" Glyph="&#xE9D9;" />
+                                        <TextBlock Text="打开审计" />
                                     </StackPanel>
                                 </Button>
                             </Grid>
-
-                            <Grid ColumnSpacing="8">
+                            <InfoBar IsClosable="False" IsOpen="True" Severity="Informational" Title="待确认加入 / 待确认移除" Message="{x:Bind ViewModel.PendingSummaryText, Mode=OneWay}" />
+                            <Grid ColumnSpacing="10" RowSpacing="8">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="1.1*" />
+                                    <ColumnDefinition Width="1*" />
+                                    <ColumnDefinition Width="1*" />
+                                    <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-                                <Border Padding="10" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="命中设备" />
-                                        <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedGroup.CountText, Mode=OneWay, FallbackValue='--'}" />
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="1" Padding="10" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="成员" />
-                                        <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedGroup.ItemCountText, Mode=OneWay, FallbackValue='--'}" />
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="2" Padding="10" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="开机" />
-                                        <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedGroup.OnCount, Mode=OneWay, FallbackValue=0}" />
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="3" Padding="10" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="离线" />
-                                        <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedGroup.OfflineCount, Mode=OneWay, FallbackValue=0}" />
-                                    </StackPanel>
-                                </Border>
-                                <Border Grid.Column="4" Padding="10" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="覆盖子区" />
-                                        <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedGroup.CoveredAreas, Mode=OneWay, FallbackValue=0}" />
-                                    </StackPanel>
-                                </Border>
-                            </Grid>
-
-                            <StackPanel Visibility="{x:Bind ViewModel.CustomEditorVisibility, Mode=OneWay}" Spacing="10">
-                                <Grid ColumnSpacing="8" RowSpacing="8">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="1.2*" />
-                                        <ColumnDefinition Width="1*" />
-                                        <ColumnDefinition Width="0.8*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
-                                    <TextBox Header="区域组名" Text="{x:Bind ViewModel.EditName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                    <TextBox Grid.Column="1" Header="用途标签" PlaceholderText="巡检 / 装修 / 未交付" Text="{x:Bind ViewModel.EditAreaLabel, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                    <ComboBox
-                                        Grid.Column="2"
-                                        Header="级别"
-                                        SelectedValue="{x:Bind ViewModel.EditPriority, Mode=TwoWay}"
-                                        SelectedValuePath="Content">
-                                        <ComboBoxItem Content="普通" />
-                                        <ComboBoxItem Content="重点" />
-                                        <ComboBoxItem Content="紧急" />
-                                    </ComboBox>
-                                    <ToggleSwitch Grid.Column="3" Header="启用" IsOn="{x:Bind ViewModel.EditEnabled, Mode=TwoWay}" />
-                                    <TextBox
-                                        Grid.Row="1"
-                                        Grid.ColumnSpan="4"
-                                        Header="说明"
-                                        AcceptsReturn="True"
-                                        MinHeight="58"
-                                        Text="{x:Bind ViewModel.EditDescription, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                </Grid>
-
-                                <StackPanel Orientation="Horizontal" Spacing="8">
-                                    <Button
-                                        AutomationProperties.Name="保存分组"
-                                        Command="{x:Bind ViewModel.SaveGroupCommand}"
-                                        Style="{StaticResource PrimaryToolbarButtonStyle}">
-                                        <StackPanel Orientation="Horizontal" Spacing="6">
-                                            <FontIcon FontSize="14" Glyph="&#xE74E;" />
-                                            <TextBlock Text="保存分组" />
-                                        </StackPanel>
-                                    </Button>
-                                    <Button
-                                        AutomationProperties.Name="删除分组"
-                                        Click="DeleteGroup_Click"
-                                        IsEnabled="{x:Bind ViewModel.CanDeleteSelectedGroup, Mode=OneWay}"
-                                        Style="{StaticResource ToolbarButtonStyle}">
-                                        <StackPanel Orientation="Horizontal" Spacing="6">
-                                            <FontIcon FontSize="14" Glyph="&#xE74D;" />
-                                            <TextBlock Text="删除分组" />
-                                        </StackPanel>
-                                    </Button>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <TextBox Header="名称" Text="{x:Bind ViewModel.EditName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <TextBox Grid.Column="1" Header="区域标签" Text="{x:Bind ViewModel.EditAreaLabel, Mode=TwoWay}" />
+                                <ComboBox Grid.Column="2" Header="优先级" SelectedItem="{x:Bind ViewModel.EditPriority, Mode=TwoWay}">
+                                    <x:String>重点</x:String>
+                                    <x:String>常规</x:String>
+                                    <x:String>低</x:String>
+                                </ComboBox>
+                                <ToggleSwitch Grid.Column="3" Header="状态" IsOn="{x:Bind ViewModel.EditEnabled, Mode=TwoWay}" OffContent="停用" OnContent="启用" />
+                                <TextBox Grid.Row="1" Grid.ColumnSpan="3" Header="说明" Text="{x:Bind ViewModel.EditDescription, Mode=TwoWay}" />
+                                <StackPanel Grid.Row="1" Grid.Column="3" VerticalAlignment="Bottom" Orientation="Horizontal" Spacing="8">
+                                    <Button AutomationProperties.Name="保存分组" Command="{x:Bind ViewModel.SaveGroupCommand}" Style="{StaticResource PrimaryToolbarButtonStyle}" Content="保存" />
+                                    <Button AutomationProperties.Name="删除分组" Click="DeleteGroup_Click" Style="{StaticResource ToolbarButtonStyle}" Content="删除" />
                                 </StackPanel>
-                            </StackPanel>
-
-                            <StackPanel Visibility="{x:Bind ViewModel.SystemEditorVisibility, Mode=OneWay}" Spacing="8">
-                                <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedGroup.Kind, Mode=OneWay, FallbackValue='系统区域'}" />
-                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.GroupEditorMessage, Mode=OneWay}" TextWrapping="WrapWholeWords" />
-                            </StackPanel>
+                            </Grid>
                         </StackPanel>
                     </Border>
 
                     <Border Style="{StaticResource WorkbenchCardStyle}">
                         <StackPanel Spacing="10">
                             <StackPanel Spacing="2">
-                                <TextBlock Style="{StaticResource SectionTitleStyle}" Text="楼层候选目录" />
-                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="这里只维护成员编辑器可选的楼层候选，不会把楼层加入当前分组；加入分组请在下方“成员维护”中新增楼层成员。" TextWrapping="WrapWholeWords" />
+                                <TextBlock Style="{StaticResource SectionTitleStyle}" Text="持续规则" />
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="持续覆盖楼层，也支持设备名精确匹配、设备名关键字匹配。成员须经用户确认。" TextWrapping="WrapWholeWords" />
                             </StackPanel>
-
                             <Grid ColumnSpacing="8" RowSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="140" />
-                                    <ColumnDefinition Width="140" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <ComboBox
-                                    Header="楼栋"
-                                    ItemsSource="{x:Bind ViewModel.BuildingOptions, Mode=OneWay}"
-                                    SelectedItem="{x:Bind ViewModel.FloorCatalogBuilding, Mode=TwoWay}" />
-                                <TextBox
-                                    Grid.Column="1"
-                                    Header="楼层"
-                                    PlaceholderText="1F / B1F / 2.5F"
-                                    Text="{x:Bind ViewModel.FloorCatalogLabel, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                <TextBox
-                                    Grid.Column="2"
-                                    Header="备注"
-                                    PlaceholderText="人工新增楼层目录"
-                                    Text="{x:Bind ViewModel.FloorCatalogNote, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                <Button
-                                    AutomationProperties.Name="保存楼层"
-                                    Grid.Column="3"
-                                    VerticalAlignment="Bottom"
-                                    Command="{x:Bind ViewModel.SaveFloorCommand}"
-                                    Style="{StaticResource PrimaryToolbarButtonStyle}">
-                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                        <FontIcon FontSize="14" Glyph="&#xE74E;" />
-                                        <TextBlock Text="保存楼层" />
-                                    </StackPanel>
-                                </Button>
-                                <Button
-                                    AutomationProperties.Name="删除楼层"
-                                    Grid.Column="4"
-                                    VerticalAlignment="Bottom"
-                                    Click="DeleteFloor_Click"
-                                    IsEnabled="{x:Bind ViewModel.CanDeleteSelectedFloor, Mode=OneWay}"
-                                    Style="{StaticResource ToolbarButtonStyle}">
-                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                        <FontIcon FontSize="14" Glyph="&#xE74D;" />
-                                        <TextBlock Text="停用楼层" />
-                                    </StackPanel>
-                                </Button>
-                            </Grid>
-
-                            <ListView
-                                MaxHeight="150"
-                                ItemsSource="{x:Bind ViewModel.FloorCatalog, Mode=OneWay}"
-                                SelectedItem="{x:Bind ViewModel.SelectedFloorCatalog, Mode=TwoWay}"
-                                SelectionMode="Single">
-                                <ListView.Header>
-                                    <Grid Padding="0,0,0,6" ColumnSpacing="12">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="120" />
-                                            <ColumnDefinition Width="90" />
-                                            <ColumnDefinition Width="90" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock FontWeight="SemiBold" Text="楼层" />
-                                        <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="来源" />
-                                        <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="状态" />
-                                        <TextBlock Grid.Column="3" FontWeight="SemiBold" Text="备注" />
-                                    </Grid>
-                                </ListView.Header>
-                                <ListView.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:FloorCatalogRow">
-                                        <Grid Padding="0,5" ColumnSpacing="12">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="120" />
-                                                <ColumnDefinition Width="90" />
-                                                <ColumnDefinition Width="90" />
-                                                <ColumnDefinition Width="*" />
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock FontWeight="SemiBold" Text="{x:Bind FloorLabel}" />
-                                            <TextBlock Grid.Column="1" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind Source}" />
-                                            <TextBlock Grid.Column="2" Text="{x:Bind StateLabel}" />
-                                            <TextBlock Grid.Column="3" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind Note}" TextWrapping="WrapWholeWords" />
-                                        </Grid>
-                                    </DataTemplate>
-                                </ListView.ItemTemplate>
-                            </ListView>
-                        </StackPanel>
-                    </Border>
-
-                    <Border Style="{StaticResource WorkbenchCardStyle}">
-                        <StackPanel Spacing="10">
-                            <Grid ColumnSpacing="12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Spacing="2">
-                                    <TextBlock Style="{StaticResource SectionTitleStyle}" Text="{x:Bind ViewModel.MemberEditorTitle, Mode=OneWay}" />
-                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.MemberEditorMessage, Mode=OneWay}" TextWrapping="WrapWholeWords" />
-                                </StackPanel>
-                                <Button
-                                    AutomationProperties.Name="新增成员"
-                                    Grid.Column="1"
-                                    Command="{x:Bind ViewModel.BeginAddMemberCommand}"
-                                    IsEnabled="{x:Bind ViewModel.CanBeginAddMember, Mode=OneWay}"
-                                    Style="{StaticResource PrimaryToolbarButtonStyle}">
-                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                        <FontIcon FontSize="14" Glyph="&#xE710;" />
-                                        <TextBlock Text="新增成员" />
-                                    </StackPanel>
-                                </Button>
-                            </Grid>
-
-                            <Grid ColumnSpacing="8" RowSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="1*" MinWidth="130" />
-                                    <ColumnDefinition Width="1*" MinWidth="130" />
-                                    <ColumnDefinition Width="1*" MinWidth="130" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-                                <ComboBox
-                                    Header="范围类型"
-                                    DisplayMemberPath="Label"
-                                    IsEnabled="{x:Bind ViewModel.CanEditMemberTarget, Mode=OneWay}"
-                                    ItemsSource="{x:Bind ViewModel.TargetTypes, Mode=OneWay}"
-                                    SelectedItem="{x:Bind ViewModel.SelectedTargetType, Mode=TwoWay}" />
-                                <ComboBox
-                                    Grid.Column="1"
-                                    Header="楼栋"
-                                    IsEnabled="{x:Bind ViewModel.CanEditMemberTarget, Mode=OneWay}"
-                                    ItemsSource="{x:Bind ViewModel.BuildingOptions, Mode=OneWay}"
-                                    SelectedItem="{x:Bind ViewModel.TargetBuilding, Mode=TwoWay}" />
-                                <ComboBox
-                                    Grid.Column="2"
-                                    Header="楼层"
-                                    DisplayMemberPath="DisplayLabel"
-                                    IsEnabled="{x:Bind ViewModel.CanEditMemberTarget, Mode=OneWay}"
-                                    ItemsSource="{x:Bind ViewModel.FloorOptions, Mode=OneWay}"
-                                    SelectedValuePath="Value"
-                                    SelectedValue="{x:Bind ViewModel.TargetFloor, Mode=TwoWay}" />
-                                <Button
-                                    AutomationProperties.Name="加载候选"
-                                    Grid.Column="3"
-                                    VerticalAlignment="Bottom"
-                                    Command="{x:Bind ViewModel.LoadTargetOptionsCommand}"
-                                    IsEnabled="{x:Bind ViewModel.CanLoadMemberOptions, Mode=OneWay}"
-                                    Style="{StaticResource ToolbarButtonStyle}">
-                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                        <FontIcon FontSize="14" Glyph="&#xE8B7;" />
-                                        <TextBlock Text="加载候选" />
-                                    </StackPanel>
-                                </Button>
-                                <TextBox
-                                    Grid.Row="1"
-                                    Grid.ColumnSpan="4"
-                                    Header="搜索候选"
-                                    IsEnabled="{x:Bind ViewModel.CanSearchMemberOptions, Mode=OneWay}"
-                                    PlaceholderText="输入设备名、子区或楼层"
-                                    Text="{x:Bind ViewModel.TargetOptionSearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                <ComboBox
-                                    Grid.Row="2"
-                                    Grid.ColumnSpan="4"
-                                    Header="候选子区或设备"
-                                    DisplayMemberPath="Label"
-                                    IsEnabled="{x:Bind ViewModel.CanSelectMemberOption, Mode=OneWay}"
-                                    ItemsSource="{x:Bind ViewModel.TargetOptions, Mode=OneWay}"
-                                    SelectedItem="{x:Bind ViewModel.SelectedTargetOption, Mode=TwoWay}" />
-                                <TextBox
-                                    Grid.Row="3"
-                                    Grid.ColumnSpan="2"
-                                    Header="备注"
-                                    IsEnabled="{x:Bind ViewModel.CanEditMemberTarget, Mode=OneWay}"
-                                    PlaceholderText="可填写巡检原因或临时状态"
-                                    Text="{x:Bind ViewModel.TargetNote, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                <StackPanel Grid.Row="3" Grid.Column="2" Grid.ColumnSpan="2" Orientation="Horizontal" Spacing="8" VerticalAlignment="Bottom">
-                                    <Button
-                                        AutomationProperties.Name="保存成员"
-                                        Command="{x:Bind ViewModel.SaveMemberDraftCommand}"
-                                        IsEnabled="{x:Bind ViewModel.CanSaveMemberDraft, Mode=OneWay}"
-                                        Style="{StaticResource PrimaryToolbarButtonStyle}">
-                                        <StackPanel Orientation="Horizontal" Spacing="6">
-                                            <FontIcon FontSize="14" Glyph="&#xE74E;" />
-                                            <TextBlock Text="{x:Bind ViewModel.MemberSaveButtonText, Mode=OneWay}" />
-                                        </StackPanel>
-                                    </Button>
-                                    <Button
-                                        AutomationProperties.Name="取消成员编辑"
-                                        Command="{x:Bind ViewModel.CancelMemberDraftCommand}"
-                                        IsEnabled="{x:Bind ViewModel.CanCancelMemberDraft, Mode=OneWay}"
-                                        Style="{StaticResource ToolbarButtonStyle}">
-                                        <StackPanel Orientation="Horizontal" Spacing="6">
-                                            <FontIcon FontSize="14" Glyph="&#xE711;" />
-                                            <TextBlock Text="取消" />
-                                        </StackPanel>
-                                    </Button>
-                                </StackPanel>
-                            </Grid>
-
-                            <TextBlock
-                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                Text="{x:Bind ViewModel.MemberTargetPreview, Mode=OneWay}"
-                                TextWrapping="WrapWholeWords" />
-                            <TextBlock
-                                Foreground="{ThemeResource SystemFillColorCautionBrush}"
-                                Text="{x:Bind ViewModel.MemberConflictMessage, Mode=OneWay}"
-                                TextWrapping="WrapWholeWords"
-                                Visibility="{x:Bind ViewModel.MemberConflictVisibility, Mode=OneWay}" />
-
-                            <ListView
-                                MaxHeight="220"
-                                IsEnabled="{x:Bind ViewModel.CanOperateMemberRows, Mode=OneWay}"
-                                ItemsSource="{x:Bind ViewModel.Items, Mode=OneWay}"
-                                SelectedItem="{x:Bind ViewModel.SelectedItem, Mode=TwoWay}"
-                                SelectionMode="Single">
-                                <ListView.Header>
-                                    <Grid Padding="0,0,0,6" ColumnSpacing="12">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="96" />
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="1.2*" />
-                                            <ColumnDefinition Width="132" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock FontWeight="SemiBold" Text="类型" />
-                                        <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="对象" />
-                                        <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="备注" />
-                                        <TextBlock Grid.Column="3" FontWeight="SemiBold" Text="操作" />
-                                    </Grid>
-                                </ListView.Header>
-                                <ListView.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:AreaGroupItemRow">
-                                        <Grid Padding="0,5" ColumnSpacing="12">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="96" />
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="1.2*" />
-                                                <ColumnDefinition Width="132" />
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock FontWeight="SemiBold" Text="{x:Bind TargetTypeLabel}" />
-                                            <TextBlock Grid.Column="1" Text="{x:Bind TargetLabel}" TextWrapping="WrapWholeWords" />
-                                            <TextBlock Grid.Column="2" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind Note}" TextWrapping="WrapWholeWords" />
-                                            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="6">
-                                                <Button
-                                                    AutomationProperties.Name="编辑成员"
-                                                    Click="EditItem_Click"
-                                                    Style="{StaticResource ToolbarButtonStyle}">
-                                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                                        <FontIcon FontSize="14" Glyph="&#xE70F;" />
-                                                        <TextBlock Text="编辑" />
-                                                    </StackPanel>
-                                                </Button>
-                                                <Button
-                                                    AutomationProperties.Name="删除成员"
-                                                    Click="DeleteItem_Click"
-                                                    Style="{StaticResource ToolbarButtonStyle}">
-                                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                                        <FontIcon FontSize="14" Glyph="&#xE74D;" />
-                                                        <TextBlock Text="删除" />
-                                                    </StackPanel>
-                                                </Button>
-                                            </StackPanel>
-                                        </Grid>
-                                    </DataTemplate>
-                                </ListView.ItemTemplate>
-                            </ListView>
-                        </StackPanel>
-                    </Border>
-
-                    <Border Style="{StaticResource WorkbenchCardStyle}">
-                        <Grid ColumnSpacing="12">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                            <StackPanel Spacing="3">
-                                <TextBlock Style="{StaticResource SectionTitleStyle}" Text="日期计划" />
-                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="日期和启用时段已移到独立的“日期管理”；请先在这里维护区域组成员，再到月历中批量设置日期。" TextWrapping="WrapWholeWords" />
-                            </StackPanel>
-                            <Button Grid.Column="1" Click="OpenDateManagement_Click" Style="{StaticResource PrimaryToolbarButtonStyle}" Content="打开日期管理" />
-                        </Grid>
-                    </Border>
-
-                    <!-- Legacy inline schedule editor intentionally retired; date planning now has its own page.
-                    <Border Visibility="Collapsed" Style="{StaticResource WorkbenchCardStyle}">
-                        <StackPanel Spacing="10">
-                            <Grid ColumnSpacing="12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Spacing="2">
-                                    <TextBlock Style="{StaticResource SectionTitleStyle}" Text="时间组" />
-                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.ScheduleGroupEditorMessage, Mode=OneWay}" TextWrapping="WrapWholeWords" />
-                                </StackPanel>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-                                    <Button
-                                        AutomationProperties.Name="新建时间组"
-                                        Command="{x:Bind ViewModel.NewScheduleGroupCommand}"
-                                        IsEnabled="{x:Bind ViewModel.CanMaintainSchedules, Mode=OneWay}"
-                                        Style="{StaticResource PrimaryToolbarButtonStyle}">
-                                        <TextBlock Text="新建时间组" />
-                                    </Button>
-                                    <Button
-                                        AutomationProperties.Name="删除时间组"
-                                        Click="DeleteScheduleGroup_Click"
-                                        IsEnabled="{x:Bind ViewModel.CanDeleteScheduleGroup, Mode=OneWay}">
-                                        <TextBlock Text="删除" />
-                                    </Button>
-                                </StackPanel>
-                            </Grid>
-
-                            <Grid ColumnSpacing="10">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="1.2*" />
-                                    <ColumnDefinition Width="1.5*" />
-                                </Grid.ColumnDefinitions>
-                                <ListView
-                                    MaxHeight="180"
-                                    ItemsSource="{x:Bind ViewModel.ScheduleGroups, Mode=OneWay}"
-                                    SelectedItem="{x:Bind ViewModel.SelectedScheduleGroup, Mode=TwoWay}">
-                                    <ListView.ItemTemplate>
-                                        <DataTemplate x:DataType="vm:ScheduleGroupRow">
-                                            <StackPanel Padding="0,5" Spacing="2">
-                                                <TextBlock FontWeight="SemiBold" Text="{x:Bind Name}" />
-                                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind RuleSummary}" />
-                                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind MemberSummary}" />
-                                            </StackPanel>
-                                        </DataTemplate>
-                                    </ListView.ItemTemplate>
-                                </ListView>
-                                <StackPanel Grid.Column="1" Spacing="8">
-                                    <Grid ColumnSpacing="8">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="1.4*" />
-                                            <ColumnDefinition Width="1.6*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBox Header="时间组名称" Text="{x:Bind ViewModel.ScheduleGroupName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                        <TextBox Grid.Column="1" Header="说明" Text="{x:Bind ViewModel.ScheduleGroupDescription, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                        <ToggleSwitch Grid.Column="2" Header="启用" IsOn="{x:Bind ViewModel.ScheduleGroupEnabled, Mode=TwoWay}" />
-                                    </Grid>
-                                    <Button
-                                        HorizontalAlignment="Left"
-                                        Command="{x:Bind ViewModel.SaveScheduleGroupCommand}"
-                                        IsEnabled="{x:Bind ViewModel.CanSaveScheduleGroup, Mode=OneWay}"
-                                        Style="{StaticResource PrimaryToolbarButtonStyle}">
-                                        <TextBlock Text="保存时间组" />
-                                    </Button>
-                                </StackPanel>
-                            </Grid>
-
-                            <Grid ColumnSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="1.1*" />
-                                    <ColumnDefinition Width="1*" />
-                                    <ColumnDefinition Width="2.4*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <TextBox Header="具体日期" PlaceholderText="2026-07-15" Text="{x:Bind ViewModel.ScheduleDate, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                <ComboBox Grid.Column="1" Header="计划" SelectedValue="{x:Bind ViewModel.ScheduleStatus, Mode=TwoWay}" SelectedValuePath="Tag">
-                                    <ComboBoxItem Content="按时间启用" Tag="enabled" />
-                                    <ComboBoxItem Content="全天不启用" Tag="not_open" />
-                                </ComboBox>
-                                <TextBox Grid.Column="2" Header="启用时间段" PlaceholderText="08:00-12:00;14:00-18:00；全天不启用可留空" Text="{x:Bind ViewModel.ScheduleIntervals, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                <Button Grid.Column="3" VerticalAlignment="Bottom" Command="{x:Bind ViewModel.SaveScheduleRuleCommand}" IsEnabled="{x:Bind ViewModel.CanSaveScheduleRule, Mode=OneWay}" Style="{StaticResource PrimaryToolbarButtonStyle}">
-                                    <TextBlock Text="保存日期规则" />
-                                </Button>
-                            </Grid>
-                            <TextBox Header="规则备注" Text="{x:Bind ViewModel.ScheduleNote, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-
-                            <ListView MaxHeight="150" ItemsSource="{x:Bind ViewModel.ScheduleRules, Mode=OneWay}">
-                                <ListView.Header>
-                                    <Grid ColumnSpacing="12">
-                                        <Grid.ColumnDefinitions><ColumnDefinition Width="120" /><ColumnDefinition Width="120" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                        <TextBlock FontWeight="SemiBold" Text="日期" />
-                                        <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="计划" />
-                                        <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="时间段" />
-                                        <TextBlock Grid.Column="3" FontWeight="SemiBold" Text="操作" />
-                                    </Grid>
-                                </ListView.Header>
-                                <ListView.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:ScheduleRuleRow">
-                                        <Grid ColumnSpacing="12" Padding="0,4">
-                                            <Grid.ColumnDefinitions><ColumnDefinition Width="120" /><ColumnDefinition Width="120" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                            <TextBlock Text="{x:Bind Date}" />
-                                            <TextBlock Grid.Column="1" Text="{x:Bind StatusLabel}" />
-                                            <TextBlock Grid.Column="2" Text="{x:Bind IntervalsText}" />
-                                            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4">
-                                                <Button Click="EditScheduleRule_Click" Content="编辑" />
-                                                <Button Click="DeleteScheduleRule_Click" Content="删除" />
-                                            </StackPanel>
-                                        </Grid>
-                                    </DataTemplate>
-                                </ListView.ItemTemplate>
-                            </ListView>
-
-                            <ListView MaxHeight="180" ItemsSource="{x:Bind ViewModel.ScheduleMembers, Mode=OneWay}">
-                                <ListView.Header>
-                                    <Grid ColumnSpacing="12">
-                                        <Grid.ColumnDefinitions><ColumnDefinition Width="80" /><ColumnDefinition Width="*" /><ColumnDefinition Width="110" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                        <TextBlock FontWeight="SemiBold" Text="类型" />
-                                        <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="对象 / 来源" />
-                                        <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="预期状态" />
-                                        <TextBlock Grid.Column="3" FontWeight="SemiBold" Text="操作" />
-                                    </Grid>
-                                </ListView.Header>
-                                <ListView.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:ScheduleMemberRow">
-                                        <Grid ColumnSpacing="12" Padding="0,4">
-                                            <Grid.ColumnDefinitions><ColumnDefinition Width="80" /><ColumnDefinition Width="*" /><ColumnDefinition Width="110" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                                            <TextBlock Text="{x:Bind TargetTypeLabel}" />
-                                            <TextBlock Grid.Column="1" Text="{x:Bind TargetLabel}" TextWrapping="WrapWholeWords" />
-                                            <TextBlock Grid.Column="2" Text="{x:Bind ExpectedStatusLabel}" />
-                                            <StackPanel Grid.Column="3" Orientation="Horizontal" Spacing="4">
-                                                <Button Click="MarkScheduleMemberNotOpen_Click" Content="未开放" />
-                                                <Button Click="MarkScheduleMemberNormal_Click" Content="正常" />
-                                                <Button Click="DeleteScheduleMember_Click" Content="移除" />
-                                            </StackPanel>
-                                        </Grid>
-                                    </DataTemplate>
-                                </ListView.ItemTemplate>
-                            </ListView>
-                        </StackPanel>
-                    </Border>
-
-                    -->
-                    <Border Style="{StaticResource WorkbenchCardStyle}">
-                        <StackPanel Spacing="10">
-                            <Grid ColumnSpacing="12">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Spacing="2">
-                                    <TextBlock Style="{StaticResource SectionTitleStyle}" Text="{x:Bind ViewModel.WatchEditorTitle, Mode=OneWay}" />
-                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.WatchEditorMessage, Mode=OneWay}" TextWrapping="WrapWholeWords" />
-                                    <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind ViewModel.WatchSummaryText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
-                                </StackPanel>
-                                <ToggleSwitch
-                                    Grid.Column="1"
-                                    Header="启用"
-                                    IsEnabled="{x:Bind ViewModel.CanMaintainWatch, Mode=OneWay}"
-                                    IsOn="{x:Bind ViewModel.WatchEnabled, Mode=TwoWay}" />
-                            </Grid>
-
-                            <Grid ColumnSpacing="10" RowSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="1*" />
-                                    <ColumnDefinition Width="1*" />
-                                    <ColumnDefinition Width="1*" />
+                                    <ColumnDefinition Width="0.8*" />
+                                    <ColumnDefinition Width="0.8*" />
                                 </Grid.ColumnDefinitions>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
-                                <TextBox
-                                    Grid.ColumnSpan="3"
-                                    Header="规则名称"
-                                    IsEnabled="{x:Bind ViewModel.CanMaintainWatch, Mode=OneWay}"
-                                    Text="{x:Bind ViewModel.WatchName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                <DatePicker
-                                    Grid.Row="1"
-                                    Header="开始日期"
-                                    IsEnabled="{x:Bind ViewModel.CanMaintainWatch, Mode=OneWay}"
-                                    Date="{x:Bind ViewModel.WatchStartDate, Mode=TwoWay}" />
-                                <TimePicker
-                                    Grid.Row="1"
+                                <ComboBox Header="规则类型" DisplayMemberPath="Label" ItemsSource="{x:Bind ViewModel.RuleTypes}" SelectedItem="{x:Bind ViewModel.SelectedRuleType, Mode=TwoWay}" />
+                                <ComboBox
                                     Grid.Column="1"
-                                    Header="开始时间"
-                                    ClockIdentifier="24HourClock"
-                                    IsEnabled="{x:Bind ViewModel.CanMaintainWatch, Mode=OneWay}"
-                                    Time="{x:Bind ViewModel.WatchStartTime, Mode=TwoWay}" />
-                                <DatePicker
-                                    Grid.Row="2"
-                                    Header="结束日期"
-                                    IsEnabled="{x:Bind ViewModel.CanMaintainWatch, Mode=OneWay}"
-                                    Date="{x:Bind ViewModel.WatchEndDate, Mode=TwoWay}" />
-                                <TimePicker
+                                    Header="楼栋（可选）"
+                                    DisplayMemberPath="Label"
+                                    ItemsSource="{x:Bind ViewModel.RuleBuildingOptions}"
+                                    SelectedValue="{x:Bind ViewModel.RuleBuilding, Mode=TwoWay}"
+                                    SelectedValuePath="Value" />
+                                <TextBox Grid.Column="2" Header="楼层" PlaceholderText="如 3F" Text="{x:Bind ViewModel.RuleFloorLabel, Mode=TwoWay}" />
+                                <TextBox Grid.Row="1" Grid.ColumnSpan="2" Header="设备名 / 关键字" PlaceholderText="精确匹配填写完整设备名；关键字匹配填写片段" Text="{x:Bind ViewModel.RuleKeyword, Mode=TwoWay}" />
+                                <TextBox Grid.Row="1" Grid.Column="2" Header="备注" Text="{x:Bind ViewModel.RuleNote, Mode=TwoWay}" />
+                                <ToggleSwitch Grid.Row="2" Header="规则状态" IsOn="{x:Bind ViewModel.EditRuleEnabled, Mode=TwoWay}" OffContent="停用" OnContent="启用" />
+                                <StackPanel
+                                    x:Name="RuleEditorActions"
                                     Grid.Row="2"
                                     Grid.Column="1"
-                                    Header="结束时间"
-                                    ClockIdentifier="24HourClock"
-                                    IsEnabled="{x:Bind ViewModel.CanMaintainWatch, Mode=OneWay}"
-                                    Time="{x:Bind ViewModel.WatchEndTime, Mode=TwoWay}" />
+                                    Grid.ColumnSpan="2"
+                                    HorizontalAlignment="Right"
+                                    VerticalAlignment="Bottom"
+                                    Orientation="Horizontal"
+                                    Spacing="8">
+                                    <Button AutomationProperties.Name="新建持续规则" Command="{x:Bind ViewModel.NewRuleCommand}" Style="{StaticResource ToolbarButtonStyle}" Content="新规则" />
+                                    <Button AutomationProperties.Name="保存持续规则" Command="{x:Bind ViewModel.SaveRuleCommand}" Style="{StaticResource PrimaryToolbarButtonStyle}" Content="保存规则" />
+                                </StackPanel>
                             </Grid>
-                            <TextBlock
-                                Foreground="{ThemeResource SystemFillColorCautionBrush}"
-                                Text="{x:Bind ViewModel.WatchTimeValidationMessage, Mode=OneWay}"
-                                Visibility="{x:Bind ViewModel.WatchTimeValidationVisibility, Mode=OneWay}" />
+                            <ListView MaxHeight="190" ItemsSource="{x:Bind ViewModel.Rules, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedRule, Mode=TwoWay}" SelectionMode="Single">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate x:DataType="groups:AreaGroupRuleRecord">
+                                        <Grid Padding="0,6" ColumnSpacing="10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="120" />
+                                                <ColumnDefinition Width="160" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock FontWeight="SemiBold" Text="{x:Bind RuleTypeLabel}" />
+                                            <TextBlock Grid.Column="1" Text="{x:Bind ScopeLabel}" />
+                                            <TextBlock Grid.Column="2" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind Note}" TextTrimming="CharacterEllipsis" />
+                                            <Button Grid.Column="3" AutomationProperties.Name="删除持续规则" Click="DeleteRule_Click" Style="{StaticResource ToolbarButtonStyle}" Content="删除规则" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                        </StackPanel>
+                    </Border>
 
-                            <TextBox
-                                Header="关注说明"
-                                AcceptsReturn="True"
-                                MinHeight="54"
-                                IsEnabled="{x:Bind ViewModel.CanMaintainWatch, Mode=OneWay}"
-                                Text="{x:Bind ViewModel.WatchNote, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-
-                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                <Button
-                                    AutomationProperties.Name="保存关注"
-                                    Command="{x:Bind ViewModel.SaveWatchCommand}"
-                                    Style="{StaticResource PrimaryToolbarButtonStyle}">
-                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                        <FontIcon FontSize="14" Glyph="&#xE74E;" />
-                                        <TextBlock Text="保存关注" />
-                                    </StackPanel>
-                                </Button>
-                                <Button
-                                    AutomationProperties.Name="删除关注"
-                                    Click="DeleteWatch_Click"
-                                    IsEnabled="{x:Bind ViewModel.CanDeleteSelectedWatch, Mode=OneWay}"
-                                    Style="{StaticResource ToolbarButtonStyle}">
-                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                        <FontIcon FontSize="14" Glyph="&#xE74D;" />
-                                        <TextBlock Text="删除关注" />
-                                    </StackPanel>
-                                </Button>
+                    <Border Style="{StaticResource WorkbenchCardStyle}">
+                        <StackPanel Spacing="10">
+                            <StackPanel Spacing="2">
+                                <TextBlock Style="{StaticResource SectionTitleStyle}" Text="现有设备目录" />
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="最少选择到楼层即可建立持续规则；也可继续筛到设备名并直接加入正式成员。" TextWrapping="WrapWholeWords" />
                             </StackPanel>
-
-                            <Grid ColumnSpacing="12">
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="0.8*" />
+                                    <ColumnDefinition Width="0.8*" />
+                                    <ColumnDefinition Width="1.4*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <ComboBox Header="楼栋" ItemsSource="{x:Bind ViewModel.BuildingOptions}" SelectedItem="{x:Bind ViewModel.DeviceBuilding, Mode=TwoWay}" />
+                                <TextBox Grid.Column="1" Header="楼层" PlaceholderText="如 3F" Text="{x:Bind ViewModel.DeviceFloor, Mode=TwoWay}" />
+                                <TextBox Grid.Column="2" Header="搜索设备名 / UID" PlaceholderText="输入设备名关键字过滤当前目录" Text="{x:Bind ViewModel.DeviceDirectorySearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <StackPanel
+                                    x:Name="DeviceDirectoryActions"
+                                    Grid.Row="1"
+                                    Grid.ColumnSpan="3"
+                                    Margin="0,8,0,0"
+                                    HorizontalAlignment="Right"
+                                    Orientation="Horizontal"
+                                    Spacing="8">
+                                    <Button Command="{x:Bind ViewModel.LoadDeviceDirectoryCommand}" Style="{StaticResource ToolbarButtonStyle}" Content="查看现有设备" />
+                                    <Button Command="{x:Bind ViewModel.AddFloorRuleCommand}" Style="{StaticResource PrimaryToolbarButtonStyle}" Content="选择楼层作为持续规则" />
+                                </StackPanel>
+                            </Grid>
+                            <ListView
+                                MaxHeight="230"
+                                ItemsSource="{x:Bind ViewModel.DeviceDirectory, Mode=OneWay}"
+                                SelectedItem="{x:Bind ViewModel.SelectedDevice, Mode=TwoWay}"
+                                SelectionMode="Single">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate x:DataType="vm:AreaGroupTargetOptionRow">
+                                        <Grid Padding="0,6" ColumnSpacing="10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="100" />
+                                                <ColumnDefinition Width="100" />
+                                                <ColumnDefinition Width="150" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Text="{x:Bind Building}" />
+                                            <TextBlock Grid.Column="1" Text="{x:Bind FloorLabel}" />
+                                            <TextBlock Grid.Column="2" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind SubAreaText}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="3" FontWeight="SemiBold" Text="{x:Bind CardName}" TextTrimming="CharacterEllipsis" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                            <Grid ColumnSpacing="8">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-                                <StackPanel Spacing="2">
-                                    <TextBlock FontWeight="SemiBold" Text="关注事件" />
-                                    <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind ViewModel.WatchIncidentSummary, Mode=OneWay}" TextWrapping="WrapWholeWords" />
-                                </StackPanel>
-                                <Button
-                                    AutomationProperties.Name="查看关注异常"
-                                    Grid.Column="1"
-                                    Click="OpenWatchIncident_Click"
-                                    IsEnabled="{x:Bind ViewModel.CanOpenSelectedWatchIncident, Mode=OneWay}"
-                                    Style="{StaticResource ToolbarButtonStyle}">
-                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                        <FontIcon FontSize="14" Glyph="&#xE8A5;" />
-                                        <TextBlock Text="查看异常" />
-                                    </StackPanel>
-                                </Button>
-                            </Grid>
-
-                            <Grid>
-                                <ListView
-                                    MaxHeight="188"
-                                    ItemsSource="{x:Bind ViewModel.WatchIncidents, Mode=OneWay}"
-                                    SelectedItem="{x:Bind ViewModel.SelectedWatchIncident, Mode=TwoWay}"
-                                    SelectionMode="Single">
-                                    <ListView.Header>
-                                        <Grid Padding="0,0,0,6" ColumnSpacing="10">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="1.25*" />
-                                                <ColumnDefinition Width="0.8*" />
-                                                <ColumnDefinition Width="1*" />
-                                                <ColumnDefinition Width="0.8*" />
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock FontWeight="SemiBold" Text="设备" />
-                                            <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="变化" />
-                                            <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="时间" />
-                                            <TextBlock Grid.Column="3" FontWeight="SemiBold" Text="批次" />
-                                        </Grid>
-                                    </ListView.Header>
-                                    <ListView.ItemTemplate>
-                                        <DataTemplate>
-                                            <Grid Padding="0,5" ColumnSpacing="10">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="1.25*" />
-                                                    <ColumnDefinition Width="0.8*" />
-                                                    <ColumnDefinition Width="1*" />
-                                                    <ColumnDefinition Width="0.8*" />
-                                                </Grid.ColumnDefinitions>
-                                                <StackPanel Spacing="1">
-                                                    <TextBlock FontWeight="SemiBold" Text="{Binding DeviceName}" TextTrimming="CharacterEllipsis" />
-                                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding Location}" TextTrimming="CharacterEllipsis" />
-                                                </StackPanel>
-                                                <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="{Binding ChangeText}" />
-                                                <TextBlock Grid.Column="2" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding TimeText}" />
-                                                <TextBlock Grid.Column="3" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding RunText}" />
-                                            </Grid>
-                                        </DataTemplate>
-                                    </ListView.ItemTemplate>
-                                </ListView>
-                                <TextBlock
-                                    HorizontalAlignment="Center"
-                                    VerticalAlignment="Center"
-                                    Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                    Text="暂无关注事件"
-                                    Visibility="{x:Bind ViewModel.WatchIncidentEmptyVisibility, Mode=OneWay}" />
+                                <TextBox Header="备注" PlaceholderText="手动加入原因（可选）" Text="{x:Bind ViewModel.ManualMemberNote, Mode=TwoWay}" />
+                                <Button Grid.Column="1" VerticalAlignment="Bottom" Command="{x:Bind ViewModel.AddManualMemberCommand}" Style="{StaticResource PrimaryToolbarButtonStyle}" Content="将设备直接加入分组" />
                             </Grid>
                         </StackPanel>
                     </Border>
 
                     <Border Style="{StaticResource WorkbenchCardStyle}">
-                        <Grid RowSpacing="8">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="*" />
-                            </Grid.RowDefinitions>
-                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="系统规则说明" />
-                            <ListView
-                                Grid.Row="1"
-                                MaxHeight="150"
-                                ItemsSource="{x:Bind ViewModel.Rules, Mode=OneWay}"
-                                SelectionMode="None">
+                        <StackPanel Spacing="10">
+                            <StackPanel Spacing="2">
+                                <TextBlock Style="{StaticResource SectionTitleStyle}" Text="正式成员" />
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="手动成员可直接移除；规则成员移除后会进入长期屏蔽名单，避免下次再次匹配。" TextWrapping="WrapWholeWords" />
+                            </StackPanel>
+                            <ListView MaxHeight="260" ItemsSource="{x:Bind ViewModel.Members, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedMember, Mode=TwoWay}" SelectionMode="Single">
                                 <ListView.ItemTemplate>
-                                    <DataTemplate x:DataType="vm:GroupRuleRow">
-                                        <Grid Padding="0,5" ColumnSpacing="12">
+                                    <DataTemplate x:DataType="groups:AreaGroupMemberRecord">
+                                        <Grid Padding="0,6" ColumnSpacing="10">
                                             <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="1.1*" />
-                                                <ColumnDefinition Width="2*" />
+                                                <ColumnDefinition Width="90" />
+                                                <ColumnDefinition Width="100" />
+                                                <ColumnDefinition Width="110" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="1.2*" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
-                                            <TextBlock FontWeight="SemiBold" Text="{x:Bind Title}" TextWrapping="WrapWholeWords" />
-                                            <TextBlock Grid.Column="1" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind Description}" TextWrapping="WrapWholeWords" />
-                                            <TextBlock Grid.Column="2" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind Effect}" />
+                                            <TextBlock FontWeight="SemiBold" Text="{x:Bind MemberOriginLabel}" />
+                                            <TextBlock Grid.Column="1" Text="{x:Bind Building}" />
+                                            <TextBlock Grid.Column="2" Text="{x:Bind FloorLabel}" />
+                                            <TextBlock Grid.Column="3" Text="{x:Bind CardName}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="4" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind Note}" TextTrimming="CharacterEllipsis" />
+                                            <Button Grid.Column="5" AutomationProperties.Name="移除或屏蔽正式成员" Click="DeleteManualMember_Click" Style="{StaticResource ToolbarButtonStyle}" Content="移除 / 屏蔽" />
                                         </Grid>
                                     </DataTemplate>
                                 </ListView.ItemTemplate>
                             </ListView>
-                        </Grid>
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox Header="成员备注" PlaceholderText="选择成员后修改备注" Text="{x:Bind ViewModel.MemberNote, Mode=TwoWay}" />
+                                <Button Grid.Column="1" VerticalAlignment="Bottom" AutomationProperties.Name="保存成员备注" Command="{x:Bind ViewModel.UpdateMemberNoteCommand}" Style="{StaticResource PrimaryToolbarButtonStyle}" Content="保存备注" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource WorkbenchCardStyle}">
+                        <StackPanel Spacing="10">
+                            <StackPanel Spacing="2">
+                                <TextBlock Style="{StaticResource SectionTitleStyle}" Text="例外名单" />
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="长期屏蔽阻止规则再次加入；手动保留阻止规则自动移除。可修改备注或撤销例外。" TextWrapping="WrapWholeWords" />
+                            </StackPanel>
+                            <ListView
+                                MaxHeight="230"
+                                ItemsSource="{x:Bind ViewModel.Exceptions, Mode=OneWay}"
+                                SelectedItem="{x:Bind ViewModel.SelectedException, Mode=TwoWay}"
+                                SelectionMode="Single">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate x:DataType="groups:AreaGroupExceptionRecord">
+                                        <Grid Padding="0,6" ColumnSpacing="10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="110" />
+                                                <ColumnDefinition Width="100" />
+                                                <ColumnDefinition Width="110" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="1.2*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock FontWeight="SemiBold" Text="{x:Bind ExceptionTypeLabel}" />
+                                            <TextBlock Grid.Column="1" Text="{x:Bind Building}" />
+                                            <TextBlock Grid.Column="2" Text="{x:Bind FloorLabel}" />
+                                            <TextBlock Grid.Column="3" Text="{x:Bind CardName}" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Grid.Column="4" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind Note}" TextTrimming="CharacterEllipsis" />
+                                            <Button Grid.Column="5" AutomationProperties.Name="撤销分组例外" Click="DeleteException_Click" Style="{StaticResource ToolbarButtonStyle}" Content="撤销例外" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox Header="备注" PlaceholderText="选择一条例外后修改备注" Text="{x:Bind ViewModel.ExceptionNote, Mode=TwoWay}" />
+                                <Button Grid.Column="1" VerticalAlignment="Bottom" Command="{x:Bind ViewModel.UpdateExceptionNoteCommand}" Style="{StaticResource PrimaryToolbarButtonStyle}" Content="保存备注" />
+                            </Grid>
+                        </StackPanel>
                     </Border>
                 </StackPanel>
             </ScrollViewer>

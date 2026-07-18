@@ -1,6 +1,8 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Navigation;
+using EmsScout.Application.Groups;
 using EmsScout.Desktop.Services;
 using EmsScout.Desktop.ViewModels;
 
@@ -8,6 +10,8 @@ namespace EmsScout.Desktop.Pages;
 
 public sealed partial class AuditPage : Page
 {
+    private long? _areaGroupId;
+
     public AuditViewModel ViewModel { get; }
 
     public AuditPage()
@@ -18,7 +22,52 @@ public sealed partial class AuditPage : Page
 
     private async void Page_Loaded(object sender, RoutedEventArgs e)
     {
-        await ViewModel.InitializeAsync();
+        await ViewModel.InitializeAsync(_areaGroupId, default);
+    }
+
+    protected override void OnNavigatedTo(NavigationEventArgs e)
+    {
+        base.OnNavigatedTo(e);
+        _areaGroupId = (e.Parameter as AuditNavigationRequest)?.AreaGroupId;
+    }
+
+    private async void AcceptGroupAdd_Click(object sender, RoutedEventArgs e)
+    {
+        await DecideGroupChangeAsync(sender, AreaGroupChangeDecision.Accept, "确认加入", "将该设备加入正式成员？");
+    }
+
+    private async void RejectGroupAdd_Click(object sender, RoutedEventArgs e)
+    {
+        await DecideGroupChangeAsync(sender, AreaGroupChangeDecision.Reject, "拒绝并屏蔽", "拒绝本次加入，并把设备加入长期屏蔽名单？");
+    }
+
+    private async void AcceptGroupRemove_Click(object sender, RoutedEventArgs e)
+    {
+        await DecideGroupChangeAsync(sender, AreaGroupChangeDecision.Accept, "确认移除", "将该设备从正式成员中移除？");
+    }
+
+    private async void RejectGroupRemove_Click(object sender, RoutedEventArgs e)
+    {
+        await DecideGroupChangeAsync(sender, AreaGroupChangeDecision.Reject, "拒绝并保留", "拒绝本次移除，并把设备设为手动保留？");
+    }
+
+    private async Task DecideGroupChangeAsync(
+        object sender,
+        AreaGroupChangeDecision decision,
+        string actionLabel,
+        string prompt)
+    {
+        if (sender is not Button { DataContext: AreaGroupChangeRow row })
+        {
+            return;
+        }
+
+        if (!await ConfirmAsync(actionLabel, $"{row.DeviceLabel}\n\n{prompt}\n备注：{row.DecisionNote}", actionLabel))
+        {
+            return;
+        }
+
+        await ViewModel.DecideChangeAsync(row, decision, row.DecisionNote);
     }
 
     private void OpenData_Click(object sender, RoutedEventArgs e)

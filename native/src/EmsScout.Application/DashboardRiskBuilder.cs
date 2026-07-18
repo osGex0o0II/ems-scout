@@ -63,21 +63,6 @@ public static class DashboardRiskBuilder
                 IssueType: "communication"));
         }
 
-        if (facets.WatchAbnormal > 0)
-        {
-            risks.Add(new DashboardRiskItem(
-                "关注设备发生开关变化",
-                $"关注时间窗内有 {facets.WatchAbnormal:N0} 台设备发生 ON/OFF 变化，数据管理会显示证据批次。",
-                "关注设备",
-                OverviewMetricKind.Danger,
-                facets.WatchAbnormal,
-                "查看异常",
-                WatchState: "abnormal",
-                IssueId: "watch:state:abnormal",
-                SourceKey: "watch",
-                IssueType: "state"));
-        }
-
         AddQualityRisk(risks, qualityReport, qualityError);
         AddRealtimeQualityRisk(risks, realtimeReport, realtimeError);
         AddReconciliationRisk(risks, reconciliation, reconciliationError);
@@ -87,7 +72,7 @@ public static class DashboardRiskBuilder
         {
             risks.Add(new DashboardRiskItem(
                 "未发现高优先级风险",
-                "基础质量、实时审计、实时对账、历史批次和关注设备均未报告需要立即处理的项目。",
+                "基础质量、实时审计、实时对账和历史批次均未报告需要立即处理的项目。",
                 "总览",
                 OverviewMetricKind.Success));
         }

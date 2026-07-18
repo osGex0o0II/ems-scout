@@ -60,7 +60,7 @@
                         <FontIcon Glyph="&#xE8A5;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="规则与计划" Tag="rules">
+                <NavigationViewItem Content="区域组" Tag="rules">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE707;" />
                     </NavigationViewItem.Icon>

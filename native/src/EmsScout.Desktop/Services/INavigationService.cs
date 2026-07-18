@@ -6,10 +6,10 @@ public interface INavigationService
 {
     void NavigateToData(DataNavigationRequest request);
 
-    void NavigateToAudit();
-
-    void NavigateToDates();
+    void NavigateToAudit(long? areaGroupId = null);
 }
+
+public sealed record AuditNavigationRequest(long? AreaGroupId = null);
 
 public sealed record DataNavigationRequest(
     string SearchText = "",
@@ -19,6 +19,8 @@ public sealed record DataNavigationRequest(
     string Floor = "",
     string SubArea = "",
     string PageName = "",
+    string DeviceUid = "",
+    long? CardId = null,
     string Zuo = "")
 {
     public static DataNavigationRequest From(DeviceNavigationTarget target)
@@ -34,14 +36,12 @@ public sealed record DataNavigationRequest(
 public sealed class NavigationService : INavigationService
 {
     private Action<DataNavigationRequest>? _navigateToData;
-    private Action? _navigateToAudit;
-    private Action? _navigateToDates;
+    private Action<AuditNavigationRequest>? _navigateToAudit;
 
-    public void Attach(Action<DataNavigationRequest> navigateToData, Action navigateToAudit, Action navigateToDates)
+    public void Attach(Action<DataNavigationRequest> navigateToData, Action<AuditNavigationRequest> navigateToAudit)
     {
         _navigateToData = navigateToData;
         _navigateToAudit = navigateToAudit;
-        _navigateToDates = navigateToDates;
     }
 
     public void NavigateToData(DataNavigationRequest request)
@@ -49,13 +49,8 @@ public sealed class NavigationService : INavigationService
         _navigateToData?.Invoke(request);
     }
 
-    public void NavigateToAudit()
+    public void NavigateToAudit(long? areaGroupId = null)
     {
-        _navigateToAudit?.Invoke();
-    }
-
-    public void NavigateToDates()
-    {
-        _navigateToDates?.Invoke();
+        _navigateToAudit?.Invoke(new AuditNavigationRequest(areaGroupId));
     }
 }

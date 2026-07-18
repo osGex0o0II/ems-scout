@@ -120,7 +120,15 @@ public sealed record AreaGroupItemEdit(
     string SubAreaText,
     string CardName,
     string Note,
-    long? Id = null);
+    long? Id = null,
+    string DeviceUid = "")
+{
+    public string PageName { get; init; } = string.Empty;
+
+    public string SourceKey { get; init; } = string.Empty;
+
+    public int Occurrence { get; init; } = 1;
+}
 
 public sealed record AreaGroupTargetOption(
     string Type,
@@ -129,7 +137,11 @@ public sealed record AreaGroupTargetOption(
     double? FloorValue,
     string SubAreaText,
     string CardName,
-    int Count);
+    int Count,
+    string DeviceUid = "",
+    string PageName = "",
+    string SourceKey = "",
+    int Occurrence = 1);
 
 public sealed record FloorCatalogRecord(
     long Id,

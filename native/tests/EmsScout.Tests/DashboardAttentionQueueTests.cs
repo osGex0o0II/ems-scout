@@ -3,6 +3,9 @@ using EmsScout.Application.Attention;
 using EmsScout.Application.Collection;
 using EmsScout.Application.Devices;
 using EmsScout.Application.Quality;
+using EmsScout.Infrastructure.Migrations;
+using EmsScout.Infrastructure.Sqlite;
+using Microsoft.Data.Sqlite;
 
 namespace EmsScout.Tests;
 
@@ -59,6 +62,58 @@ public sealed class DashboardAttentionQueueTests
         var failure = Assert.Single(overview.Risks, item => item.IssueId == "quality:read-error");
         Assert.DoesNotContain("secret-provider-message", failure.Detail, StringComparison.Ordinal);
         Assert.Contains("审计", failure.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CurrentLoadResolvesAndHidesLegacyWatchAttentionIssues()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "ems-scout-dashboard-attention-" + Guid.NewGuid().ToString("N"));
+        var databasePath = Path.Combine(directory, "ac.db");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            await new SqliteSchemaMigrator().CreateNewAsync(databasePath);
+            var attention = new SqliteAttentionIssueRepository(() => databasePath);
+            await attention.SynchronizeAsync(new AttentionQueueSnapshot(
+                [new AttentionIssueCandidate(
+                    "watch:state:abnormal",
+                    "watch",
+                    "state",
+                    OverviewMetricKind.Danger,
+                    16,
+                    "关注设备发生开关变化",
+                    "旧版本遗留关注设备问题",
+                    "关注设备",
+                    2,
+                    new AttentionNavigationTarget("devices", WatchState: "abnormal"))],
+                new HashSet<string>(["watch"], StringComparer.Ordinal),
+                new DateTimeOffset(2026, 7, 12, 8, 0, 0, TimeSpan.Zero)));
+            var service = new DashboardOverviewService(
+                new DeviceRepository(),
+                new QualityService(),
+                new RealtimeQualityService(),
+                new ReconciliationService(),
+                new RunRepository(),
+                attention);
+
+            var overview = await service.LoadAsync();
+
+            await using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+            {
+                DataSource = databasePath,
+                Mode = SqliteOpenMode.ReadOnly,
+            }.ToString());
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT status FROM attention_issues WHERE issue_id = 'watch:state:abnormal'";
+            Assert.Equal(AttentionIssueStatuses.Resolved, Convert.ToString(await command.ExecuteScalarAsync()));
+            Assert.DoesNotContain(overview.Risks, risk => risk.SourceKey == "watch");
+        }
+        finally
+        {
+            SqliteConnection.ClearAllPools();
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     private sealed class RecordingAttentionRepository : IAttentionIssueRepository

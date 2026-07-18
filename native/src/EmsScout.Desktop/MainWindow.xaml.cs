@@ -16,7 +16,7 @@ public sealed partial class MainWindow : Window
         AppWindow.SetIcon("Assets/AppIcon.ico");
         App.Services.GetRequiredService<WindowHandleProvider>().Attach(this);
         App.Services.GetRequiredService<AppUiSettingsService>().ApplyTheme(RootGrid);
-        App.Services.GetRequiredService<NavigationService>().Attach(NavigateToData, NavigateToAudit, NavigateToDates);
+        App.Services.GetRequiredService<NavigationService>().Attach(NavigateToData, NavigateToAudit);
         NavFrame.Navigate(typeof(HomePage));
         if (!string.IsNullOrWhiteSpace(startupFailure))
         {
@@ -94,17 +94,10 @@ public sealed partial class MainWindow : Window
         NavFrame.BackStack.Clear();
     }
 
-    private void NavigateToAudit()
+    private void NavigateToAudit(AuditNavigationRequest request)
     {
         SelectNavigationItem("audit");
-        NavFrame.Navigate(typeof(AuditPage));
-        NavFrame.BackStack.Clear();
-    }
-
-    private void NavigateToDates()
-    {
-        SelectNavigationItem("rules");
-        NavFrame.Navigate(typeof(DateManagementPage));
+        NavFrame.Navigate(typeof(AuditPage), request);
         NavFrame.BackStack.Clear();
     }
 

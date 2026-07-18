@@ -10,7 +10,6 @@ using EmsScout.Application.Groups;
 using EmsScout.Application.Logging;
 using EmsScout.Application.Quality;
 using EmsScout.Application.Settings;
-using EmsScout.Application.Watch;
 using EmsScout.Application.Workflows;
 using EmsScout.Desktop.Services;
 using EmsScout.Desktop.ViewModels;
@@ -94,12 +93,9 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<IRealtimeDetailSource>(provider => new RealtimeLatestJsonSource(
             workspaceRoot,
             () => provider.GetRequiredService<AppDataPathService>().DataDirectory));
-        services.AddSingleton<IDeviceWatchRepository>(provider => new SqliteDeviceWatchRepository(
-            () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
         services.AddSingleton<IDeviceReadRepository>(provider => new SqliteDeviceReadRepository(
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath,
-            provider.GetRequiredService<IRealtimeDetailSource>(),
-            provider.GetRequiredService<IDeviceWatchRepository>()));
+            provider.GetRequiredService<IRealtimeDetailSource>()));
         services.AddSingleton<IDeviceExportService>(provider => new SqliteDeviceExportService(
             provider.GetRequiredService<IDeviceReadRepository>()));
         services.AddSingleton<IDeviceAnnotationService>(provider => new SqliteDeviceAnnotationService(
@@ -125,6 +121,8 @@ public partial class App : Microsoft.UI.Xaml.Application
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
         services.AddSingleton<IAreaGroupRepository>(provider => new SqliteAreaGroupRepository(
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
+        services.AddSingleton<IAreaGroupReconciliationRepository>(provider => new SqliteAreaGroupReconciliationRepository(
+            () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
         services.AddSingleton<NavigationService>();
         services.AddSingleton<DataContextService>();
         services.AddSingleton<INavigationService>(provider => provider.GetRequiredService<NavigationService>());
@@ -137,7 +135,6 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<DataViewModel>();
         services.AddSingleton<AuditViewModel>();
         services.AddTransient<GroupsViewModel>();
-        services.AddTransient<DateManagementViewModel>();
         services.AddTransient<SettingsViewModel>();
         services.AddTransient<DiagnosticsViewModel>();
         return services.BuildServiceProvider();

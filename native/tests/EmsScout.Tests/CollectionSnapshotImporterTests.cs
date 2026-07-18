@@ -1,9 +1,272 @@
+using EmsScout.Application.Groups;
 using EmsScout.Infrastructure.Importing;
+using EmsScout.Infrastructure.Sqlite;
 
 namespace EmsScout.Tests;
 
 public sealed class CollectionSnapshotImporterTests
 {
+    [Fact]
+    public async Task ImportCreatesAreaGroupPendingChangesAtomically()
+    {
+        var root = TempDirectory();
+        var database = await CollectionImportDatabaseFixture.CreateMigratedAsync(
+            root,
+            ("1号", "OLD-KT", "default", "关机"));
+        var group = await CreateAreaGroupAsync(database, "导入规则组");
+        var reconciliation = new SqliteAreaGroupReconciliationRepository(() => database);
+        await reconciliation.SaveRuleAsync(new AreaGroupRuleEdit(
+            group.Id, "floor", "1号", "1F", string.Empty, "持续覆盖一层"));
+        var snapshot = CollectionSnapshotTestFixture.Write(
+            root,
+            "area-reconcile-atomic-1",
+            new SnapshotFixtureBuilding("1号", "NEW-KT"));
+
+        var report = await new CollectionSnapshotImporter().ImportAsync(new(snapshot, database, Apply: true));
+
+        var change = Assert.Single((await reconciliation.LoadAsync(group.Id)).PendingChanges);
+        Assert.Equal("add", change.Action);
+        Assert.StartsWith("duid1_", change.DeviceUid);
+        Assert.Equal(report.RunId, change.RunId);
+        Assert.Contains(report.UserDataBefore, state => state.Table == "area_group_rules" && state.Exists);
+        Assert.Contains(report.UserDataBefore, state => state.Table == "area_group_members" && state.Exists);
+        Assert.Contains(report.UserDataBefore, state => state.Table == "area_group_exceptions" && state.Exists);
+    }
+
+    [Fact]
+    public async Task PartialImportReconcilesOnlySelectedBuildings()
+    {
+        var root = TempDirectory();
+        var database = await CollectionImportDatabaseFixture.CreateMigratedAsync(
+            root,
+            ("1号", "OLD-1-KT", "default", "关机"),
+            ("2号", "OLD-2-KT", "default", "关机"));
+        var group = await CreateAreaGroupAsync(database, "部分导入组");
+        var reconciliation = new SqliteAreaGroupReconciliationRepository(() => database);
+        await reconciliation.SaveRuleAsync(new AreaGroupRuleEdit(
+            group.Id, "floor", "1号", "1F", string.Empty, "一号楼规则"));
+        var secondRule = await reconciliation.SaveRuleAsync(new AreaGroupRuleEdit(
+            group.Id, "floor", "2号", "1F", string.Empty, "二号楼规则"));
+        await reconciliation.ReconcileAsync(null, ["2号"]);
+        var secondAdd = Assert.Single((await reconciliation.LoadAsync(group.Id)).PendingChanges,
+            change => change.Building == "2号" && change.Action == "add");
+        await reconciliation.DecideChangeAsync(secondAdd.Id, AreaGroupChangeDecision.Accept, "确认二号楼成员");
+        await reconciliation.DeleteRuleAsync(secondRule.Id);
+        var snapshot = CollectionSnapshotTestFixture.Write(
+            root,
+            "area-reconcile-partial-1",
+            new SnapshotFixtureBuilding("1号", "NEW-1-KT"),
+            new SnapshotFixtureBuilding("2号", "UNUSED-2-KT"));
+
+        await new CollectionSnapshotImporter().ImportAsync(new(
+            snapshot, database, Buildings: ["1号"], Apply: true));
+        var changes = (await reconciliation.LoadAsync(group.Id)).PendingChanges;
+
+        Assert.Contains(changes, change => change.Building == "1号" && change.Action == "add");
+        Assert.DoesNotContain(changes, change => change.Building == "2号" && change.Action == "remove");
+        Assert.Contains((await reconciliation.LoadAsync(group.Id)).Members,
+            member => member.Building == "2号" && member.MemberOrigin == "rule");
+    }
+
+    [Fact]
+    public async Task ExactReplayDoesNotDuplicateAreaGroupPendingChanges()
+    {
+        var root = TempDirectory();
+        var database = await CollectionImportDatabaseFixture.CreateMigratedAsync(
+            root,
+            ("1号", "OLD-KT", "default", "关机"));
+        var group = await CreateAreaGroupAsync(database, "重放规则组");
+        var reconciliation = new SqliteAreaGroupReconciliationRepository(() => database);
+        await reconciliation.SaveRuleAsync(new AreaGroupRuleEdit(
+            group.Id, "floor", "1号", "1F", string.Empty, "持续覆盖一层"));
+        var snapshot = CollectionSnapshotTestFixture.Write(
+            root,
+            "area-reconcile-replay-1",
+            new SnapshotFixtureBuilding("1号", "NEW-KT"));
+        var importer = new CollectionSnapshotImporter();
+
+        var first = await importer.ImportAsync(new(snapshot, database, Apply: true));
+        var before = (await reconciliation.LoadAsync(group.Id)).PendingChanges;
+        var replay = await importer.ImportAsync(new(snapshot, database, Apply: true));
+        var after = (await reconciliation.LoadAsync(group.Id)).PendingChanges;
+
+        Assert.Equal(first.RunId, replay.RunId);
+        Assert.Single(before);
+        Assert.Equal(before.Select(change => change.Id), after.Select(change => change.Id));
+    }
+
+    [Fact]
+    public async Task ReconciliationFailureRollsBackImport()
+    {
+        var root = TempDirectory();
+        var database = await CollectionImportDatabaseFixture.CreateMigratedAsync(
+            root,
+            ("1号", "OLD-KT", "default", "关机"));
+        var group = await CreateAreaGroupAsync(database, "回滚规则组");
+        var reconciliation = new SqliteAreaGroupReconciliationRepository(() => database);
+        await reconciliation.SaveRuleAsync(new AreaGroupRuleEdit(
+            group.Id, "floor", "1号", "1F", string.Empty, "持续覆盖一层"));
+        var snapshot = CollectionSnapshotTestFixture.Write(
+            root,
+            "area-reconcile-rollback-1",
+            new SnapshotFixtureBuilding("1号", "NEW-KT"));
+        long runsBefore;
+        await using (var before = CollectionImportDatabaseFixture.Open(database))
+        {
+            await before.OpenAsync();
+            runsBefore = await CollectionImportDatabaseFixture.ScalarLongAsync(before, "SELECT COUNT(*) FROM collection_runs");
+        }
+
+        var importer = new CollectionSnapshotImporter(
+            reader: null,
+            migrator: null,
+            faultCheckpoint: (checkpoint, _) => checkpoint == "after_area_group_reconciliation"
+                ? ValueTask.FromException(new InvalidOperationException("forced reconciliation failure"))
+                : ValueTask.CompletedTask);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            importer.ImportAsync(new(snapshot, database, Apply: true)));
+
+        await using var verify = CollectionImportDatabaseFixture.Open(database);
+        await verify.OpenAsync();
+        Assert.Equal(1, await CollectionImportDatabaseFixture.ScalarLongAsync(
+            verify, "SELECT COUNT(*) FROM cards WHERE name='OLD-KT'"));
+        Assert.Equal(0, await CollectionImportDatabaseFixture.ScalarLongAsync(
+            verify, "SELECT COUNT(*) FROM cards WHERE name='NEW-KT'"));
+        Assert.Equal(runsBefore, await CollectionImportDatabaseFixture.ScalarLongAsync(
+            verify, "SELECT COUNT(*) FROM collection_runs"));
+        Assert.Empty((await reconciliation.LoadAsync(group.Id)).PendingChanges);
+    }
+
+    [Fact]
+    public async Task ConfirmedUidRuleMemberRefreshesManagedLocationAcrossMatchingImports()
+    {
+        var root = TempDirectory();
+        var database = await CollectionImportDatabaseFixture.CreateMigratedAsync(
+            root,
+            ("1号", "MATCH-KT", "old-page", "关机"));
+        string deviceUid;
+        await using (var connection = CollectionImportDatabaseFixture.Open(database))
+        {
+            await connection.OpenAsync();
+            deviceUid = (await CollectionImportDatabaseFixture.ScalarStringAsync(
+                connection,
+                "SELECT device_uid FROM cards WHERE name='MATCH-KT'"))!;
+        }
+
+        var group = await CreateAreaGroupAsync(database, "位置刷新规则组");
+        var reconciliation = new SqliteAreaGroupReconciliationRepository(() => database);
+        await reconciliation.SaveRuleAsync(new AreaGroupRuleEdit(
+            group.Id, "name_keyword", string.Empty, string.Empty, "MATCH", "跨位置持续匹配"));
+        await reconciliation.ReconcileAsync(null, ["1号"]);
+        var add = Assert.Single((await reconciliation.LoadAsync(group.Id)).PendingChanges);
+        await reconciliation.DecideChangeAsync(add.Id, AreaGroupChangeDecision.Accept, "用户确认备注");
+        var original = Assert.Single((await reconciliation.LoadAsync(group.Id)).Members);
+
+        var sameBuildingSnapshot = CollectionSnapshotTestFixture.Write(
+            root,
+            "member-location-same-building-1",
+            new SnapshotFixtureBuilding(
+                "1号", "MATCH-KT", "same-building-page", DeviceUid: deviceUid, Floor: 2));
+        await new CollectionSnapshotImporter().ImportAsync(new(
+            sameBuildingSnapshot, database, Apply: true));
+
+        var sameBuilding = Assert.Single((await reconciliation.LoadAsync(group.Id)).Members);
+        Assert.Equal(deviceUid, sameBuilding.DeviceUid);
+        Assert.Equal("1号", sameBuilding.Building);
+        Assert.Equal("2F", sameBuilding.FloorLabel);
+        Assert.Equal("same-building-page", sameBuilding.PageName);
+        Assert.Equal(original.GroupId, sameBuilding.GroupId);
+        Assert.Equal(original.IdentityKey, sameBuilding.IdentityKey);
+        Assert.Equal(original.MemberOrigin, sameBuilding.MemberOrigin);
+        Assert.Equal(original.Note, sameBuilding.Note);
+
+        var crossBuildingSnapshot = CollectionSnapshotTestFixture.Write(
+            root,
+            "member-location-cross-building-1",
+            new SnapshotFixtureBuilding(
+                "2号", "MATCH-KT", "cross-building-page", DeviceUid: deviceUid, Floor: 3));
+        await new CollectionSnapshotImporter().ImportAsync(new(
+            crossBuildingSnapshot, database, Apply: true));
+
+        var crossBuilding = Assert.Single((await reconciliation.LoadAsync(group.Id)).Members);
+        Assert.Equal(deviceUid, crossBuilding.DeviceUid);
+        Assert.Equal("2号", crossBuilding.Building);
+        Assert.Equal("3F", crossBuilding.FloorLabel);
+        Assert.Equal("cross-building-page", crossBuilding.PageName);
+        Assert.Equal(original.GroupId, crossBuilding.GroupId);
+        Assert.Equal(original.IdentityKey, crossBuilding.IdentityKey);
+        Assert.Equal(original.MemberOrigin, crossBuilding.MemberOrigin);
+        Assert.Equal(original.Note, crossBuilding.Note);
+    }
+
+    [Theory]
+    [InlineData("device_uid", "duid1_ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")]
+    [InlineData("identity_key", "uid:CORRUPTED")]
+    [InlineData("member_origin", "manual")]
+    [InlineData("note", "被篡改的成员备注")]
+    public async Task ImportRejectsUnexpectedProtectedMemberMutationWhileRefreshingRuleMemberLocation(
+        string protectedColumn,
+        string corruptedValue)
+    {
+        var root = TempDirectory();
+        var database = await CollectionImportDatabaseFixture.CreateMigratedAsync(
+            root,
+            ("1号", "MATCH-KT", "old-page", "关机"));
+        string deviceUid;
+        await using (var connection = CollectionImportDatabaseFixture.Open(database))
+        {
+            await connection.OpenAsync();
+            deviceUid = (await CollectionImportDatabaseFixture.ScalarStringAsync(
+                connection,
+                "SELECT device_uid FROM cards WHERE name='MATCH-KT'"))!;
+        }
+
+        var group = await CreateAreaGroupAsync(database, "成员保护规则组");
+        var reconciliation = new SqliteAreaGroupReconciliationRepository(() => database);
+        await reconciliation.SaveRuleAsync(new AreaGroupRuleEdit(
+            group.Id, "name_keyword", string.Empty, string.Empty, "MATCH", "持续匹配"));
+        await reconciliation.ReconcileAsync(null, ["1号"]);
+        var add = Assert.Single((await reconciliation.LoadAsync(group.Id)).PendingChanges);
+        await reconciliation.DecideChangeAsync(add.Id, AreaGroupChangeDecision.Accept, "用户确认备注");
+        var original = Assert.Single((await reconciliation.LoadAsync(group.Id)).Members);
+
+        await using (var connection = CollectionImportDatabaseFixture.Open(database))
+        {
+            await connection.OpenAsync();
+            var safeColumn = protectedColumn switch
+            {
+                "device_uid" or "identity_key" or "member_origin" or "note" => protectedColumn,
+                _ => throw new ArgumentOutOfRangeException(nameof(protectedColumn)),
+            };
+            var safeValue = corruptedValue.Replace("'", "''", StringComparison.Ordinal);
+            await CollectionImportDatabaseFixture.ExecuteAsync(connection, $$"""
+                CREATE TRIGGER corrupt_area_group_member_{{safeColumn}}_after_refresh
+                AFTER UPDATE OF updated_at ON area_group_members
+                BEGIN
+                    UPDATE area_group_members
+                    SET {{safeColumn}} = '{{safeValue}}'
+                    WHERE id = NEW.id;
+                END
+                """);
+        }
+        var snapshot = CollectionSnapshotTestFixture.Write(
+            root,
+            "member-protected-field-" + protectedColumn,
+            new SnapshotFixtureBuilding(
+                "1号", "MATCH-KT", "new-page", DeviceUid: deviceUid, Floor: 2));
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new CollectionSnapshotImporter().ImportAsync(new(snapshot, database, Apply: true)));
+
+        Assert.Contains("changed protected", error.Message, StringComparison.Ordinal);
+        var rolledBack = Assert.Single((await reconciliation.LoadAsync(group.Id)).Members);
+        Assert.Equal(original.DeviceUid, rolledBack.DeviceUid);
+        Assert.Equal(original.IdentityKey, rolledBack.IdentityKey);
+        Assert.Equal(original.MemberOrigin, rolledBack.MemberOrigin);
+        Assert.Equal(original.Note, rolledBack.Note);
+        Assert.Equal("old-page", rolledBack.PageName);
+    }
+
     [Fact]
     public async Task FreshApplyCreatesCurrentDatabaseAndImportsSnapshot()
     {
@@ -32,7 +295,7 @@ public sealed class CollectionSnapshotImporterTests
 
         await using var connection = CollectionImportDatabaseFixture.Open(database);
         await connection.OpenAsync();
-        Assert.Equal(5, await CollectionImportDatabaseFixture.ScalarLongAsync(connection, "PRAGMA user_version"));
+        Assert.Equal(6, await CollectionImportDatabaseFixture.ScalarLongAsync(connection, "PRAGMA user_version"));
         Assert.Equal(1, await CollectionImportDatabaseFixture.ScalarLongAsync(connection, "SELECT COUNT(*) FROM cards"));
         Assert.Equal(1, await CollectionImportDatabaseFixture.ScalarLongAsync(connection, "SELECT COUNT(*) FROM run_cards"));
         Assert.Equal(1, await CollectionImportDatabaseFixture.ScalarLongAsync(connection, "SELECT COUNT(*) FROM device_registry"));
@@ -60,7 +323,7 @@ public sealed class CollectionSnapshotImporterTests
         Assert.True(File.Exists(database));
         await using var connection = CollectionImportDatabaseFixture.Open(database);
         await connection.OpenAsync();
-        Assert.Equal(5, await CollectionImportDatabaseFixture.ScalarLongAsync(connection, "PRAGMA user_version"));
+        Assert.Equal(6, await CollectionImportDatabaseFixture.ScalarLongAsync(connection, "PRAGMA user_version"));
         Assert.Equal(0, await CollectionImportDatabaseFixture.ScalarLongAsync(connection, "SELECT COUNT(*) FROM cards"));
         Assert.Equal(0, await CollectionImportDatabaseFixture.ScalarLongAsync(connection, "SELECT COUNT(*) FROM collection_runs"));
         Assert.Equal(0, await CollectionImportDatabaseFixture.ScalarLongAsync(connection, "SELECT COUNT(*) FROM device_registry"));
@@ -495,6 +758,17 @@ public sealed class CollectionSnapshotImporterTests
             ON CONFLICT(building, floor_label) DO UPDATE SET
                 source='manual', enabled=0, note='manual floor';
             """);
+    }
+
+    private static async Task<AreaGroupRecord> CreateAreaGroupAsync(string database, string name)
+    {
+        return await new SqliteAreaGroupRepository(() => database).SaveGroupAsync(new AreaGroupEdit(
+            Id: null,
+            Name: name,
+            AreaLabel: string.Empty,
+            Description: string.Empty,
+            Priority: "重点",
+            Enabled: true));
     }
 
     private static async Task<IReadOnlyDictionary<string, long>> TableCountsAsync(string database)

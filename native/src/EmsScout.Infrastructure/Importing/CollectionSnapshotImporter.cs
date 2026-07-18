@@ -5,6 +5,7 @@ using System.Text.Encodings.Web;
 using System.Text.Json;
 using EmsScout.Application.Devices;
 using EmsScout.Infrastructure.Migrations;
+using EmsScout.Infrastructure.Sqlite;
 using Microsoft.Data.Sqlite;
 
 namespace EmsScout.Infrastructure.Importing;
@@ -20,6 +21,9 @@ public sealed class CollectionSnapshotImporter
         "manual_overrides",
         "realtime_match_overrides",
         "device_watch_rules",
+        "area_group_rules",
+        "area_group_members",
+        "area_group_exceptions",
     ];
 
     private static readonly JsonSerializerOptions CompactJson = new()
@@ -277,6 +281,14 @@ public sealed class CollectionSnapshotImporter
                 await SyncFloorCatalogAsync(
                         connection, transaction, read.Snapshot, importedBuildings, cancellationToken)
                     .ConfigureAwait(false);
+                await SqliteAreaGroupReconciliationRepository.ReconcileAsync(
+                        connection, transaction, runId, importedBuildings, cancellationToken)
+                    .ConfigureAwait(false);
+                if (faultCheckpoint is not null)
+                {
+                    await faultCheckpoint("after_area_group_reconciliation", cancellationToken).ConfigureAwait(false);
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
 
                 userDataAfterTransaction = await ReadUserDataStateAsync(connection, transaction, cancellationToken)
                     .ConfigureAwait(false);
@@ -665,7 +677,10 @@ public sealed class CollectionSnapshotImporter
                 writer.WriteStartArray();
                 await using var command = connection.CreateCommand();
                 command.Transaction = transaction;
-                command.CommandText = $"SELECT * FROM \"{table}\" ORDER BY rowid";
+                var columns = table == "area_group_members"
+                    ? "id, group_id, identity_key, device_uid, member_origin, note, created_at"
+                    : "*";
+                command.CommandText = $"SELECT {columns} FROM \"{table}\" ORDER BY rowid";
                 await using var data = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
                 while (await data.ReadAsync(cancellationToken).ConfigureAwait(false))
                 {

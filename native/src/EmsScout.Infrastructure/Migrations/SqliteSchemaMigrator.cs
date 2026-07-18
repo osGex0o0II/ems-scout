@@ -75,6 +75,13 @@ public sealed class SqliteSchemaMigrator
                             "not-required:fresh-create",
                             cancellationToken)
                         .ConfigureAwait(false);
+                    await ApplyV6AreaGroupReconciliationAsync(
+                            connection,
+                            transaction,
+                            "fresh-empty-v0",
+                            "not-required:fresh-create",
+                            cancellationToken)
+                        .ConfigureAwait(false);
                     await ExecuteAsync(
                             connection,
                             transaction,
@@ -131,7 +138,7 @@ public sealed class SqliteSchemaMigrator
             return new SchemaMigrationResult(
                 fullPath,
                 BackupPath: null,
-                AppliedVersions: [BaselineSchema.V1Version, BaselineSchema.V2Version, BaselineSchema.V3Version, BaselineSchema.V4Version, BaselineSchema.V5Version],
+                AppliedVersions: [BaselineSchema.V1Version, BaselineSchema.V2Version, BaselineSchema.V3Version, BaselineSchema.V4Version, BaselineSchema.V5Version, BaselineSchema.V6Version],
                 AppliedChanges:
                 [
                     new SchemaPendingChange(
@@ -258,6 +265,13 @@ public sealed class SqliteSchemaMigrator
                             cancellationToken)
                         .ConfigureAwait(false);
                     await ApplyV5AttentionQueueAsync(
+                            connection,
+                            transaction,
+                            lockedAudit.DatabaseShape,
+                            completedBackupPath,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    await ApplyV6AreaGroupReconciliationAsync(
                             connection,
                             transaction,
                             lockedAudit.DatabaseShape,
@@ -499,6 +513,88 @@ public sealed class SqliteSchemaMigrator
                 backupPath,
                 cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    private static async Task ApplyV6AreaGroupReconciliationAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string sourceShape,
+        string backupPath,
+        CancellationToken cancellationToken)
+    {
+        var wasPreviouslyApplied = await MigrationWasAppliedAsync(
+                connection,
+                transaction,
+                BaselineSchema.V6Version,
+                cancellationToken)
+            .ConfigureAwait(false);
+        await ExecuteAsync(connection, transaction, AreaGroupReconciliationSql.Text, cancellationToken).ConfigureAwait(false);
+        if (!wasPreviouslyApplied)
+        {
+            await ExecuteAsync(
+                connection,
+                transaction,
+                """
+                INSERT INTO monitor_groups
+                    (name, area_label, description, priority, group_kind, system_key, locked, enabled, created_at, updated_at)
+                VALUES
+                    ('公区', '公区', '按预设公区规则匹配；成员变更需在审计中确认。', '重点', 'custom', 'public', 0, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+                    ('非公区', '非公区', '按预设非公区规则匹配；成员变更需在审计中确认。', '重点', 'custom', 'non_public', 0, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(name) DO UPDATE SET
+                    description = CASE
+                        WHEN monitor_groups.description = ''
+                          OR monitor_groups.description = '规则识别的公区；可维护人工成员，用于分组统计。'
+                          OR monitor_groups.description = '规则识别的非公区；可维护人工成员，用于分组统计。'
+                          OR monitor_groups.description = '规则识别的公区；可维护人工成员，并在日期管理中设置计划。'
+                          OR monitor_groups.description = '规则识别的非公区；可维护人工成员，并在日期管理中设置计划。'
+                        THEN excluded.description
+                        ELSE monitor_groups.description
+                    END,
+                    group_kind = 'custom',
+                    system_key = excluded.system_key,
+                    locked = 0,
+                    updated_at = excluded.updated_at;
+
+                INSERT OR IGNORE INTO area_group_rules
+                    (group_id, rule_type, building, floor_label, floor_value, match_value, enabled, note, created_at, updated_at)
+                SELECT id, 'area_public', '', '', NULL, '', 1, '预设公区分类规则', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                FROM monitor_groups WHERE system_key = 'public';
+
+                INSERT OR IGNORE INTO area_group_rules
+                    (group_id, rule_type, building, floor_label, floor_value, match_value, enabled, note, created_at, updated_at)
+                SELECT id, 'area_non_public', '', '', NULL, '', 1, '预设非公区分类规则', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                FROM monitor_groups WHERE system_key = 'non_public';
+                """,
+                cancellationToken)
+            .ConfigureAwait(false);
+        }
+        await RecordMigrationAsync(
+                connection,
+                transaction,
+                BaselineSchema.V6Version,
+                "v6-area-group-reconciliation",
+                sourceShape,
+                backupPath,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task<bool> MigrationWasAppliedAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        int version,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, transaction, "ems_schema_migrations", cancellationToken).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT 1 FROM ems_schema_migrations WHERE version = $version LIMIT 1";
+        command.Parameters.AddWithValue("$version", version);
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null;
     }
 
     private static async Task ApplyAdditiveColumnsAsync(

@@ -29,7 +29,18 @@
                 <Button
                     Click="StartTask_Click"
                     IsEnabled="{x:Bind ViewModel.CanStartTask, Mode=OneWay}"
-                    Style="{StaticResource PrimaryToolbarButtonStyle}">
+                    Style="{StaticResource PrimaryToolbarButtonStyle}"
+                    Visibility="{x:Bind ViewModel.StartPrimaryButtonVisibility, Mode=OneWay}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon FontSize="14" Glyph="&#xE768;" />
+                        <TextBlock Text="{x:Bind ViewModel.StartButtonText, Mode=OneWay}" />
+                    </StackPanel>
+                </Button>
+                <Button
+                    Click="StartTask_Click"
+                    IsEnabled="{x:Bind ViewModel.CanStartTask, Mode=OneWay}"
+                    Style="{StaticResource ToolbarButtonStyle}"
+                    Visibility="{x:Bind ViewModel.StartSecondaryButtonVisibility, Mode=OneWay}">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon FontSize="14" Glyph="&#xE768;" />
                         <TextBlock Text="{x:Bind ViewModel.StartButtonText, Mode=OneWay}" />
@@ -80,8 +91,20 @@
                 <Button
                     Grid.Column="2"
                     Command="{x:Bind ViewModel.ToggleCollectionBrowserCommand}"
+                    Style="{StaticResource PrimaryToolbarButtonStyle}"
+                    ToolTipService.ToolTip="{x:Bind ViewModel.CollectionBrowserActionToolTip, Mode=OneWay}"
+                    Visibility="{x:Bind ViewModel.CollectionBrowserPrimaryButtonVisibility, Mode=OneWay}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon FontSize="14" Glyph="{x:Bind ViewModel.CollectionBrowserActionGlyph, Mode=OneWay}" />
+                        <TextBlock Text="{x:Bind ViewModel.CollectionBrowserActionText, Mode=OneWay}" />
+                    </StackPanel>
+                </Button>
+                <Button
+                    Grid.Column="2"
+                    Command="{x:Bind ViewModel.ToggleCollectionBrowserCommand}"
                     Style="{StaticResource ToolbarButtonStyle}"
-                    ToolTipService.ToolTip="{x:Bind ViewModel.CollectionBrowserActionToolTip, Mode=OneWay}">
+                    ToolTipService.ToolTip="{x:Bind ViewModel.CollectionBrowserActionToolTip, Mode=OneWay}"
+                    Visibility="{x:Bind ViewModel.CollectionBrowserSecondaryButtonVisibility, Mode=OneWay}">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon FontSize="14" Glyph="{x:Bind ViewModel.CollectionBrowserActionGlyph, Mode=OneWay}" />
                         <TextBlock Text="{x:Bind ViewModel.CollectionBrowserActionText, Mode=OneWay}" />
@@ -98,15 +121,19 @@
 
         <Grid x:Name="WorkflowGrid" Grid.Row="2" ColumnSpacing="14" RowSpacing="0">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="SetupColumn" Width="0.9*" />
-                <ColumnDefinition x:Name="ExecutionColumn" Width="1.35*" />
+                <ColumnDefinition x:Name="SetupColumn" MinWidth="0" Width="0.9*" />
+                <ColumnDefinition x:Name="ExecutionColumn" MinWidth="0" Width="1.35*" />
             </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
                 <RowDefinition x:Name="SetupRow" Height="*" />
                 <RowDefinition x:Name="ExecutionRow" Height="0" />
             </Grid.RowDefinitions>
 
-            <ScrollViewer x:Name="SetupPanel" VerticalScrollBarVisibility="Auto">
+            <ScrollViewer
+                x:Name="SetupPanel"
+                HorizontalScrollBarVisibility="Disabled"
+                HorizontalScrollMode="Disabled"
+                VerticalScrollBarVisibility="Auto">
                 <StackPanel Spacing="12">
                     <Border Style="{StaticResource WorkbenchCardStyle}">
                         <StackPanel Spacing="10">
@@ -143,7 +170,8 @@
                             <TextBlock
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                 Text="{x:Bind ViewModel.CurrentDataImpactText, Mode=OneWay}"
-                                TextWrapping="WrapWholeWords" />
+                                Visibility="{x:Bind ViewModel.CurrentDataImpactVisibility, Mode=OneWay}"
+                                TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
 
@@ -292,7 +320,9 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
-                <Border Style="{StaticResource WorkbenchCardStyle}">
+                <Border
+                    Style="{StaticResource WorkbenchCardStyle}"
+                    Visibility="{x:Bind ViewModel.TaskProgressVisibility, Mode=OneWay}">
                     <StackPanel Spacing="10">
                         <Grid ColumnSpacing="12">
                             <Grid.ColumnDefinitions>
@@ -365,16 +395,60 @@
                     </StackPanel>
                 </Border>
 
-                <Border Grid.Row="1" Style="{StaticResource WorkbenchCardStyle}">
+                <Border
+                    Grid.Row="{x:Bind ViewModel.LogsGridRow, Mode=OneWay}"
+                    Grid.RowSpan="{x:Bind ViewModel.LogsGridRowSpan, Mode=OneWay}"
+                    Style="{StaticResource WorkbenchCardStyle}">
                     <Grid RowSpacing="8">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" />
                         </Grid.RowDefinitions>
-                        <StackPanel Spacing="2">
-                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="运行记录" />
-                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="失败时保留最后 300 条记录用于排查" />
-                        </StackPanel>
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock Style="{StaticResource SectionTitleStyle}" Text="运行记录" />
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="失败时保留最后 300 条记录用于排查" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+                                <Button
+                                    AutomationProperties.Name="清空运行记录"
+                                    Command="{x:Bind ViewModel.ClearLogsCommand}"
+                                    IsEnabled="{x:Bind ViewModel.CanClearLogs, Mode=OneWay}"
+                                    Style="{StaticResource ToolbarButtonStyle}"
+                                    ToolTipService.ToolTip="清空运行记录"
+                                    Width="32"
+                                    Height="32"
+                                    Padding="0">
+                                    <FontIcon FontSize="14" Glyph="&#xE74D;" />
+                                </Button>
+                                <Button
+                                    AutomationProperties.Name="展开运行记录"
+                                    Command="{x:Bind ViewModel.ToggleLogsExpandedCommand}"
+                                    Style="{StaticResource ToolbarButtonStyle}"
+                                    ToolTipService.ToolTip="展开运行记录"
+                                    Visibility="{x:Bind ViewModel.LogsExpandButtonVisibility, Mode=OneWay}"
+                                    Width="32"
+                                    Height="32"
+                                    Padding="0">
+                                    <FontIcon FontSize="14" Glyph="&#xE740;" />
+                                </Button>
+                                <Button
+                                    AutomationProperties.Name="还原任务进度布局"
+                                    Command="{x:Bind ViewModel.ToggleLogsExpandedCommand}"
+                                    Style="{StaticResource ToolbarButtonStyle}"
+                                    ToolTipService.ToolTip="还原任务进度布局"
+                                    Visibility="{x:Bind ViewModel.LogsRestoreButtonVisibility, Mode=OneWay}"
+                                    Width="32"
+                                    Height="32"
+                                    Padding="0">
+                                    <FontIcon FontSize="14" Glyph="&#xE73F;" />
+                                </Button>
+                            </StackPanel>
+                        </Grid>
                         <ListView
                             x:Name="LogsList"
                             Grid.Row="1"

@@ -145,8 +145,9 @@
                         <ComboBox Grid.Row="1" Header="楼栋" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.BuildingOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedBuilding, Mode=TwoWay}" SelectionChanged="BuildingFilter_SelectionChanged" />
                         <ComboBox Grid.Row="1" Grid.Column="1" Header="座号" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.ZuoOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedZuo, Mode=TwoWay}" IsEnabled="{x:Bind ViewModel.CanFilterByZuo, Mode=OneWay}" ToolTipService.ToolTip="仅适用于5号、6号楼" />
                         <ComboBox Grid.Row="1" Grid.Column="2" Header="楼层" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.FloorOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedFloor, Mode=TwoWay}" SelectionChanged="FloorFilter_SelectionChanged" />
-                        <ComboBox Grid.Row="1" Grid.Column="3" Header="页面" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.PageNameOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedPageName, Mode=TwoWay}" />
-                        <TextBox Grid.Row="1" Grid.Column="4" Grid.ColumnSpan="2" Header="设备名" PlaceholderText="输入后按 Enter 查询" KeyDown="DeviceName_KeyDown" Text="{x:Bind ViewModel.DeviceNameText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <ComboBox Grid.Row="1" Grid.Column="3" Header="子区" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.SubAreaOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedSubArea, Mode=TwoWay}" SelectionChanged="SubAreaFilter_SelectionChanged" />
+                        <ComboBox Grid.Row="1" Grid.Column="4" Header="页面" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.PageNameOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedPageName, Mode=TwoWay}" />
+                        <TextBox Grid.Row="1" Grid.Column="5" Header="设备名" PlaceholderText="输入后按 Enter 查询" KeyDown="DeviceName_KeyDown" Text="{x:Bind ViewModel.DeviceNameText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                         <TextBlock Grid.Row="2" Grid.ColumnSpan="6" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="状态筛选" />
                         <ComboBox Grid.Row="3" Header="区域" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.AreaOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedArea, Mode=TwoWay}" />
                         <ComboBox Grid.Row="3" Grid.Column="1" Header="开关机状态" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.CommunicationOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedCommunication, Mode=TwoWay}" />
@@ -220,7 +221,8 @@
                             <TextBlock
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                                 Text="{x:Bind ViewModel.ActiveFilterSummary, Mode=OneWay}"
-                                TextTrimming="CharacterEllipsis"
+                                MaxLines="3"
+                                TextWrapping="WrapWholeWords"
                                 ToolTipService.ToolTip="{x:Bind ViewModel.ActiveFilterSummary, Mode=OneWay}" />
                         </StackPanel>
                         <Button
@@ -403,12 +405,9 @@
                                 <TextBlock Text="{x:Bind ViewModel.SelectedDevice.RealtimeModbus, Mode=OneWay, FallbackValue=--}" TextWrapping="WrapWholeWords" />
                             </StackPanel>
                             <StackPanel Spacing="5">
-                                <TextBlock FontWeight="SemiBold" Text="质量与关注" />
+                                <TextBlock FontWeight="SemiBold" Text="质量与审计" />
                                 <TextBlock Text="{x:Bind ViewModel.SelectedDevice.HealthLabel, Mode=OneWay, FallbackValue=--}" />
                                 <TextBlock Text="{x:Bind ViewModel.SelectedDevice.IssueSummary, Mode=OneWay, FallbackValue=--}" TextWrapping="WrapWholeWords" />
-                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.WatchLabel, Mode=OneWay, FallbackValue=--}" />
-                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.WatchSummary, Mode=OneWay, FallbackValue=--}" TextWrapping="WrapWholeWords" />
-                                <TextBlock Text="{x:Bind ViewModel.SelectedDevice.WatchEvidence, Mode=OneWay, FallbackValue=--}" TextWrapping="WrapWholeWords" />
                             </StackPanel>
                             <StackPanel Spacing="5">
                                 <TextBlock FontWeight="SemiBold" Text="数据上下文" />

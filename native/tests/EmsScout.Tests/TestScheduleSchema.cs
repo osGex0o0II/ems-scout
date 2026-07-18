@@ -64,7 +64,7 @@ internal static class TestScheduleSchema
             CREATE UNIQUE INDEX ux_schedule_members_area_item ON schedule_group_members(schedule_group_id, area_group_item_id) WHERE area_group_item_id IS NOT NULL;
             CREATE INDEX idx_schedule_members_area_item ON schedule_group_members(area_group_item_id);
             CREATE UNIQUE INDEX ux_schedule_intervals_window ON schedule_intervals(rule_id, start_time, end_time);
-            PRAGMA user_version = 5;
+            PRAGMA user_version = 6;
             """;
         command.ExecuteNonQuery();
     }

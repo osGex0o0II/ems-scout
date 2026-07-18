@@ -27,16 +27,26 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
         {
             var members = await LoadCurrentRuleMembersAsync(connection, rule.GroupId, cancellationToken).ConfigureAwait(false);
             var samples = await LoadRuleSamplesAsync(connection, rule.GroupId, cancellationToken).ConfigureAwait(false);
-            var ruleIncidents = DetectIncidents(rule, samples).ToList();
-            incidents.AddRange(ruleIncidents);
+            var currentTargets = members
+                .GroupBy(member => member.IdentityKey, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.OrderBy(member => member.CardId).First().Key,
+                    StringComparer.OrdinalIgnoreCase);
+            var detectedIncidents = DetectIncidents(rule, samples)
+                .Select(detection => currentTargets.TryGetValue(detection.IdentityKey, out var currentTarget)
+                    ? detection with { Incident = detection.Incident with { Device = currentTarget } }
+                    : detection)
+                .ToList();
+            incidents.AddRange(detectedIncidents.Select(item => item.Incident));
 
-            var abnormalKeys = ruleIncidents
-                .GroupBy(incident => incident.Device.Key, StringComparer.OrdinalIgnoreCase)
+            var abnormalKeys = detectedIncidents
+                .GroupBy(item => item.IdentityKey, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
 
             foreach (var member in members)
             {
-                states[member.Key] = abnormalKeys.TryGetValue(member.Key, out var incident)
+                states[member.RowKey] = abnormalKeys.TryGetValue(member.IdentityKey, out var detection)
                     ? new DeviceWatchState(
                         IsWatched: true,
                         IsAbnormal: true,
@@ -45,8 +55,9 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
                         RuleName: rule.Name,
                         StartAt: rule.StartAt,
                         EndAt: rule.EndAt,
-                        Summary: "关注异常：" + incident.Summary,
-                        Evidence: incident.Evidence)
+                        Summary: "关注异常：" + detection.Incident.Summary,
+                        Evidence: detection.Incident.Evidence,
+                        IdentityKey: member.IdentityKey)
                     : new DeviceWatchState(
                         IsWatched: true,
                         IsAbnormal: false,
@@ -56,12 +67,13 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
                         StartAt: rule.StartAt,
                         EndAt: rule.EndAt,
                         Summary: "关注正常",
-                        Evidence: "关注窗口内未检测到开关变化");
+                        Evidence: "关注窗口内未检测到开关变化",
+                        IdentityKey: member.IdentityKey);
             }
 
             completedRules.Add(rule with
             {
-                WatchedDevices = members.Select(member => member.Key).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+                WatchedDevices = members.Select(member => member.IdentityKey).Distinct(StringComparer.OrdinalIgnoreCase).Count(),
                 AbnormalDevices = abnormalKeys.Count,
             });
         }
@@ -288,25 +300,32 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
         return rows;
     }
 
-    private static async Task<IReadOnlyList<DeviceWatchKey>> LoadCurrentRuleMembersAsync(
+    private static async Task<IReadOnlyList<WatchMember>> LoadCurrentRuleMembersAsync(
         SqliteConnection connection,
         long groupId,
         CancellationToken cancellationToken)
     {
+        var cardDeviceUidSql = await SqliteAreaGroupRepository.ColumnExistsAsync(
+            connection, "cards", "device_uid", cancellationToken).ConfigureAwait(false)
+            ? "c.device_uid"
+            : "NULL";
         await using var command = connection.CreateCommand();
         command.CommandText = $"""
-            SELECT s.building, s.floor, s.text AS sub_area, p.page_name, c.name
+            SELECT c.id AS card_id, s.building, s.floor, s.text AS sub_area, p.page_name, c.name,
+                   {cardDeviceUidSql} AS device_uid
             FROM cards c
             JOIN pages p ON p.id = c.page_id
             JOIN sub_areas s ON s.id = p.sub_area_id
-            WHERE {SqliteAreaGroupRepository.CustomGroupExistsSql()}
+            WHERE {SqliteAreaGroupRepository.CustomGroupExistsSql(cardDeviceUidSql)}
             ORDER BY s.building, s.floor, s.text, p.page_name, c.name
             """;
         command.Parameters.AddWithValue("$group_id", groupId);
-        var rows = new Dictionary<string, DeviceWatchKey>(StringComparer.OrdinalIgnoreCase);
+        var rows = new List<WatchMember>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
+            var deviceUid = SqliteValueReader.ReadString(reader, "device_uid");
+            var cardId = reader.GetInt64(reader.GetOrdinal("card_id"));
             var key = new DeviceWatchKey(
                 SqliteValueReader.ReadString(reader, "building"),
                 DeviceFloorLabelFormatter.Format(
@@ -314,11 +333,14 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
                     SqliteValueReader.ReadString(reader, "sub_area")),
                 SqliteValueReader.ReadString(reader, "sub_area"),
                 SqliteValueReader.ReadString(reader, "page_name"),
-                SqliteValueReader.ReadString(reader, "name"));
-            rows[key.Key] = key;
+                SqliteValueReader.ReadString(reader, "name"),
+                deviceUid,
+                cardId);
+            var identityKey = PhysicalIdentityKey(deviceUid, key);
+            rows.Add(new WatchMember(cardId, DeviceWatchKey.RowKeyFor(cardId), key, identityKey));
         }
 
-        return rows.Values.ToList();
+        return rows;
     }
 
     private static async Task<IReadOnlyList<WatchSample>> LoadRuleSamplesAsync(
@@ -326,10 +348,16 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
         long groupId,
         CancellationToken cancellationToken)
     {
+        var runCardDeviceUidSql = await SqliteAreaGroupRepository.ColumnExistsAsync(
+            connection, "run_cards", "device_uid", cancellationToken).ConfigureAwait(false)
+            ? "rc.device_uid"
+            : "NULL";
         await using var command = connection.CreateCommand();
         command.CommandText = $"""
-            SELECT cr.id AS run_id, cr.completed_at, rsa.building, rsa.floor, rsa.text AS sub_area,
-                   rp.page_name, rc.name, rc.switch, rc.comm
+            SELECT rc.id AS observation_id, cr.id AS run_id, cr.completed_at,
+                   rsa.building, rsa.floor, rsa.text AS sub_area,
+                   rp.page_name, rc.name, rc.switch, rc.comm,
+                   {runCardDeviceUidSql} AS device_uid
             FROM collection_runs cr
             JOIN run_cards rc ON rc.run_id = cr.id
             JOIN run_pages rp ON rp.id = rc.run_page_id
@@ -339,31 +367,42 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
                 SELECT 1
                 FROM monitor_group_items mgi
                 WHERE mgi.group_id = $group_id
-                  AND mgi.building = rsa.building
                   AND (
                     (
                       mgi.target_type = 'device'
-                      AND mgi.card_name = rc.name
+                      AND NULLIF(TRIM(mgi.device_uid), '') IS NOT NULL
+                      AND NULLIF(TRIM({runCardDeviceUidSql}), '') COLLATE NOCASE =
+                          NULLIF(TRIM(mgi.device_uid), '') COLLATE NOCASE
+                    )
+                    OR (
+                      mgi.building = rsa.building
                       AND (
-                        (mgi.floor_value IS NULL AND IFNULL(mgi.sub_area_text, '') = '')
+                        (
+                          mgi.target_type = 'device'
+                          AND NULLIF(TRIM(mgi.device_uid), '') IS NULL
+                          AND mgi.card_name = rc.name
+                          AND (
+                            (mgi.floor_value IS NULL AND IFNULL(mgi.sub_area_text, '') = '')
+                            OR (
+                              (mgi.floor_value IS NULL OR ABS(COALESCE(rsa.floor, -999999) - COALESCE(mgi.floor_value, -999998)) < 0.001)
+                              AND (IFNULL(mgi.sub_area_text, '') = '' OR IFNULL(mgi.sub_area_text, '') = IFNULL(rsa.text, ''))
+                            )
+                          )
+                        )
                         OR (
-                          (mgi.floor_value IS NULL OR ABS(COALESCE(rsa.floor, -999999) - COALESCE(mgi.floor_value, -999998)) < 0.001)
-                          AND (IFNULL(mgi.sub_area_text, '') = '' OR IFNULL(mgi.sub_area_text, '') = IFNULL(rsa.text, ''))
+                          mgi.target_type = 'sub_area'
+                          AND ABS(COALESCE(rsa.floor, -999999) - COALESCE(mgi.floor_value, -999998)) < 0.001
+                          AND IFNULL(mgi.sub_area_text, '') = IFNULL(rsa.text, '')
+                        )
+                        OR (
+                          mgi.target_type = 'floor'
+                          AND ABS(COALESCE(rsa.floor, -999999) - COALESCE(mgi.floor_value, -999998)) < 0.001
                         )
                       )
                     )
-                    OR (
-                      mgi.target_type = 'sub_area'
-                      AND ABS(COALESCE(rsa.floor, -999999) - COALESCE(mgi.floor_value, -999998)) < 0.001
-                      AND IFNULL(mgi.sub_area_text, '') = IFNULL(rsa.text, '')
-                    )
-                    OR (
-                      mgi.target_type = 'floor'
-                      AND ABS(COALESCE(rsa.floor, -999999) - COALESCE(mgi.floor_value, -999998)) < 0.001
-                    )
                   )
               )
-            ORDER BY rsa.building, rsa.floor, rsa.text, rp.page_name, rc.name, datetime(cr.completed_at), cr.id
+            ORDER BY datetime(cr.completed_at), cr.id, rc.id
             """;
         command.Parameters.AddWithValue("$group_id", groupId);
         var rows = new List<WatchSample>();
@@ -379,22 +418,29 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
                 SqliteValueReader.ReadString(reader, "page_name"),
                 SqliteValueReader.ReadString(reader, "name"));
             rows.Add(new WatchSample(
+                ObservationId: reader.GetInt64(reader.GetOrdinal("observation_id")),
                 RunId: reader.GetInt64(reader.GetOrdinal("run_id")),
                 CompletedAt: ReadDateTimeOffset(reader, "completed_at"),
                 Key: key,
+                IdentityKey: PhysicalIdentityKey(SqliteValueReader.ReadString(reader, "device_uid"), key),
                 State: NormalizePowerState(SqliteValueReader.ReadString(reader, "switch"), SqliteValueReader.ReadString(reader, "comm"))));
         }
 
         return rows;
     }
 
-    private static IEnumerable<DeviceWatchIncident> DetectIncidents(
+    private static IEnumerable<WatchIncidentDetection> DetectIncidents(
         DeviceWatchRule rule,
         IReadOnlyList<WatchSample> samples)
     {
-        foreach (var group in samples
-                     .Where(sample => sample.State is "ON" or "OFF")
-                     .GroupBy(sample => sample.Key.Key, StringComparer.OrdinalIgnoreCase))
+        var canonicalSamples = samples
+            .Where(sample => sample.State is "ON" or "OFF")
+            .GroupBy(
+                sample => $"{sample.IdentityKey}|run:{sample.RunId}",
+                StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.OrderBy(sample => sample.ObservationId).First());
+        foreach (var group in canonicalSamples
+                     .GroupBy(sample => sample.IdentityKey, StringComparer.OrdinalIgnoreCase))
         {
             WatchSample? previous = null;
             foreach (var sample in group.OrderBy(item => item.CompletedAt).ThenBy(item => item.RunId))
@@ -412,17 +458,19 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
 
                 if (previous is not null && !string.Equals(previous.State, sample.State, StringComparison.OrdinalIgnoreCase))
                 {
-                    yield return new DeviceWatchIncident(
-                        RuleId: rule.Id,
-                        GroupId: rule.GroupId,
-                        GroupName: rule.GroupName,
-                        Device: sample.Key,
-                        PreviousState: previous.State,
-                        CurrentState: sample.State,
-                        PreviousAt: previous.CompletedAt,
-                        CurrentAt: sample.CompletedAt,
-                        PreviousRunId: previous.RunId,
-                        CurrentRunId: sample.RunId);
+                    yield return new WatchIncidentDetection(
+                        group.Key,
+                        new DeviceWatchIncident(
+                            RuleId: rule.Id,
+                            GroupId: rule.GroupId,
+                            GroupName: rule.GroupName,
+                            Device: sample.Key,
+                            PreviousState: previous.State,
+                            CurrentState: sample.State,
+                            PreviousAt: previous.CompletedAt,
+                            CurrentAt: sample.CompletedAt,
+                            PreviousRunId: previous.RunId,
+                            CurrentRunId: sample.RunId));
                 }
 
                 previous = sample;
@@ -446,6 +494,11 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
         };
     }
 
+    private static string PhysicalIdentityKey(string deviceUid, DeviceWatchKey naturalKey) =>
+        string.IsNullOrWhiteSpace(deviceUid)
+            ? naturalKey.Key
+            : "uid:" + deviceUid.Trim();
+
     private static DateTimeOffset ReadDateTimeOffset(SqliteDataReader reader, string column)
     {
         var value = SqliteValueReader.ReadString(reader, column);
@@ -459,8 +512,14 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
     }
 
     private sealed record WatchSample(
+        long ObservationId,
         long RunId,
         DateTimeOffset CompletedAt,
         DeviceWatchKey Key,
+        string IdentityKey,
         string State);
+
+    private sealed record WatchMember(long CardId, string RowKey, DeviceWatchKey Key, string IdentityKey);
+
+    private sealed record WatchIncidentDetection(string IdentityKey, DeviceWatchIncident Incident);
 }
