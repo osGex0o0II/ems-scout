@@ -100,6 +100,8 @@ public sealed class WindowsPackagingWorkflowTests
         Assert.Contains("Validate packaging PowerShell syntax", workflow);
         Assert.Contains("System.Management.Automation.Language.Parser", workflow);
         Assert.Contains("scripts/verify-msix-signature.ps1", workflow);
+        Assert.Contains("UnitTestResult", workflow);
+        Assert.Contains("::error title=Native test failed::", workflow);
         Assert.Contains("steps.test_signing.outputs.thumbprint", workflow);
         Assert.Contains("-PackageCertificateThumbprint", workflow);
         Assert.Contains("test-msix-install.ps1", workflow);
