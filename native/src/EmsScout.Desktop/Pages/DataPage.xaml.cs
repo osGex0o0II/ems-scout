@@ -55,6 +55,11 @@ public sealed partial class DataPage : Page
         await ViewModel.ApplyFloorSelectionAsync();
     }
 
+    private async void SubAreaFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        await ViewModel.ApplySubAreaSelectionAsync();
+    }
+
     private async void ResetFilters_Click(object sender, RoutedEventArgs e)
     {
         await ViewModel.ResetFiltersAsync();

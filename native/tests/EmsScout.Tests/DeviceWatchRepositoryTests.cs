@@ -1,3 +1,4 @@
+using EmsScout.Application.Devices;
 using EmsScout.Application.Groups;
 using EmsScout.Application.Watch;
 using EmsScout.Infrastructure.Sqlite;
@@ -415,6 +416,269 @@ public sealed class DeviceWatchRepositoryTests
         Assert.Equal(1, evaluation.AbnormalDevices);
         var row = Assert.Single(abnormal.Rows, row => row.Name == "DUP-KT");
         Assert.Equal("3F C", row.SubArea);
+    }
+
+    [Fact]
+    public async Task ModernUidWatchDeduplicatesCurrentObservationsAndFollowsHistoricalMoves()
+    {
+        var databasePath = CreateDatabase();
+        using (var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadWrite"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                ALTER TABLE cards ADD COLUMN device_uid TEXT;
+                ALTER TABLE run_cards ADD COLUMN device_uid TEXT;
+
+                UPDATE cards
+                SET name = 'CURRENT-PRIMARY-KT', device_uid = 'uid-focus'
+                WHERE id = 1;
+                INSERT INTO pages (id, sub_area_id, page_name, layout)
+                VALUES (20, 2, 'current-second-page', 'grid');
+                INSERT INTO cards
+                    (id, page_id, name, switch, mode, indoor, set_temp, fan, indicator, comm, device_uid)
+                VALUES
+                    (20, 20, 'CURRENT-SECONDARY-KT', 'ON', '制冷', '26', '24', '中', 'red.png', '开机', 'uid-focus');
+
+                UPDATE run_cards SET name = 'HISTORY-OLD-KT', device_uid = 'uid-focus' WHERE id = 1;
+                UPDATE run_cards SET name = 'HISTORY-MOVED-KT', device_uid = 'uid-focus' WHERE id = 2;
+                UPDATE run_cards SET device_uid = 'uid-focus' WHERE id = 3;
+                UPDATE run_sub_areas SET building = '2号', floor = 2, text = '2F MOVED' WHERE id = 2;
+                UPDATE run_pages SET page_name = 'history-moved-page' WHERE id = 2;
+
+                INSERT INTO run_sub_areas (id, run_id, building, sub_idx, floor, text, x, y)
+                VALUES
+                    (20, 1, '1号', 1, 1, '1F A', 100, 100),
+                    (21, 2, '1号', 1, 1, '1F A', 100, 100);
+                INSERT INTO run_pages (id, run_id, run_sub_area_id, page_name, layout)
+                VALUES
+                    (20, 1, 20, 'default', 'grid'),
+                    (21, 2, 21, 'default', 'grid');
+                INSERT INTO run_cards
+                    (id, run_id, run_page_id, name, switch, mode, indoor, set_temp, fan, indicator, comm, device_uid)
+                VALUES
+                    (20, 1, 20, 'CURRENT-PRIMARY-KT', 'OFF', '制冷', '26', '24', '中', 'green.png', '关机', 'uid-other'),
+                    (21, 2, 21, 'CURRENT-PRIMARY-KT', 'ON', '制冷', '26', '24', '中', 'red.png', '开机', 'uid-other');
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        var groups = new SqliteAreaGroupRepository(() => databasePath);
+        var watch = new SqliteDeviceWatchRepository(() => databasePath);
+        var devices = new SqliteDeviceReadRepository(() => databasePath, watchRepository: watch);
+        var group = await groups.SaveGroupAsync(new AreaGroupEdit(
+            null, "UID 关注", "UID", "跟随物理设备", "重点", true));
+        await groups.SaveItemAsync(new AreaGroupItemEdit(
+            group.Id, "device", "1号", "1F", "1F A", "CURRENT-PRIMARY-KT", string.Empty, DeviceUid: "uid-focus"));
+        await watch.SaveRuleAsync(new DeviceWatchEdit(
+            null,
+            group.Id,
+            "UID 关注",
+            DateTimeOffset.Parse("2026-07-02T00:00:00Z"),
+            DateTimeOffset.Parse("2026-07-02T12:00:00Z"),
+            true,
+            string.Empty));
+
+        var evaluation = await watch.EvaluateAsync(new DeviceWatchQuery(GroupId: group.Id));
+
+        var rule = Assert.Single(evaluation.Rules);
+        Assert.Equal(1, rule.WatchedDevices);
+        Assert.Equal(1, rule.AbnormalDevices);
+        Assert.Equal(1, evaluation.WatchedDevices);
+        Assert.Equal(1, evaluation.AbnormalDevices);
+        Assert.Equal(2, evaluation.DeviceStates.Count);
+        Assert.Contains(DeviceWatchKey.RowKeyFor(1), evaluation.DeviceStates.Keys);
+        Assert.Contains(DeviceWatchKey.RowKeyFor(20), evaluation.DeviceStates.Keys);
+        Assert.All(evaluation.DeviceStates.Values, state => Assert.True(state.IsAbnormal));
+        var incident = Assert.Single(evaluation.Incidents);
+        Assert.Equal("1号", incident.Device.Building);
+        Assert.Equal("1F", incident.Device.FloorLabel);
+        Assert.Equal("1F A", incident.Device.SubArea);
+        Assert.Equal("default", incident.Device.PageName);
+        Assert.Equal("CURRENT-PRIMARY-KT", incident.Device.Name);
+        Assert.Equal(1, incident.PreviousRunId);
+        Assert.Equal(2, incident.CurrentRunId);
+        Assert.Equal("OFF", incident.PreviousState);
+        Assert.Equal("ON", incident.CurrentState);
+        Assert.Contains("#1", incident.Evidence);
+        Assert.Contains("#2", incident.Evidence);
+
+        var navigated = await devices.SearchAsync(new DeviceQuery(
+            SearchText: incident.Device.Name,
+            Building: incident.Device.Building,
+            Floor: incident.Device.FloorLabel,
+            SubArea: incident.Device.SubArea,
+            PageName: incident.Device.PageName));
+
+        var currentTarget = Assert.Single(navigated.Rows);
+        Assert.Equal(1, currentTarget.Id);
+        Assert.Equal("CURRENT-PRIMARY-KT", currentTarget.Name);
+
+        using (var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadWrite"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = "DELETE FROM cards WHERE device_uid = 'uid-focus'";
+            command.ExecuteNonQuery();
+        }
+
+        var fallbackIncident = Assert.Single(
+            (await watch.EvaluateAsync(new DeviceWatchQuery(GroupId: group.Id))).Incidents);
+        Assert.Equal("2号", fallbackIncident.Device.Building);
+        Assert.Equal("2F MOVED", fallbackIncident.Device.SubArea);
+        Assert.Equal("HISTORY-MOVED-KT", fallbackIncident.Device.Name);
+    }
+
+    [Fact]
+    public async Task CurrentRowsWithIdenticalNaturalFieldsRemainDistinctByPhysicalUid()
+    {
+        var databasePath = CreateDatabase();
+        using (var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadWrite"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                ALTER TABLE cards ADD COLUMN device_uid TEXT;
+                ALTER TABLE run_cards ADD COLUMN device_uid TEXT;
+                UPDATE cards SET name = 'COLLISION-KT', device_uid = 'uid-b' WHERE id = 1;
+                INSERT INTO cards
+                    (id, page_id, name, switch, mode, indoor, set_temp, fan, indicator, comm, device_uid)
+                VALUES
+                    (20, 1, 'COLLISION-KT', 'OFF', '制冷', '25', '24', '中', 'green.png', '关机', 'uid-c');
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        var groups = new SqliteAreaGroupRepository(() => databasePath);
+        var watch = new SqliteDeviceWatchRepository(() => databasePath);
+        var group = await groups.SaveGroupAsync(new AreaGroupEdit(
+            null, "同位同名 UID", "UID", "两个物理设备", "重点", true));
+        await groups.SaveItemAsync(new AreaGroupItemEdit(
+            group.Id, "device", "1号", "1F", "1F A", "COLLISION-KT", string.Empty, DeviceUid: "uid-b"));
+        await groups.SaveItemAsync(new AreaGroupItemEdit(
+            group.Id, "device", "1号", "1F", "1F A", "COLLISION-KT", string.Empty, DeviceUid: "uid-c"));
+        await watch.SaveRuleAsync(new DeviceWatchEdit(
+            null,
+            group.Id,
+            "同位同名 UID",
+            DateTimeOffset.Parse("2026-07-02T00:00:00Z"),
+            DateTimeOffset.Parse("2026-07-02T12:00:00Z"),
+            true,
+            string.Empty));
+
+        var evaluation = await watch.EvaluateAsync(new DeviceWatchQuery(GroupId: group.Id));
+
+        Assert.Equal(2, Assert.Single(evaluation.Rules).WatchedDevices);
+        Assert.Equal(2, evaluation.WatchedDevices);
+        Assert.Equal(2, evaluation.DeviceStates.Count);
+        Assert.All(evaluation.DeviceStates.Values, state => Assert.True(state.IsWatched));
+        Assert.Equal(
+            ["uid:uid-b", "uid:uid-c"],
+            evaluation.DeviceStates.Values.Select(state => state.IdentityKey).Order().ToArray());
+    }
+
+    [Fact]
+    public async Task DeviceReadAttachesUidWatchOnlyToMatchingCurrentCardRow()
+    {
+        var databasePath = CreateDatabase();
+        using (var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadWrite"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                ALTER TABLE cards ADD COLUMN device_uid TEXT;
+                ALTER TABLE run_cards ADD COLUMN device_uid TEXT;
+                UPDATE cards SET name = 'COLLISION-KT', device_uid = 'uid-b' WHERE id = 1;
+                INSERT INTO cards
+                    (id, page_id, name, switch, mode, indoor, set_temp, fan, indicator, comm, device_uid)
+                VALUES
+                    (20, 1, 'COLLISION-KT', 'OFF', '制冷', '25', '24', '中', 'green.png', '关机', 'uid-c');
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        var groups = new SqliteAreaGroupRepository(() => databasePath);
+        var watch = new SqliteDeviceWatchRepository(() => databasePath);
+        var devices = new SqliteDeviceReadRepository(() => databasePath, watchRepository: watch);
+        var group = await groups.SaveGroupAsync(new AreaGroupEdit(
+            null, "仅关注 UID-B", "UID", "精确当前行", "重点", true));
+        await groups.SaveItemAsync(new AreaGroupItemEdit(
+            group.Id, "device", "1号", "1F", "1F A", "COLLISION-KT", string.Empty, DeviceUid: "uid-b"));
+        await watch.SaveRuleAsync(new DeviceWatchEdit(
+            null,
+            group.Id,
+            "仅关注 UID-B",
+            DateTimeOffset.Parse("2026-07-02T00:00:00Z"),
+            DateTimeOffset.Parse("2026-07-02T12:00:00Z"),
+            true,
+            string.Empty));
+
+        var result = await devices.SearchAsync(new());
+
+        Assert.True(Assert.Single(result.Rows, row => row.Id == 1).IsWatched);
+        Assert.False(Assert.Single(result.Rows, row => row.Id == 20).IsWatched);
+    }
+
+    [Fact]
+    public async Task WatchIncidentNavigationFiltersIdenticalNaturalFieldsByStableIdentity()
+    {
+        var databasePath = CreateDatabase();
+        using (var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadWrite"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                ALTER TABLE cards ADD COLUMN device_uid TEXT;
+                ALTER TABLE run_cards ADD COLUMN device_uid TEXT;
+                UPDATE cards SET name = 'COLLISION-KT', device_uid = 'uid-b' WHERE id = 1;
+                INSERT INTO cards
+                    (id, page_id, name, switch, mode, indoor, set_temp, fan, indicator, comm, device_uid)
+                VALUES
+                    (20, 1, 'COLLISION-KT', 'OFF', '制冷', '25', '24', '中', 'green.png', '关机', 'uid-c');
+                UPDATE run_cards SET name = 'COLLISION-KT', device_uid = 'uid-b' WHERE id = 1;
+                UPDATE run_cards SET name = 'COLLISION-KT', device_uid = 'uid-b', switch = 'ON', comm = '开机' WHERE id = 2;
+                """;
+            command.ExecuteNonQuery();
+        }
+
+        var groups = new SqliteAreaGroupRepository(() => databasePath);
+        var watch = new SqliteDeviceWatchRepository(() => databasePath);
+        var devices = new SqliteDeviceReadRepository(() => databasePath, watchRepository: watch);
+        var group = await groups.SaveGroupAsync(new AreaGroupEdit(
+            null, "UID-B 异常", "UID", "同位置同名只定位关注设备", "重点", true));
+        await groups.SaveItemAsync(new AreaGroupItemEdit(
+            group.Id, "device", "1号", "1F", "1F A", "COLLISION-KT", string.Empty, DeviceUid: "uid-b"));
+        await watch.SaveRuleAsync(new DeviceWatchEdit(
+            null,
+            group.Id,
+            "UID-B 异常",
+            DateTimeOffset.Parse("2026-07-02T00:00:00Z"),
+            DateTimeOffset.Parse("2026-07-02T12:00:00Z"),
+            true,
+            string.Empty));
+
+        var incident = Assert.Single((await watch.EvaluateAsync(new DeviceWatchQuery(GroupId: group.Id))).Incidents);
+
+        Assert.Equal("uid-b", incident.Device.DeviceUid);
+        Assert.Equal(1, incident.Device.CardId);
+
+        var naturalOnly = await devices.SearchAsync(new DeviceQuery(
+            SearchText: incident.Device.Name,
+            Building: incident.Device.Building,
+            Floor: incident.Device.FloorLabel,
+            SubArea: incident.Device.SubArea,
+            PageName: incident.Device.PageName));
+        var stableIdentity = await devices.SearchAsync(new DeviceQuery(
+            SearchText: incident.Device.Name,
+            Building: incident.Device.Building,
+            Floor: incident.Device.FloorLabel,
+            SubArea: incident.Device.SubArea,
+            PageName: incident.Device.PageName,
+            DeviceUid: incident.Device.DeviceUid,
+            CardId: incident.Device.CardId));
+
+        Assert.Equal(2, naturalOnly.Rows.Count);
+        Assert.Equal(1, Assert.Single(stableIdentity.Rows).Id);
     }
 
     [Fact]

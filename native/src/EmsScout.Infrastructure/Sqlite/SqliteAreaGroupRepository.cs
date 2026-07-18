@@ -7,13 +7,13 @@ namespace EmsScout.Infrastructure.Sqlite;
 
 public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver) : IAreaGroupRepository
 {
+    private const int MaxTargetDeviceOptions = 10_000;
     private static readonly string[] Buildings = ["1号", "2号", "3号", "4号", "5号", "6号"];
 
     public async Task<AreaGroupSet> LoadAsync(CancellationToken cancellationToken = default)
     {
         await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadWrite);
         await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
-        await EnsureSystemGroupsAsync(connection, cancellationToken).ConfigureAwait(false);
         var groups = await LoadGroupsAsync(connection, cancellationToken).ConfigureAwait(false);
         var items = await LoadItemsAsync(connection, null, cancellationToken).ConfigureAwait(false);
         return new AreaGroupSet(groups, items);
@@ -26,6 +26,12 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
     {
         await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadOnly);
         var floorValue = string.IsNullOrWhiteSpace(floorLabel) ? null : ParseFloorValue(floorLabel);
+        var cardDeviceUidSql = await ColumnExistsAsync(connection, "cards", "device_uid", cancellationToken).ConfigureAwait(false)
+            ? "c.device_uid"
+            : "NULL";
+        var cardSourceKeySql = await ColumnExistsAsync(connection, "cards", "source_key", cancellationToken).ConfigureAwait(false)
+            ? "c.source_key"
+            : "NULL";
         var subAreas = new List<AreaGroupTargetOption>();
         var devices = new List<AreaGroupTargetOption>();
 
@@ -45,7 +51,11 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             }
 
             command.CommandText = $"""
-                SELECT s.building, s.floor, s.text AS sub_area_text, COUNT(c.id) AS count
+                SELECT s.building, s.floor, s.text AS sub_area_text,
+                       COUNT(DISTINCT CASE
+                           WHEN NULLIF(TRIM({cardDeviceUidSql}), '') IS NOT NULL THEN 'uid:' || TRIM({cardDeviceUidSql})
+                           ELSE 'legacy:' || c.name
+                       END) AS count
                 FROM sub_areas s
                 JOIN pages p ON p.sub_area_id = s.id
                 JOIN cards c ON c.page_id = p.id
@@ -57,10 +67,11 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
                 var optionFloor = SqliteValueReader.ReadNullableDouble(reader, "floor");
+                var optionSubArea = SqliteValueReader.ReadString(reader, "sub_area_text");
                 subAreas.Add(new AreaGroupTargetOption(
                     Type: "sub_area",
                     Building: SqliteValueReader.ReadString(reader, "building"),
-                    FloorLabel: FloorLabelFromValue(optionFloor),
+                    FloorLabel: FloorLabelFromValue(optionFloor, optionSubArea),
                     FloorValue: optionFloor,
                     SubAreaText: SqliteValueReader.ReadString(reader, "sub_area_text"),
                     CardName: string.Empty,
@@ -84,28 +95,90 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             }
 
             command.CommandText = $"""
-                SELECT s.building, s.floor, s.text AS sub_area_text, c.name AS card_name, COUNT(*) AS count
-                FROM sub_areas s
-                JOIN pages p ON p.sub_area_id = s.id
-                JOIN cards c ON c.page_id = p.id
-                {(clauses.Count == 0 ? string.Empty : "WHERE " + string.Join(" AND ", clauses))}
-                GROUP BY s.building, s.floor, s.text, c.name
-                ORDER BY s.building, s.floor, s.text, c.name
-                LIMIT 2000
+                WITH scoped AS (
+                    SELECT c.id AS observation_id,
+                           s.building, s.floor, s.text AS sub_area_text,
+                           p.page_name, c.name AS card_name,
+                           COALESCE(NULLIF(TRIM({cardDeviceUidSql}), ''), '') AS device_uid,
+                           COALESCE(NULLIF(TRIM({cardSourceKeySql}), ''), '') AS source_key,
+                           CASE WHEN NULLIF(TRIM({cardDeviceUidSql}), '') IS NOT NULL THEN 1 ELSE 0 END AS has_uid,
+                           CASE
+                             WHEN NULLIF(TRIM({cardDeviceUidSql}), '') IS NOT NULL
+                               THEN 'uid:' || UPPER(TRIM({cardDeviceUidSql}))
+                             ELSE 'legacy:' || UPPER(
+                               TRIM(s.building) || '|' ||
+                               COALESCE(printf('%.6f', s.floor), '') || '|' ||
+                               TRIM(COALESCE(s.text, '')) || '|' ||
+                               TRIM(COALESCE(p.page_name, '')) || '|' ||
+                               TRIM(COALESCE(c.name, '')) || '|' ||
+                               TRIM(COALESCE({cardSourceKeySql}, '')) || '|' || c.id)
+                           END AS physical_key
+                    FROM sub_areas s
+                    JOIN pages p ON p.sub_area_id = s.id
+                    JOIN cards c ON c.page_id = p.id
+                    {(clauses.Count == 0 ? string.Empty : "WHERE " + string.Join(" AND ", clauses))}
+                ), ranked AS (
+                    SELECT *,
+                           CASE WHEN has_uid = 1
+                             THEN COUNT(*) OVER (PARTITION BY physical_key)
+                             ELSE 1
+                           END AS count,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY physical_key
+                               ORDER BY observation_id, building, floor, sub_area_text,
+                                        page_name, card_name, source_key
+                           ) AS canonical_rank
+                    FROM scoped
+                ), canonical AS (
+                    SELECT *
+                    FROM ranked
+                    WHERE has_uid = 0 OR canonical_rank = 1
+                ), numbered AS (
+                    SELECT *, CASE WHEN has_uid = 1 THEN
+                        SUM(CASE WHEN has_uid = 1 THEN 1 ELSE 0 END) OVER (
+                            PARTITION BY building, floor, sub_area_text, page_name, card_name
+                            ORDER BY source_key, observation_id
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                        )
+                    ELSE
+                        SUM(CASE WHEN has_uid = 0 THEN 1 ELSE 0 END) OVER (
+                            PARTITION BY building, floor, sub_area_text, page_name, card_name
+                            ORDER BY source_key, observation_id
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                        ) END AS occurrence
+                    FROM canonical
+                )
+                SELECT building, floor, sub_area_text, card_name, count,
+                       device_uid, page_name, source_key, occurrence
+                FROM numbered
+                ORDER BY building, floor, sub_area_text, card_name, occurrence
+                LIMIT $device_limit
                 """;
+            command.Parameters.AddWithValue("$device_limit", MaxTargetDeviceOptions + 1);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
                 var optionFloor = SqliteValueReader.ReadNullableDouble(reader, "floor");
+                var optionSubArea = SqliteValueReader.ReadString(reader, "sub_area_text");
                 devices.Add(new AreaGroupTargetOption(
                     Type: "device",
                     Building: SqliteValueReader.ReadString(reader, "building"),
-                    FloorLabel: FloorLabelFromValue(optionFloor),
+                    FloorLabel: FloorLabelFromValue(optionFloor, optionSubArea),
                     FloorValue: optionFloor,
-                    SubAreaText: SqliteValueReader.ReadString(reader, "sub_area_text"),
+                    SubAreaText: optionSubArea,
                     CardName: SqliteValueReader.ReadString(reader, "card_name"),
-                    Count: SqliteValueReader.ReadInt32(reader, "count")));
+                    Count: SqliteValueReader.ReadInt32(reader, "count"),
+                    DeviceUid: SqliteValueReader.ReadString(reader, "device_uid"),
+                    PageName: SqliteValueReader.ReadString(reader, "page_name"),
+                    SourceKey: SqliteValueReader.ReadString(reader, "source_key"),
+                    Occurrence: SqliteValueReader.ReadInt32(reader, "occurrence")));
             }
+        }
+
+        if (devices.Count > MaxTargetDeviceOptions)
+        {
+            throw new InvalidOperationException(
+                $"现有设备超过一次可安全加载的 {MaxTargetDeviceOptions:N0} 台；请先选择楼栋或楼层再查看，未显示任何不完整目录。");
         }
 
         return subAreas.Concat(devices).ToList();
@@ -574,6 +647,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         var floorValue = ParseFloorValue(floorLabel);
         var subArea = (edit.SubAreaText ?? string.Empty).Trim();
         var cardName = (edit.CardName ?? string.Empty).Trim();
+        var deviceUid = targetType == "device" ? (edit.DeviceUid ?? string.Empty).Trim() : string.Empty;
         ValidateTarget(targetType, floorValue, subArea, cardName);
         var memberStatus = edit.ExpectedStatus is "not_open" or "normal"
             ? edit.ExpectedStatus
@@ -643,7 +717,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         command.Parameters.AddWithValue("$floor_value", floorValue is null ? DBNull.Value : floorValue.Value);
         command.Parameters.AddWithValue("$sub_area", NullIfEmpty(subArea));
         command.Parameters.AddWithValue("$card_name", NullIfEmpty(cardName));
-        command.Parameters.AddWithValue("$device_uid", NullIfEmpty(edit.DeviceUid));
+        command.Parameters.AddWithValue("$device_uid", NullIfEmpty(deviceUid));
         command.Parameters.AddWithValue("$status", memberStatus);
         command.Parameters.AddWithValue("$note", edit.Note ?? string.Empty);
         command.Parameters.AddWithValue("$created_at", now);
@@ -834,7 +908,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
                     : statuses.Contains("关机") ? "关机" : "未知";
                 var label = string.Join(" / ", new[]
                 {
-                    first.Building, FloorLabelFromValue(first.Floor), first.SubArea, first.CardName,
+                    first.Building, FloorLabelFromValue(first.Floor, first.SubArea), first.SubArea, first.CardName,
                 }.Where(value => !string.IsNullOrWhiteSpace(value)));
                 return new ScheduleObservedDevice(label, status);
             })
@@ -1027,6 +1101,26 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             await deleteWatchRules.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        foreach (var tableName in new[]
+                 {
+                     "area_group_change_requests",
+                     "area_group_exceptions",
+                     "area_group_members",
+                     "area_group_rules",
+                 })
+        {
+            if (!await SqliteSchemaGuard.TableExistsAsync(connection, tableName, cancellationToken).ConfigureAwait(false))
+            {
+                continue;
+            }
+
+            await using var deleteReconciliationRows = connection.CreateCommand();
+            deleteReconciliationRows.Transaction = transaction;
+            deleteReconciliationRows.CommandText = $"DELETE FROM {tableName} WHERE group_id = $id";
+            deleteReconciliationRows.Parameters.AddWithValue("$id", id);
+            await deleteReconciliationRows.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         await using (var deleteItems = connection.CreateCommand())
         {
             deleteItems.Transaction = (SqliteTransaction)transaction;
@@ -1087,6 +1181,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         var floorValue = string.IsNullOrWhiteSpace(floorLabel) ? null : ParseFloorValue(floorLabel);
         var subArea = (edit.SubAreaText ?? string.Empty).Trim();
         var cardName = (edit.CardName ?? string.Empty).Trim();
+        var deviceUid = targetType == "device" ? (edit.DeviceUid ?? string.Empty).Trim() : string.Empty;
         if (targetType == "floor" && floorValue is null)
         {
             throw new ArgumentException("floor target requires floor label.");
@@ -1121,6 +1216,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             floorValue,
             subArea,
             cardName,
+            deviceUid,
             edit.Id,
             cancellationToken).ConfigureAwait(false);
         if (duplicateId is not null)
@@ -1135,6 +1231,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
                     floor_value = $floor_value,
                     sub_area_text = $sub_area_text,
                     card_name = $card_name,
+                    device_uid = $device_uid,
                     note = $note,
                     updated_at = $updated_at
                 WHERE id = $id
@@ -1145,6 +1242,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             update.Parameters.AddWithValue("$floor_value", floorValue is null ? DBNull.Value : floorValue);
             update.Parameters.AddWithValue("$sub_area_text", NullIfEmpty(subArea));
             update.Parameters.AddWithValue("$card_name", NullIfEmpty(cardName));
+            update.Parameters.AddWithValue("$device_uid", NullIfEmpty(deviceUid));
             update.Parameters.AddWithValue("$note", edit.Note ?? string.Empty);
             update.Parameters.AddWithValue("$updated_at", now);
             update.Parameters.AddWithValue("$id", duplicateId.Value);
@@ -1153,8 +1251,14 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             {
                 await MoveScheduleMembersAsync(
                     connection, transaction, edit.Id.Value, duplicateId.Value,
-                    targetType, building, floorLabel, floorValue, subArea, cardName, cancellationToken).ConfigureAwait(false);
+                    targetType, building, floorLabel, floorValue, subArea, cardName, deviceUid, cancellationToken).ConfigureAwait(false);
                 await DeleteItemCoreAsync(connection, transaction, edit.Id.Value, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await UpdateScheduleMembersFromAreaItemAsync(
+                    connection, transaction, duplicateId.Value, targetType, building, floorLabel,
+                    floorValue, subArea, cardName, deviceUid, cancellationToken).ConfigureAwait(false);
             }
 
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -1174,6 +1278,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
                     floor_value = $floor_value,
                     sub_area_text = $sub_area_text,
                     card_name = $card_name,
+                    device_uid = $device_uid,
                     note = $note,
                     updated_at = $updated_at
                 WHERE id = $id
@@ -1184,6 +1289,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             update.Parameters.AddWithValue("$floor_value", floorValue is null ? DBNull.Value : floorValue);
             update.Parameters.AddWithValue("$sub_area_text", NullIfEmpty(subArea));
             update.Parameters.AddWithValue("$card_name", NullIfEmpty(cardName));
+            update.Parameters.AddWithValue("$device_uid", NullIfEmpty(deviceUid));
             update.Parameters.AddWithValue("$note", edit.Note ?? string.Empty);
             update.Parameters.AddWithValue("$updated_at", now);
             update.Parameters.AddWithValue("$id", edit.Id.Value);
@@ -1195,7 +1301,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
 
             await UpdateScheduleMembersFromAreaItemAsync(
                 connection, transaction, edit.Id.Value, targetType, building, floorLabel,
-                floorValue, subArea, cardName, cancellationToken).ConfigureAwait(false);
+                floorValue, subArea, cardName, deviceUid, cancellationToken).ConfigureAwait(false);
 
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return (await LoadItemsAsync(connection, edit.GroupId, cancellationToken).ConfigureAwait(false))
@@ -1206,8 +1312,8 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         insert.Transaction = (SqliteTransaction)transaction;
         insert.CommandText = """
             INSERT INTO monitor_group_items
-              (group_id, target_type, building, floor_label, floor_value, sub_area_text, card_name, note, created_at, updated_at)
-            VALUES ($group_id, $target_type, $building, $floor_label, $floor_value, $sub_area_text, $card_name, $note, $created_at, $updated_at)
+              (group_id, target_type, building, floor_label, floor_value, sub_area_text, card_name, device_uid, note, created_at, updated_at)
+            VALUES ($group_id, $target_type, $building, $floor_label, $floor_value, $sub_area_text, $card_name, $device_uid, $note, $created_at, $updated_at)
             RETURNING id
             """;
         insert.Parameters.AddWithValue("$group_id", edit.GroupId);
@@ -1217,6 +1323,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         insert.Parameters.AddWithValue("$floor_value", floorValue is null ? DBNull.Value : floorValue);
         insert.Parameters.AddWithValue("$sub_area_text", NullIfEmpty(subArea));
         insert.Parameters.AddWithValue("$card_name", NullIfEmpty(cardName));
+        insert.Parameters.AddWithValue("$device_uid", NullIfEmpty(deviceUid));
         insert.Parameters.AddWithValue("$note", edit.Note ?? string.Empty);
         insert.Parameters.AddWithValue("$created_at", now);
         insert.Parameters.AddWithValue("$updated_at", now);
@@ -1340,8 +1447,12 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         var now = DateTimeOffset.UtcNow.ToString("O");
         foreach (var definition in new[]
                  {
-                     (Name: "公区", Label: "公区", Key: "public", Description: "规则识别的公区；可维护人工成员，并在日期管理中设置计划。"),
-                     (Name: "非公区", Label: "非公区", Key: "non_public", Description: "规则识别的非公区；可维护人工成员，并在日期管理中设置计划。"),
+                     (Name: "公区", Label: "公区", Key: "public",
+                         Description: "规则识别的公区；可维护人工成员，用于分组统计。",
+                         RetiredDescription: "规则识别的公区；可维护人工成员，并在日期管理中设置计划。"),
+                     (Name: "非公区", Label: "非公区", Key: "non_public",
+                         Description: "规则识别的非公区；可维护人工成员，用于分组统计。",
+                         RetiredDescription: "规则识别的非公区；可维护人工成员，并在日期管理中设置计划。"),
                  })
         {
             await using var command = connection.CreateCommand();
@@ -1352,7 +1463,11 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
                     ($name, $area_label, $description, '重点', 'system', $system_key, 1, 1, $created_at, $updated_at)
                 ON CONFLICT(name) DO UPDATE SET
                     area_label = excluded.area_label,
-                    description = CASE WHEN monitor_groups.description = '' THEN excluded.description ELSE monitor_groups.description END,
+                    description = CASE
+                        WHEN monitor_groups.description = '' OR monitor_groups.description = $retired_description
+                        THEN excluded.description
+                        ELSE monitor_groups.description
+                    END,
                     group_kind = 'system',
                     system_key = excluded.system_key,
                     locked = 1,
@@ -1362,6 +1477,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             command.Parameters.AddWithValue("$name", definition.Name);
             command.Parameters.AddWithValue("$area_label", definition.Label);
             command.Parameters.AddWithValue("$description", definition.Description);
+            command.Parameters.AddWithValue("$retired_description", definition.RetiredDescription);
             command.Parameters.AddWithValue("$system_key", definition.Key);
             command.Parameters.AddWithValue("$created_at", now);
             command.Parameters.AddWithValue("$updated_at", now);
@@ -1379,6 +1495,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         double? floorValue,
         string subArea,
         string cardName,
+        string deviceUid,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
@@ -1387,7 +1504,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             UPDATE schedule_group_members
             SET target_type = $target_type, building = $building, floor_label = $floor_label,
                 floor_value = $floor_value, sub_area_text = $sub_area_text,
-                card_name = $card_name, updated_at = $updated_at
+                card_name = $card_name, device_uid = $device_uid, updated_at = $updated_at
             WHERE area_group_item_id = $item_id
             """;
         command.Parameters.AddWithValue("$target_type", targetType);
@@ -1396,6 +1513,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         command.Parameters.AddWithValue("$floor_value", floorValue is null ? DBNull.Value : floorValue.Value);
         command.Parameters.AddWithValue("$sub_area_text", NullIfEmpty(subArea));
         command.Parameters.AddWithValue("$card_name", NullIfEmpty(cardName));
+        command.Parameters.AddWithValue("$device_uid", NullIfEmpty(deviceUid));
         command.Parameters.AddWithValue("$updated_at", DateTimeOffset.UtcNow.ToString("O"));
         command.Parameters.AddWithValue("$item_id", areaGroupItemId);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -1412,6 +1530,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         double? floorValue,
         string subArea,
         string cardName,
+        string deviceUid,
         CancellationToken cancellationToken)
     {
         await using (var removeDuplicates = connection.CreateCommand())
@@ -1440,7 +1559,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
 
         await UpdateScheduleMembersFromAreaItemAsync(
             connection, transaction, targetAreaGroupItemId, targetType, building, floorLabel,
-            floorValue, subArea, cardName, cancellationToken).ConfigureAwait(false);
+            floorValue, subArea, cardName, deviceUid, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task EnsureSchemaAsync(SqliteConnection connection, CancellationToken cancellationToken)
@@ -1466,21 +1585,30 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         CancellationToken cancellationToken)
     {
         await using var transaction = connection.BeginTransaction(deferred: false);
-        var rows = new List<(string Building, double Floor)>();
+        var rows = new List<(string Building, double Floor, string FloorLabelHint)>();
         await using (var select = connection.CreateCommand())
         {
             select.Transaction = transaction;
             select.CommandText = """
-                SELECT building, floor
+                SELECT building, floor,
+                       CASE
+                         WHEN UPPER(TRIM(COALESCE(text, ''))) = 'BM'
+                           OR UPPER(TRIM(COALESCE(text, ''))) LIKE 'BM %'
+                         THEN 'BM'
+                         ELSE ''
+                       END AS floor_label_hint
                 FROM sub_areas
                 WHERE floor IS NOT NULL
-                GROUP BY building, floor
-                ORDER BY building, floor
+                GROUP BY building, floor, floor_label_hint
+                ORDER BY building, floor, floor_label_hint
                 """;
             await using var reader = await select.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
-                rows.Add((SqliteValueReader.ReadString(reader, "building"), ReadDouble(reader, "floor")));
+                rows.Add((
+                    SqliteValueReader.ReadString(reader, "building"),
+                    ReadDouble(reader, "floor"),
+                    SqliteValueReader.ReadString(reader, "floor_label_hint")));
             }
         }
 
@@ -1499,11 +1627,12 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
                     WHEN floor_catalog.source = 'manual+discovered' THEN 'manual+discovered'
                     ELSE 'discovered'
                   END,
-                  enabled = 1,
                   updated_at = excluded.updated_at
                 """;
             upsert.Parameters.AddWithValue("$building", row.Building);
-            upsert.Parameters.AddWithValue("$floor_label", FloorLabelFromValue(row.Floor));
+            upsert.Parameters.AddWithValue(
+                "$floor_label",
+                string.IsNullOrWhiteSpace(row.FloorLabelHint) ? FloorLabelFromValue(row.Floor) : row.FloorLabelHint);
             upsert.Parameters.AddWithValue("$floor_value", row.Floor);
             upsert.Parameters.AddWithValue("$created_at", now);
             upsert.Parameters.AddWithValue("$updated_at", now);
@@ -1635,35 +1764,106 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             return new GroupStats(0, 0, 0, 0, 0, 0, 0);
         }
 
-        var itemCount = await ScalarLongAsync(connection, "SELECT COUNT(*) FROM monitor_group_items WHERE group_id = $id", ("$id", groupId), cancellationToken).ConfigureAwait(false);
-        var sql = """
+        var hasFormalMembers = await SqliteSchemaGuard.TableExistsAsync(
+            connection,
+            "area_group_members",
+            cancellationToken).ConfigureAwait(false);
+        var itemCount = await ScalarLongAsync(
+            connection,
+            hasFormalMembers
+                ? "SELECT COUNT(*) FROM area_group_members WHERE group_id = $id"
+                : "SELECT COUNT(*) FROM monitor_group_items WHERE group_id = $id",
+            ("$id", groupId),
+            cancellationToken).ConfigureAwait(false);
+        var cardDeviceUidSql = await ColumnExistsAsync(connection, "cards", "device_uid", cancellationToken).ConfigureAwait(false)
+            ? "c.device_uid"
+            : "NULL";
+        var occurrenceDeviceUidSql = cardDeviceUidSql == "c.device_uid" ? "c2.device_uid" : "NULL";
+        var cardSourceKeySql = await ColumnExistsAsync(connection, "cards", "source_key", cancellationToken).ConfigureAwait(false)
+            ? "c.source_key"
+            : "NULL";
+        var occurrenceSourceKeySql = cardSourceKeySql == "c.source_key" ? "c2.source_key" : "NULL";
+        var customGroupExistsSql = hasFormalMembers
+            ? FormalGroupExistsSql(
+                cardDeviceUidSql,
+                occurrenceDeviceUidSql,
+                cardSourceKeySql,
+                occurrenceSourceKeySql)
+            : CustomGroupExistsSql(cardDeviceUidSql);
+        var sqlPrefix = $"""
+            WITH matching AS (
+                SELECT s.building, s.floor, COALESCE(s.text, '') AS sub_area_text,
+                       c.id AS card_id, c.comm, c.switch AS device_switch,
+                       CASE
+                           WHEN NULLIF(TRIM({cardDeviceUidSql}), '') IS NOT NULL
+                            THEN 'uid:' || UPPER(TRIM({cardDeviceUidSql}))
+                           ELSE 'legacy:' ||
+                                LENGTH(s.building) || ':' || s.building || ':' ||
+                                LENGTH(COALESCE(CAST(s.floor AS TEXT), '')) || ':' || COALESCE(CAST(s.floor AS TEXT), '') || ':' ||
+                                LENGTH(COALESCE(s.text, '')) || ':' || COALESCE(s.text, '') || ':' ||
+                                LENGTH(COALESCE(p.page_name, '')) || ':' || COALESCE(p.page_name, '') || ':' ||
+                                LENGTH(c.name) || ':' || c.name || ':' ||
+                                 LENGTH(COALESCE({cardSourceKeySql}, '')) || ':' || COALESCE({cardSourceKeySql}, '') || ':' ||
+                                (SELECT COUNT(*)
+                                 FROM cards c2
+                                 JOIN pages p2 ON p2.id = c2.page_id
+                                 JOIN sub_areas s2 ON s2.id = p2.sub_area_id
+                                 WHERE s2.building = s.building
+                                   AND NULLIF(TRIM({occurrenceDeviceUidSql}), '') IS NULL
+                                   AND ABS(COALESCE(s2.floor, -999999) - COALESCE(s.floor, -999998)) < 0.001
+                                   AND IFNULL(s2.text, '') = IFNULL(s.text, '')
+                                   AND IFNULL(p2.page_name, '') = IFNULL(p.page_name, '')
+                                   AND c2.name = c.name
+                                   AND (
+                                      IFNULL({occurrenceSourceKeySql}, '') < IFNULL({cardSourceKeySql}, '')
+                                      OR (IFNULL({occurrenceSourceKeySql}, '') = IFNULL({cardSourceKeySql}, '') AND c2.id <= c.id)
+                                   ))
+                       END AS physical_key
+                FROM sub_areas s
+                JOIN pages p ON p.sub_area_id = s.id
+                JOIN cards c ON c.page_id = p.id
+                WHERE
+            """;
+        var sqlSuffix = """
+            ), ranked AS (
+                SELECT *, ROW_NUMBER() OVER (PARTITION BY physical_key ORDER BY card_id) AS physical_rank
+                FROM matching
+            )
             SELECT COUNT(*) AS total,
-                   SUM(TRIM(COALESCE(c.comm, '')) = '开机' OR
-                       (TRIM(COALESCE(c.comm, '')) NOT IN ('离线', '关机', '开机') AND UPPER(TRIM(COALESCE(c.switch, ''))) = 'ON')) AS on_count,
-                   SUM(TRIM(COALESCE(c.comm, '')) = '关机' OR
-                       (TRIM(COALESCE(c.comm, '')) NOT IN ('离线', '关机', '开机') AND UPPER(TRIM(COALESCE(c.switch, ''))) = 'OFF')) AS off_count,
-                   SUM(TRIM(COALESCE(c.comm, '')) = '离线') AS offline_count,
-                   SUM(TRIM(COALESCE(c.comm, '')) NOT IN ('离线', '关机', '开机') AND
-                       UPPER(TRIM(COALESCE(c.switch, ''))) NOT IN ('ON', 'OFF')) AS unknown_count,
-                   COUNT(DISTINCT s.building || ':' || COALESCE(s.floor, '') || ':' || COALESCE(s.text, '')) AS covered_areas
-            FROM sub_areas s
-            JOIN pages p ON p.sub_area_id = s.id
-            JOIN cards c ON c.page_id = p.id
-            WHERE 
+                   SUM(TRIM(COALESCE(comm, '')) = '开机' OR
+                       (TRIM(COALESCE(comm, '')) NOT IN ('离线', '关机', '开机') AND UPPER(TRIM(COALESCE(device_switch, ''))) = 'ON')) AS on_count,
+                   SUM(TRIM(COALESCE(comm, '')) = '关机' OR
+                       (TRIM(COALESCE(comm, '')) NOT IN ('离线', '关机', '开机') AND UPPER(TRIM(COALESCE(device_switch, ''))) = 'OFF')) AS off_count,
+                   SUM(TRIM(COALESCE(comm, '')) = '离线') AS offline_count,
+                   SUM(TRIM(COALESCE(comm, '')) NOT IN ('离线', '关机', '开机') AND
+                       UPPER(TRIM(COALESCE(device_switch, ''))) NOT IN ('ON', 'OFF')) AS unknown_count,
+                   COUNT(DISTINCT building || ':' || COALESCE(floor, '') || ':' || sub_area_text) AS covered_areas
+            FROM ranked
+            WHERE physical_rank = 1
             """;
         if (group.GroupKind.Equals("system", StringComparison.OrdinalIgnoreCase) && group.SystemKey == "public")
         {
-            return await ReadStatsAsync(connection, sql + PublicSql(), itemCount, cancellationToken).ConfigureAwait(false);
+            return await ReadStatsAsync(
+                connection,
+                sqlPrefix + "(" + PublicSql() + ") OR (" + customGroupExistsSql + ")" + sqlSuffix,
+                itemCount,
+                cancellationToken,
+                ("$group_id", groupId)).ConfigureAwait(false);
         }
 
         if (group.GroupKind.Equals("system", StringComparison.OrdinalIgnoreCase) && group.SystemKey == "non_public")
         {
-            return await ReadStatsAsync(connection, sql + "NOT (" + PublicSql() + ")", itemCount, cancellationToken).ConfigureAwait(false);
+            return await ReadStatsAsync(
+                connection,
+                sqlPrefix + "(NOT (" + PublicSql() + ")) OR (" + customGroupExistsSql + ")" + sqlSuffix,
+                itemCount,
+                cancellationToken,
+                ("$group_id", groupId)).ConfigureAwait(false);
         }
 
         return await ReadStatsAsync(
             connection,
-            sql + CustomGroupExistsSql(),
+            sqlPrefix + " " + customGroupExistsSql + sqlSuffix,
             itemCount,
             cancellationToken,
             ("$group_id", groupId)).ConfigureAwait(false);
@@ -1746,21 +1946,42 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         double? floorValue,
         string subArea,
         string cardName,
+        string deviceUid,
         long? excludeId,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
         command.CommandText = targetType switch
         {
+            "device" when !string.IsNullOrWhiteSpace(deviceUid) => """
+                SELECT id FROM monitor_group_items
+                WHERE group_id = $group_id
+                  AND target_type = 'device'
+                  AND ($exclude_id IS NULL OR id <> $exclude_id)
+                  AND (
+                    NULLIF(TRIM(device_uid), '') = $device_uid
+                    OR (
+                      NULLIF(TRIM(device_uid), '') IS NULL
+                      AND building = $building
+                      AND IFNULL(card_name, '') = IFNULL($card_name, '')
+                      AND ABS(COALESCE(floor_value, -999999) - COALESCE($floor_value, -999998)) < 0.001
+                      AND IFNULL(sub_area_text, '') = IFNULL($sub_area_text, '')
+                    )
+                  )
+                ORDER BY CASE WHEN NULLIF(TRIM(device_uid), '') = $device_uid THEN 0 ELSE 1 END, id
+                LIMIT 1
+                """,
             "device" => """
                 SELECT id FROM monitor_group_items
                 WHERE group_id = $group_id
                   AND target_type = 'device'
+                  AND NULLIF(TRIM(device_uid), '') IS NULL
                   AND building = $building
                   AND IFNULL(card_name, '') = IFNULL($card_name, '')
                   AND ABS(COALESCE(floor_value, -999999) - COALESCE($floor_value, -999998)) < 0.001
                   AND IFNULL(sub_area_text, '') = IFNULL($sub_area_text, '')
                   AND ($exclude_id IS NULL OR id <> $exclude_id)
+                LIMIT 1
                 """,
             "sub_area" => """
                 SELECT id FROM monitor_group_items
@@ -1785,6 +2006,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         command.Parameters.AddWithValue("$floor_value", floorValue is null ? DBNull.Value : floorValue);
         command.Parameters.AddWithValue("$sub_area_text", NullIfEmpty(subArea));
         command.Parameters.AddWithValue("$card_name", NullIfEmpty(cardName));
+        command.Parameters.AddWithValue("$device_uid", deviceUid);
         command.Parameters.AddWithValue("$exclude_id", excludeId is null ? DBNull.Value : excludeId.Value);
         var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return value is null ? null : Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
@@ -1803,36 +2025,66 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         return Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    public static string CustomGroupExistsSql()
+    internal static async Task<bool> ColumnExistsAsync(
+        SqliteConnection connection,
+        string tableName,
+        string columnName,
+        CancellationToken cancellationToken)
     {
-        return """
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({tableName})";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public static string CustomGroupExistsSql(string cardDeviceUidSql = "c.device_uid")
+    {
+        return $"""
             EXISTS (
                 SELECT 1
                 FROM monitor_group_items mgi
                 JOIN monitor_groups mg ON mg.id = mgi.group_id
                 WHERE mgi.group_id = $group_id
                   AND mg.enabled = 1
-                  AND mgi.building = s.building
                   AND (
                     (
                       mgi.target_type = 'device'
-                      AND mgi.card_name = c.name
+                      AND NULLIF(TRIM(mgi.device_uid), '') IS NOT NULL
+                      AND NULLIF(TRIM({cardDeviceUidSql}), '') = NULLIF(TRIM(mgi.device_uid), '')
+                    )
+                    OR (
+                      mgi.building = s.building
                       AND (
-                        (mgi.floor_value IS NULL AND IFNULL(mgi.sub_area_text, '') = '')
+                        (
+                          mgi.target_type = 'device'
+                          AND NULLIF(TRIM(mgi.device_uid), '') IS NULL
+                          AND mgi.card_name = c.name
+                          AND (
+                            (mgi.floor_value IS NULL AND IFNULL(mgi.sub_area_text, '') = '')
+                            OR (
+                              (mgi.floor_value IS NULL OR ABS(COALESCE(s.floor, -999999) - COALESCE(mgi.floor_value, -999998)) < 0.001)
+                              AND (IFNULL(mgi.sub_area_text, '') = '' OR IFNULL(mgi.sub_area_text, '') = IFNULL(s.text, ''))
+                            )
+                          )
+                        )
                         OR (
-                          (mgi.floor_value IS NULL OR ABS(COALESCE(s.floor, -999999) - COALESCE(mgi.floor_value, -999998)) < 0.001)
-                          AND (IFNULL(mgi.sub_area_text, '') = '' OR IFNULL(mgi.sub_area_text, '') = IFNULL(s.text, ''))
+                          mgi.target_type = 'sub_area'
+                          AND ABS(COALESCE(s.floor, -999999) - COALESCE(mgi.floor_value, -999998)) < 0.001
+                          AND IFNULL(mgi.sub_area_text, '') = IFNULL(s.text, '')
+                        )
+                        OR (
+                          mgi.target_type = 'floor'
+                          AND ABS(COALESCE(s.floor, -999999) - COALESCE(mgi.floor_value, -999998)) < 0.001
                         )
                       )
-                    )
-                    OR (
-                      mgi.target_type = 'sub_area'
-                      AND ABS(COALESCE(s.floor, -999999) - COALESCE(mgi.floor_value, -999998)) < 0.001
-                      AND IFNULL(mgi.sub_area_text, '') = IFNULL(s.text, '')
-                    )
-                    OR (
-                      mgi.target_type = 'floor'
-                      AND ABS(COALESCE(s.floor, -999999) - COALESCE(mgi.floor_value, -999998)) < 0.001
                     )
                   )
             )
@@ -1901,6 +2153,55 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         return normalized is "floor" or "sub_area" or "device" ? normalized : "floor";
     }
 
+    private static string FormalGroupExistsSql(
+        string cardDeviceUidSql,
+        string occurrenceDeviceUidSql,
+        string cardSourceKeySql,
+        string occurrenceSourceKeySql)
+    {
+        return $"""
+            EXISTS (
+                SELECT 1
+                FROM area_group_members agm
+                JOIN monitor_groups mg ON mg.id = agm.group_id
+                WHERE agm.group_id = $group_id
+                  AND mg.enabled = 1
+                  AND (
+                    (
+                      NULLIF(TRIM(agm.device_uid), '') IS NOT NULL
+                      AND UPPER(NULLIF(TRIM({cardDeviceUidSql}), '')) = UPPER(NULLIF(TRIM(agm.device_uid), ''))
+                    )
+                    OR (
+                      NULLIF(TRIM(agm.device_uid), '') IS NULL
+                      AND NULLIF(TRIM({cardDeviceUidSql}), '') IS NULL
+                      AND agm.building = s.building
+                      AND agm.card_name = c.name
+                      AND (agm.floor_value IS NULL OR ABS(COALESCE(s.floor, -999999) - COALESCE(agm.floor_value, -999998)) < 0.001)
+                      AND (IFNULL(agm.sub_area_text, '') = '' OR IFNULL(agm.sub_area_text, '') = IFNULL(s.text, ''))
+                      AND (IFNULL(agm.page_name, '') = '' OR IFNULL(agm.page_name, '') = IFNULL(p.page_name, ''))
+                      AND (IFNULL(agm.source_key, '') = '' OR IFNULL(agm.source_key, '') = IFNULL({cardSourceKeySql}, ''))
+                      AND agm.occurrence = (
+                        SELECT COUNT(*)
+                        FROM cards c2
+                        JOIN pages p2 ON p2.id = c2.page_id
+                        JOIN sub_areas s2 ON s2.id = p2.sub_area_id
+                        WHERE s2.building = s.building
+                          AND NULLIF(TRIM({occurrenceDeviceUidSql}), '') IS NULL
+                          AND ABS(COALESCE(s2.floor, -999999) - COALESCE(s.floor, -999998)) < 0.001
+                          AND IFNULL(s2.text, '') = IFNULL(s.text, '')
+                          AND IFNULL(p2.page_name, '') = IFNULL(p.page_name, '')
+                          AND c2.name = c.name
+                          AND (
+                            IFNULL({occurrenceSourceKeySql}, '') < IFNULL({cardSourceKeySql}, '')
+                            OR (IFNULL({occurrenceSourceKeySql}, '') = IFNULL({cardSourceKeySql}, '') AND c2.id <= c.id)
+                          )
+                      )
+                    )
+                  )
+            )
+            """;
+    }
+
     private static void ValidateTarget(string targetType, double? floorValue, string subArea, string cardName)
     {
         if (targetType == "floor" && floorValue is null)
@@ -1932,9 +2233,18 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             return null;
         }
 
-        if (normalized.StartsWith('B') && double.TryParse(normalized[1..^1], out var basement))
+        if (normalized == "BM")
         {
-            return -basement;
+            return -2;
+        }
+
+        if (normalized.StartsWith('B'))
+        {
+            var basementText = normalized.EndsWith('F') ? normalized[1..^1] : normalized[1..];
+            if (double.TryParse(basementText, out var basement))
+            {
+                return -basement;
+            }
         }
 
         var trimmed = normalized.EndsWith('F') ? normalized[..^1] : normalized;
@@ -1947,11 +2257,18 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         return reader.IsDBNull(ordinal) ? 0 : reader.GetDouble(ordinal);
     }
 
-    private static string FloorLabelFromValue(double? value)
+    private static string FloorLabelFromValue(double? value, string? subAreaText = null)
     {
         if (value is null)
         {
             return string.Empty;
+        }
+
+        var normalizedSubArea = (subAreaText ?? string.Empty).Trim().ToUpperInvariant();
+        if (Math.Abs(value.Value + 2) < 0.001 &&
+            (normalizedSubArea == "BM" || normalizedSubArea.StartsWith("BM ", StringComparison.Ordinal)))
+        {
+            return "BM";
         }
 
         return value < 0 ? $"B{Math.Abs(value.Value):0.#}F" : $"{value.Value:0.#}F";

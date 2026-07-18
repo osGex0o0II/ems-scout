@@ -14,7 +14,9 @@ public sealed class DataManagementUiContractTests
         Assert.DoesNotContain("运行状态", xaml);
         Assert.DoesNotContain("打开上次导出", xaml);
         Assert.Contains("筛选和 Excel 导出使用同一组条件", xaml);
-        Assert.DoesNotContain("Header=\"子区\"", xaml);
+        Assert.Contains("Header=\"子区\"", xaml);
+        Assert.Contains("ItemsSource=\"{x:Bind ViewModel.SubAreaOptions, Mode=OneWay}\"", xaml);
+        Assert.Contains("SelectedItem=\"{x:Bind ViewModel.SelectedSubArea, Mode=TwoWay}\"", xaml);
         Assert.DoesNotContain("Header=\"环境温度(℃)\"", xaml);
         Assert.DoesNotContain("Header=\"设置温度条件\"", xaml);
         Assert.DoesNotContain("Header=\"环境温度条件\"", xaml);
@@ -45,7 +47,8 @@ public sealed class DataManagementUiContractTests
 
         Assert.True(IndexOf(xaml, "Header=\"楼栋\"") < IndexOf(xaml, "Header=\"座号\""));
         Assert.True(IndexOf(xaml, "Header=\"座号\"") < IndexOf(xaml, "Header=\"楼层\""));
-        Assert.True(IndexOf(xaml, "Header=\"楼层\"") < IndexOf(xaml, "Header=\"页面\""));
+        Assert.True(IndexOf(xaml, "Header=\"楼层\"") < IndexOf(xaml, "Header=\"子区\""));
+        Assert.True(IndexOf(xaml, "Header=\"子区\"") < IndexOf(xaml, "Header=\"页面\""));
         Assert.True(IndexOf(xaml, "Header=\"页面\"") < IndexOf(xaml, "Header=\"设备名\""));
         Assert.True(IndexOf(xaml, "Header=\"设备名\"") < IndexOf(xaml, "Header=\"区域\""));
         Assert.True(IndexOf(xaml, "Header=\"区域\"") < IndexOf(xaml, "Header=\"开关机状态\""));
@@ -67,6 +70,8 @@ public sealed class DataManagementUiContractTests
         Assert.Contains("<ToggleButton", xaml);
         Assert.Contains("IsChecked=\"{Binding IsActive, Mode=OneWay}\"", xaml);
         Assert.Contains("Text=\"{x:Bind ViewModel.ActiveFilterSummary, Mode=OneWay}\"", xaml);
+        Assert.Contains("MaxLines=\"3\"", xaml);
+        Assert.Contains("TextWrapping=\"WrapWholeWords\"", xaml);
         Assert.Contains("Text=\"{x:Bind ViewModel.ExportPreviewText, Mode=OneWay}\"", xaml);
         Assert.Contains("Text=\"{x:Bind ViewModel.DataStateText, Mode=OneWay}\"", xaml);
         Assert.Contains("Visibility=\"{x:Bind ViewModel.LoadErrorVisibility, Mode=OneWay}\"", xaml);
@@ -80,9 +85,10 @@ public sealed class DataManagementUiContractTests
         Assert.Contains("Text=\"基础信息\"", xaml);
         Assert.Contains("Text=\"采集值\"", xaml);
         Assert.Contains("Text=\"实时值\"", xaml);
-        Assert.Contains("Text=\"质量与关注\"", xaml);
+        Assert.Contains("Text=\"质量与审计\"", xaml);
         Assert.Contains("ViewModel.SelectedDevice.IssueSummary", xaml);
-        Assert.Contains("ViewModel.SelectedDevice.WatchSummary", xaml);
+        Assert.DoesNotContain("ViewModel.SelectedDevice.WatchSummary", xaml);
+        Assert.DoesNotContain("关注设备", xaml);
         Assert.Contains("ApplyQuickFilterAsync", codeBehind);
         Assert.Contains("ViewModel.RefreshAsync", codeBehind);
         Assert.Contains("public Visibility ResultListVisibility", File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs")));
@@ -118,6 +124,7 @@ public sealed class DataManagementUiContractTests
         Assert.Contains("Building: EmptyToNull(SelectedBuilding?.Value)", buildQuery);
         Assert.Contains("CommunicationState: EmptyToNull(SelectedCommunication?.Value)", buildQuery);
         Assert.Contains("Floor: EmptyToNull(SelectedFloor?.Value)", buildQuery);
+        Assert.Contains("SubArea: EmptyToNull(SelectedSubArea?.Value)", buildQuery);
         Assert.Contains("DeviceName: EmptyToNull(DeviceNameText)", buildQuery);
         Assert.Contains("Zuo: CanFilterByZuo ? EmptyToNull(SelectedZuo?.Value) : null", buildQuery);
         Assert.Contains("PageName: EmptyToNull(SelectedPageName?.Value)", buildQuery);
@@ -195,22 +202,107 @@ public sealed class DataManagementUiContractTests
     {
         var root = LocateRepositoryRoot();
         var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml"));
+        var codeBehind = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml.cs"));
         var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs"));
 
         Assert.Contains("SelectionChanged=\"BuildingFilter_SelectionChanged\"", xaml);
         Assert.Contains("SelectionChanged=\"FloorFilter_SelectionChanged\"", xaml);
+        Assert.Contains("SelectionChanged=\"SubAreaFilter_SelectionChanged\"", xaml);
+        Assert.Contains("await ViewModel.ApplySubAreaSelectionAsync()", codeBehind);
 
         var buildingSelection = viewModel[
             viewModel.IndexOf("public async Task ApplyBuildingSelectionAsync", StringComparison.Ordinal)..viewModel.IndexOf("public async Task ApplyFloorSelectionAsync", StringComparison.Ordinal)];
         Assert.Contains("SelectedZuo = ZuoOptions.FirstOrDefault()", buildingSelection);
         Assert.Contains("SelectedFloor = FloorOptions.FirstOrDefault()", buildingSelection);
+        Assert.Contains("SelectedSubArea = SubAreaOptions.FirstOrDefault()", buildingSelection);
         Assert.Contains("SelectedPageName = PageNameOptions.FirstOrDefault()", buildingSelection);
         Assert.Contains("ApplyFiltersAsync(cancellationToken)", buildingSelection);
 
         var floorSelection = viewModel[
             viewModel.IndexOf("public async Task ApplyFloorSelectionAsync", StringComparison.Ordinal)..viewModel.IndexOf("public async Task MovePreviousAsync", StringComparison.Ordinal)];
+        Assert.Contains("SelectedSubArea = SubAreaOptions.FirstOrDefault()", floorSelection);
         Assert.Contains("SelectedPageName = PageNameOptions.FirstOrDefault()", floorSelection);
         Assert.Contains("ApplyFiltersAsync(cancellationToken)", floorSelection);
+
+        var subAreaSelection = viewModel[
+            viewModel.IndexOf("public async Task ApplySubAreaSelectionAsync", StringComparison.Ordinal)..viewModel.IndexOf("public async Task MovePreviousAsync", StringComparison.Ordinal)];
+        Assert.Contains("DeviceNavigationFilterPolicy.ApplySubAreaSelection", subAreaSelection);
+        Assert.True(IndexOf(subAreaSelection, "SelectedPageName =") < IndexOf(subAreaSelection, "ApplyFiltersAsync(cancellationToken)"));
+    }
+
+    [Fact]
+    public void NavigationPolicyPreservesRequestedScopeWhenOnlyStaleOptionsExist()
+    {
+        var staleBuildings = new[] { new EmsScout.Application.Devices.DeviceFilterOption("1号", "1号", 1) };
+        var staleFloors = new[] { new EmsScout.Application.Devices.DeviceFilterOption("1F", "1F", 1) };
+        var staleSubAreas = new[] { new EmsScout.Application.Devices.DeviceFilterOption("1F A", "1F A", 1) };
+        var stalePages = new[] { new EmsScout.Application.Devices.DeviceFilterOption("一页", "一页", 1) };
+        var requested = new EmsScout.Application.Devices.DeviceQuery(
+            Building: "2号",
+            Floor: "2F",
+            SubArea: "2F B",
+            PageName: "二页",
+            DeviceName: "同名设备");
+        var policyType = typeof(EmsScout.Application.Devices.DeviceQuery).Assembly.GetType(
+            "EmsScout.Application.Devices.DeviceNavigationFilterPolicy");
+
+        Assert.NotNull(policyType);
+        var resolve = policyType.GetMethod("ResolveNavigation", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(resolve);
+        var resolved = Assert.IsType<EmsScout.Application.Devices.DeviceQuery>(resolve.Invoke(
+            null,
+            [requested, staleBuildings, staleFloors, staleSubAreas, stalePages]));
+
+        Assert.Equal("2号", resolved.Building);
+        Assert.Equal("2F", resolved.Floor);
+        Assert.Equal("2F B", resolved.SubArea);
+        Assert.Equal("二页", resolved.PageName);
+        Assert.Equal("同名设备", resolved.DeviceName);
+    }
+
+    [Fact]
+    public void SubAreaChangeClearsPageBeforeTheNextQuery()
+    {
+        var current = new EmsScout.Application.Devices.DeviceQuery(
+            Building: "1号",
+            Floor: "1F",
+            SubArea: "1F A",
+            PageName: "一页",
+            DeviceName: "同名设备");
+        var policyType = typeof(EmsScout.Application.Devices.DeviceQuery).Assembly.GetType(
+            "EmsScout.Application.Devices.DeviceNavigationFilterPolicy");
+
+        Assert.NotNull(policyType);
+        var apply = policyType.GetMethod("ApplySubAreaSelection", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+        Assert.NotNull(apply);
+        var nextQuery = Assert.IsType<EmsScout.Application.Devices.DeviceQuery>(apply.Invoke(null, [current, "2F B"]));
+
+        Assert.Equal("1号", nextQuery.Building);
+        Assert.Equal("1F", nextQuery.Floor);
+        Assert.Equal("2F B", nextQuery.SubArea);
+        Assert.Null(nextQuery.PageName);
+        Assert.Equal("同名设备", nextQuery.DeviceName);
+    }
+
+    [Fact]
+    public void DataViewModelRefreshesScopedOptionsAfterApplyingExactNavigation()
+    {
+        var root = LocateRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs"));
+        var initialize = source[
+            source.IndexOf("public async Task InitializeAsync", StringComparison.Ordinal)..source.IndexOf("public async Task RefreshAsync", StringComparison.Ordinal)];
+        var applyNavigation = IndexOf(initialize, "ApplyNavigationRequest(navigationRequest)");
+        var scopedReload = initialize.IndexOf("await ReloadFilterOptionsAsync(cancellationToken)", applyNavigation, StringComparison.Ordinal);
+        var restoreIdentity = initialize.IndexOf("ApplyNavigationIdentity(navigationRequest)", scopedReload, StringComparison.Ordinal);
+        var loadPage = initialize.IndexOf("await LoadPageAsync(cancellationToken)", applyNavigation, StringComparison.Ordinal);
+
+        Assert.Contains("DeviceNavigationFilterPolicy.ResolveNavigation", source);
+        Assert.Contains("AddNavigationOption", source);
+        Assert.Contains("DeviceUid: EmptyToNull(_navigationDeviceUid)", source);
+        Assert.Contains("CardId: _navigationCardId", source);
+        Assert.True(scopedReload > applyNavigation, "Navigation must refresh scoped options after exact values are selected.");
+        Assert.True(restoreIdentity > scopedReload, "Navigation identity must survive the scoped option refresh.");
+        Assert.True(loadPage > scopedReload, "Scoped options must refresh before loading navigation results.");
     }
 
     [Fact]
@@ -226,8 +318,54 @@ public sealed class DataManagementUiContractTests
         Assert.Contains("new DataFilterOption(selectedValue, selectedValue, 0)", replaceOptions);
         Assert.Contains("ReplaceOptions(BuildingOptions", source);
         Assert.Contains("selectedBuilding", source);
+        Assert.Contains("ReplaceOptions(SubAreaOptions", source);
+        Assert.Contains("selectedSubArea", source);
         Assert.Contains("RealtimeLockOptions", source);
         Assert.Contains("selectedRealtimeLock", source);
+    }
+
+    [Fact]
+    public void DataViewModelPopulatesResetsAndSummarizesExactSubAreaFilter()
+    {
+        var root = LocateRepositoryRoot();
+        var viewModelPath = Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs");
+        var source = File.ReadAllText(viewModelPath);
+
+        Assert.Contains("public ObservableCollection<DataFilterOption> SubAreaOptions", source);
+        Assert.Contains("public DataFilterOption? SelectedSubArea", source);
+        Assert.Contains("DataFilterOption.All(\"全部子区\"), options.SubAreas.Select(DataFilterOption.From), selectedSubArea", source);
+
+        var reset = source[
+            source.IndexOf("public async Task ResetFiltersAsync", StringComparison.Ordinal)..source.IndexOf("public async Task ExportAsync", StringComparison.Ordinal)];
+        Assert.Contains("SelectedSubArea = SubAreaOptions.FirstOrDefault()", reset);
+
+        var summary = source[
+            source.IndexOf("private static string FormatActiveFilters", StringComparison.Ordinal)..source.IndexOf("private static void AddFilter", StringComparison.Ordinal)];
+        Assert.Contains("AddFilter(filters, \"子区\", query.SubArea)", summary);
+
+        var addFilter = source[
+            source.IndexOf("private static void AddFilter", StringComparison.Ordinal)..source.IndexOf("private static bool QueryScopesEqual", StringComparison.Ordinal)];
+        Assert.Contains("NonBreakingLabel(label)", addFilter);
+        Assert.Contains("NonBreakingLabel(string label) => string.Join('\\u2060', label.ToCharArray())", addFilter);
+    }
+
+    [Fact]
+    public void QuerySpecificationFiltersSameNamedDevicesByExactSubAreaAndClearsToAll()
+    {
+        var first = DeviceWithRealtimeLock("") with { Id = 1, Name = "同名设备", SubArea = "1F A" };
+        var second = DeviceWithRealtimeLock("") with { Id = 2, Name = "同名设备", SubArea = "1F B" };
+        var rows = new[] { first, second };
+
+        var scoped = rows.Where(row => EmsScout.Application.Devices.DeviceQuerySpecification.MatchesResult(
+            row,
+            new EmsScout.Application.Devices.DeviceQuery(DeviceName: "同名设备", SubArea: "1F A"))).ToArray();
+        var cleared = rows.Where(row => EmsScout.Application.Devices.DeviceQuerySpecification.MatchesResult(
+            row,
+            new EmsScout.Application.Devices.DeviceQuery(DeviceName: "同名设备"))).ToArray();
+
+        Assert.Single(scoped);
+        Assert.Equal("1F A", scoped[0].SubArea);
+        Assert.Equal(2, cleared.Length);
     }
 
     [Fact]

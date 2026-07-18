@@ -3,8 +3,8 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EmsScout.Application.Collection;
 using EmsScout.Application.Devices;
-using EmsScout.Application.Logging;
 using EmsScout.Application.Groups;
+using EmsScout.Application.Logging;
 using EmsScout.Application.Quality;
 using EmsScout.Application.Settings;
 using EmsScout.Application.Workflows;
@@ -20,19 +20,18 @@ public sealed partial class AuditViewModel(
     IRealtimeQualityAuditService realtimeQualityAuditService,
     IRealtimeReconciliationService realtimeReconciliationService,
     ICollectionRunRepository collectionRunRepository,
+    IAreaGroupReconciliationRepository areaGroupReconciliationRepository,
+    IAreaGroupRepository areaGroupRepository,
     INavigationService navigationService,
     NodeCollectionTaskRunner runner,
     AppDataPathService pathService,
     IApplicationLogger applicationLogger,
-    DataContextService dataContext,
-    IAreaGroupRepository areaGroupRepository) : ObservableObject
+    DataContextService dataContext) : ObservableObject
 {
     private readonly DispatcherQueue _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
     private bool _contextAttached;
 
     public DataContextService DataContext { get; } = dataContext;
-
-    public IAreaGroupRepository AreaGroupRepository { get; } = areaGroupRepository;
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(RefreshCommand))]
@@ -139,10 +138,27 @@ public sealed partial class AuditViewModel(
 
     public ObservableCollection<CollectionRunRow> Runs { get; } = [];
 
-    public ObservableCollection<ScheduleAuditRow> ScheduleAuditRows { get; } = [];
+    public ObservableCollection<AreaGroupChangeRow> AreaGroupChanges { get; } = [];
 
-    public string ScheduleAuditSummaryText { get; private set; } = "尚未读取计划状态审计";
+    public ObservableCollection<AreaGroupFilterOption> AreaGroupOptions { get; } = [];
 
+    public ObservableCollection<AreaGroupFilterOption> AreaGroupActionOptions { get; } =
+    [
+        new(null, string.Empty, "全部动作"),
+        new(null, "add", "待确认加入"),
+        new(null, "remove", "待确认移除"),
+    ];
+
+    [ObservableProperty]
+    public partial AreaGroupFilterOption? SelectedAreaGroup { get; set; }
+
+    [ObservableProperty]
+    public partial AreaGroupFilterOption? SelectedGroupAction { get; set; }
+
+    [ObservableProperty]
+    public partial string AreaGroupChangeStatusText { get; private set; } = "尚未读取分组成员变更";
+
+    private List<AreaGroupChangeRequestRecord> LoadedAreaGroupChanges { get; } = [];
 
     public bool CanDeleteSelectedRun => CanDeleteRun();
 
@@ -150,14 +166,32 @@ public sealed partial class AuditViewModel(
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
-        AttachDataContext();
-        if (DataContext.Options.Count == 0)
+        await InitializeAsync(null, cancellationToken).ConfigureAwait(true);
+    }
+
+    public async Task InitializeAsync(long? areaGroupId, CancellationToken cancellationToken)
+    {
+        try
         {
-            await DataContext.RefreshAsync(cancellationToken).ConfigureAwait(true);
+            AttachDataContext();
+            if (DataContext.Options.Count == 0)
+            {
+                await DataContext.RefreshAsync(cancellationToken).ConfigureAwait(true);
+            }
+            SelectedReconciliationBuilding ??= ReconciliationBuildingOptions.FirstOrDefault();
+            SelectedReconciliationType ??= ReconciliationTypeOptions.FirstOrDefault();
+            SelectedGroupAction ??= AreaGroupActionOptions.FirstOrDefault();
+            await RefreshAsync(cancellationToken).ConfigureAwait(true);
+            if (areaGroupId is not null)
+            {
+                SelectedAreaGroup = AreaGroupOptions.FirstOrDefault(option => option.GroupId == areaGroupId);
+                ApplyAreaGroupChangeFilter();
+            }
         }
-        SelectedReconciliationBuilding ??= ReconciliationBuildingOptions.FirstOrDefault();
-        SelectedReconciliationType ??= ReconciliationTypeOptions.FirstOrDefault();
-        await RefreshAsync(cancellationToken).ConfigureAwait(true);
+        catch (Exception ex)
+        {
+            StatusText = "审计中心初始化失败：" + applicationLogger.WriteFailure(ex, "audit").DisplayText;
+        }
     }
 
     private bool CanRefresh() => !IsBusy;
@@ -177,9 +211,13 @@ public sealed partial class AuditViewModel(
             await RefreshRealtimeQualityAsync(cancellationToken).ConfigureAwait(true);
             await RefreshReconciliationAsync(cancellationToken).ConfigureAwait(true);
             await RefreshRunsAsync(cancellationToken).ConfigureAwait(true);
-            await RefreshScheduleAuditAsync(cancellationToken).ConfigureAwait(true);
+            await LoadAreaGroupChangesAsync(SelectedAreaGroup?.GroupId, cancellationToken).ConfigureAwait(true);
             RefreshFacets();
             StatusText = "审计中心已刷新";
+        }
+        catch (Exception ex)
+        {
+            StatusText = "审计中心刷新失败：" + applicationLogger.WriteFailure(ex, "audit").DisplayText;
         }
         finally
         {
@@ -303,35 +341,6 @@ public sealed partial class AuditViewModel(
         catch (Exception ex)
         {
             ApplyQualityError(ex);
-        }
-    }
-
-    private async Task RefreshScheduleAuditAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            var records = await AreaGroupRepository
-                .EvaluateSchedulesAsync(DataContext.RunId, DateTimeOffset.Now, cancellationToken)
-                .ConfigureAwait(true);
-            ScheduleAuditRows.Clear();
-            foreach (var record in records)
-            {
-                ScheduleAuditRows.Add(new ScheduleAuditRow(record));
-            }
-
-            var issues = records.Count(record => record.ResultCode == "not_enabled");
-            var unexpected = records.Count(record => record.ResultCode == "unexpected_running");
-            var observedAt = records.FirstOrDefault()?.ObservedAt;
-            ScheduleAuditSummaryText = records.Count == 0
-                ? "所选数据时间没有可执行的计划规则"
-                : $"数据时间 {observedAt}，已检查 {records.Count:N0} 台设备；未按计划启用 {issues:N0} 台，计划外运行 {unexpected:N0} 台";
-            OnPropertyChanged(nameof(ScheduleAuditSummaryText));
-        }
-        catch (Exception ex)
-        {
-            ScheduleAuditRows.Clear();
-            ScheduleAuditSummaryText = "计划状态审计失败：" + applicationLogger.WriteFailure(ex, "schedule-audit").DisplayText;
-            OnPropertyChanged(nameof(ScheduleAuditSummaryText));
         }
     }
 
@@ -492,6 +501,103 @@ public sealed partial class AuditViewModel(
         }
     }
 
+    partial void OnSelectedAreaGroupChanged(AreaGroupFilterOption? value) => ApplyAreaGroupChangeFilter();
+
+    partial void OnSelectedGroupActionChanged(AreaGroupFilterOption? value) => ApplyAreaGroupChangeFilter();
+
+    private async Task LoadAreaGroupChangesAsync(
+        long? preferredGroupId = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var groupSet = await areaGroupRepository
+                .LoadAsync(cancellationToken)
+                .ConfigureAwait(true);
+            var snapshot = await areaGroupReconciliationRepository
+                .LoadAsync(null, cancellationToken)
+                .ConfigureAwait(true);
+            LoadedAreaGroupChanges.Clear();
+            LoadedAreaGroupChanges.AddRange(snapshot.PendingChanges);
+
+            var selectedGroupId = preferredGroupId ?? SelectedAreaGroup?.GroupId;
+            AreaGroupOptions.Clear();
+            AreaGroupOptions.Add(new AreaGroupFilterOption(null, string.Empty, "全部区域组"));
+            foreach (var group in groupSet.Groups
+                         .OrderBy(group => group.Name, StringComparer.CurrentCulture))
+            {
+                AreaGroupOptions.Add(new AreaGroupFilterOption(group.Id, string.Empty, group.Name));
+            }
+
+            SelectedAreaGroup = selectedGroupId is null
+                ? AreaGroupOptions[0]
+                : AreaGroupOptions.FirstOrDefault(option => option.GroupId == selectedGroupId)
+                  ?? AreaGroupOptions[0];
+            SelectedGroupAction ??= AreaGroupActionOptions[0];
+            ApplyAreaGroupChangeFilter();
+            AreaGroupChangeStatusText = LoadedAreaGroupChanges.Count == 0
+                ? "当前没有待确认的分组成员变更"
+                : $"待确认加入 {LoadedAreaGroupChanges.Count(change => change.Action == "add"):N0} 台；待确认移除 {LoadedAreaGroupChanges.Count(change => change.Action == "remove"):N0} 台";
+        }
+        catch (Exception ex)
+        {
+            AreaGroupChangeStatusText = "分组成员变更读取失败：" + applicationLogger.WriteFailure(ex, "audit").DisplayText;
+        }
+    }
+
+    private void ApplyAreaGroupChangeFilter()
+    {
+        if (LoadedAreaGroupChanges.Count == 0)
+        {
+            AreaGroupChanges.Clear();
+            return;
+        }
+
+        var selectedGroupId = SelectedAreaGroup?.GroupId;
+        var selectedAction = SelectedGroupAction?.Value ?? string.Empty;
+        var filtered = LoadedAreaGroupChanges.Where(change =>
+            (selectedGroupId is null || change.GroupId == selectedGroupId) &&
+            (selectedAction.Length == 0 || change.Action == selectedAction));
+        AreaGroupChanges.Clear();
+        foreach (var change in filtered)
+        {
+            AreaGroupChanges.Add(new AreaGroupChangeRow(change));
+        }
+    }
+
+    public async Task DecideChangeAsync(
+        AreaGroupChangeRow row,
+        AreaGroupChangeDecision decision,
+        string note,
+        CancellationToken cancellationToken = default)
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            await areaGroupReconciliationRepository
+                .DecideChangeAsync(row.Id, decision, note, cancellationToken)
+                .ConfigureAwait(true);
+            StatusText = decision == AreaGroupChangeDecision.Accept
+                ? row.Action == "add" ? "已确认加入正式成员" : "已确认移除正式成员"
+                : row.Action == "add" ? "已拒绝加入并加入长期屏蔽名单" : "已拒绝移除并设为手动保留";
+            await LoadAreaGroupChangesAsync(SelectedAreaGroup?.GroupId, cancellationToken).ConfigureAwait(true);
+            RefreshFacets();
+        }
+        catch (Exception ex)
+        {
+            StatusText = "处理分组成员变更失败：" + applicationLogger.WriteFailure(ex, "audit").DisplayText;
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
     private async Task RefreshRunsAsync(CancellationToken cancellationToken = default)
     {
         try
@@ -645,6 +751,7 @@ public sealed partial class AuditViewModel(
         Facets.Add(new DataFacetItem("对账差异", ReconciliationItems.Count, "实时源"));
         Facets.Add(new DataFacetItem("历史批次", Runs.Count, "可恢复"));
         Facets.Add(new DataFacetItem("异常隔离", Runs.Count(run => run.IsAnomaly), "批次"));
+        Facets.Add(new DataFacetItem("分组待确认", AreaGroupChanges.Count, "成员变更"));
     }
 
     private int SumIssueCounts()

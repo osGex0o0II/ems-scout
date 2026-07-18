@@ -166,7 +166,7 @@ public sealed class DeviceAnnotationServiceTests
             CREATE UNIQUE INDEX ux_realtime_match_overrides_identity
               ON realtime_match_overrides(building, floor_label, sub_area, page_name, realtime_name)
               WHERE IFNULL(dev_id, '') = '';
-            PRAGMA user_version = 5;
+            PRAGMA user_version = 6;
             """;
         command.ExecuteNonQuery();
         return path;

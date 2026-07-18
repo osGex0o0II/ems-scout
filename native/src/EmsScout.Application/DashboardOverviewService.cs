@@ -14,6 +14,8 @@ public sealed class DashboardOverviewService(
     ICollectionRunRepository collectionRunRepository,
     IAttentionIssueRepository attentionIssueRepository)
 {
+    private const string RetiredWatchSource = "watch";
+
     public async Task<DashboardOverview> LoadAsync(long? runId = null, CancellationToken cancellationToken = default)
     {
         var result = await repository.SearchAsync(
@@ -50,7 +52,7 @@ public sealed class DashboardOverviewService(
             var currentRunId = riskContext.QualityReport?.RunId ?? riskContext.Runs.FirstOrDefault()?.Id;
             var snapshot = new AttentionQueueSnapshot(
                 risks
-                    .Where(risk => risk.IsActionable)
+                    .Where(risk => risk.IsActionable && !IsRetiredAttentionSource(risk.SourceKey))
                     .Select(risk => ToCandidate(risk, currentRunId))
                     .ToList(),
                 ObservedSources(riskContext),
@@ -58,7 +60,10 @@ public sealed class DashboardOverviewService(
             var synchronized = await attentionIssueRepository
                 .SynchronizeAsync(snapshot, cancellationToken)
                 .ConfigureAwait(false);
-            risks = synchronized.Select(ToDashboardRisk).ToList();
+            risks = synchronized
+                .Where(issue => !IsRetiredAttentionSource(issue.SourceKey))
+                .Select(ToDashboardRisk)
+                .ToList();
         }
 
         return new DashboardOverview("SQLite + 实时详情", DateTimeOffset.Now, summary, metrics, risks);
@@ -189,7 +194,7 @@ public sealed class DashboardOverviewService(
 
     private static IReadOnlySet<string> ObservedSources(DashboardRiskContext context)
     {
-        var sources = new HashSet<string>(["inventory", "watch"], StringComparer.Ordinal);
+        var sources = new HashSet<string>(["inventory", RetiredWatchSource], StringComparer.Ordinal);
         if (context.QualityError is null)
         {
             sources.Add("quality");
@@ -212,6 +217,9 @@ public sealed class DashboardOverviewService(
 
         return sources;
     }
+
+    private static bool IsRetiredAttentionSource(string sourceKey) =>
+        string.Equals(sourceKey, RetiredWatchSource, StringComparison.OrdinalIgnoreCase);
 
     private static DashboardRiskItem ToDashboardRisk(AttentionIssueRecord issue) => new(
         Title: issue.Title,
@@ -237,7 +245,6 @@ public sealed class DashboardOverviewService(
     private static string SourceLabel(string sourceKey) => sourceKey switch
     {
         "inventory" => "当前数据",
-        "watch" => "关注设备",
         "quality" => "基础质量审计",
         "realtime" => "实时点位审计",
         "reconciliation" => "实时对账",

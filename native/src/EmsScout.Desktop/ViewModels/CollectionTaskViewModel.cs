@@ -15,6 +15,7 @@ using EmsScout.Infrastructure.Importing;
 using EmsScout.Infrastructure.Errors;
 using EmsScout.Infrastructure.Logging;
 using EmsScout.Infrastructure.Sidecar;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Dispatching;
 
 namespace EmsScout.Desktop.ViewModels;
@@ -67,6 +68,7 @@ public sealed partial class CollectionTaskViewModel(
     private int? _ownedEdgeCdpPort;
     private IReadOnlyList<RecaptureLocation> _recaptureLocations = [];
     private bool _syncingRecaptureBuildingSelection;
+    private bool _isLogsExpanded;
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(StartCommand))]
@@ -88,6 +90,10 @@ public sealed partial class CollectionTaskViewModel(
     [NotifyPropertyChangedFor(nameof(CanSelectRecaptureSeat))]
     [NotifyPropertyChangedFor(nameof(CanSelectRecaptureFloor))]
     [NotifyPropertyChangedFor(nameof(CanStartTask))]
+    [NotifyPropertyChangedFor(nameof(StartPrimaryButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(StartSecondaryButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(CollectionBrowserPrimaryButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(CollectionBrowserSecondaryButtonVisibility))]
     public partial bool IsRunning { get; private set; }
 
     [ObservableProperty]
@@ -102,6 +108,10 @@ public sealed partial class CollectionTaskViewModel(
     [NotifyPropertyChangedFor(nameof(CanSelectRecaptureSeat))]
     [NotifyPropertyChangedFor(nameof(CanSelectRecaptureFloor))]
     [NotifyPropertyChangedFor(nameof(CanStartTask))]
+    [NotifyPropertyChangedFor(nameof(StartPrimaryButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(StartSecondaryButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(CollectionBrowserPrimaryButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(CollectionBrowserSecondaryButtonVisibility))]
     public partial bool IsCheckingEnvironment { get; private set; }
 
     [ObservableProperty]
@@ -140,6 +150,10 @@ public sealed partial class CollectionTaskViewModel(
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(StartCommand))]
     [NotifyPropertyChangedFor(nameof(CanStartTask))]
+    [NotifyPropertyChangedFor(nameof(StartPrimaryButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(StartSecondaryButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(CollectionBrowserPrimaryButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(CollectionBrowserSecondaryButtonVisibility))]
     public partial bool IsEnvironmentReady { get; private set; }
 
     [ObservableProperty]
@@ -169,11 +183,78 @@ public sealed partial class CollectionTaskViewModel(
     [ObservableProperty]
     public partial bool IsCollectionBrowserOpen { get; private set; }
 
+    public Visibility StartPrimaryButtonVisibility => CanStartTask ? Visibility.Visible : Visibility.Collapsed;
+
+    public Visibility StartSecondaryButtonVisibility => CanStartTask ? Visibility.Collapsed : Visibility.Visible;
+
+    public Visibility CollectionBrowserPrimaryButtonVisibility => ShouldEmphasizeCollectionBrowser
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+
+    public Visibility CollectionBrowserSecondaryButtonVisibility => ShouldEmphasizeCollectionBrowser
+        ? Visibility.Collapsed
+        : Visibility.Visible;
+
+    public bool IsLogsExpanded
+    {
+        get => _isLogsExpanded;
+        set
+        {
+            if (!SetProperty(ref _isLogsExpanded, value))
+            {
+                return;
+            }
+
+            OnPropertyChanged(nameof(TaskProgressVisibility));
+            OnPropertyChanged(nameof(LogsExpandButtonVisibility));
+            OnPropertyChanged(nameof(LogsRestoreButtonVisibility));
+            OnPropertyChanged(nameof(LogsGridRow));
+            OnPropertyChanged(nameof(LogsGridRowSpan));
+        }
+    }
+
+    public Visibility TaskProgressVisibility => IsLogsExpanded
+        ? Visibility.Collapsed
+        : Visibility.Visible;
+
+    public Visibility LogsExpandButtonVisibility => IsLogsExpanded
+        ? Visibility.Collapsed
+        : Visibility.Visible;
+
+    public Visibility LogsRestoreButtonVisibility => IsLogsExpanded
+        ? Visibility.Visible
+        : Visibility.Collapsed;
+
+    public int LogsGridRow => IsLogsExpanded ? 0 : 1;
+
+    public int LogsGridRowSpan => IsLogsExpanded ? 2 : 1;
+
+    private bool ShouldEmphasizeCollectionBrowser
+    {
+        get
+        {
+            var plan = BuildExecutionPlan(SelectedTaskMode);
+            return !IsCollectionBrowserOpen &&
+                   !IsRunning &&
+                   !IsCheckingEnvironment &&
+                   _environmentChecked &&
+                   (plan.RunEnumeration || plan.RunRealtimeDetails) &&
+                   !_cdpReachable;
+        }
+    }
+
     [ObservableProperty]
     public partial string SelectedBuildingsText { get; private set; } = "已选择 6 栋楼";
 
     [ObservableProperty]
     public partial string CurrentDataImpactText { get; private set; } = "采集成功后将更新所选楼栋的当前数据";
+
+    public Visibility CurrentDataImpactVisibility => AllBuildingsSelected
+        ? Visibility.Collapsed
+        : Visibility.Visible;
+
+    private bool AllBuildingsSelected =>
+        Buildings.Count > 0 && Buildings.All(building => building.IsSelected);
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(TaskModeDescription))]
@@ -181,6 +262,10 @@ public sealed partial class CollectionTaskViewModel(
     [NotifyPropertyChangedFor(nameof(CanEditCustomTaskOptions))]
     [NotifyPropertyChangedFor(nameof(IsRecaptureMode))]
     [NotifyPropertyChangedFor(nameof(CanEditBuildingSelectionOptions))]
+    [NotifyPropertyChangedFor(nameof(StartPrimaryButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(StartSecondaryButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(CollectionBrowserPrimaryButtonVisibility))]
+    [NotifyPropertyChangedFor(nameof(CollectionBrowserSecondaryButtonVisibility))]
     [NotifyCanExecuteChangedFor(nameof(SelectAllBuildingsCommand))]
     [NotifyCanExecuteChangedFor(nameof(ClearBuildingSelectionCommand))]
     public partial CollectionTaskModeOption? SelectedTaskMode { get; set; }
@@ -322,6 +407,19 @@ public sealed partial class CollectionTaskViewModel(
 
     public ObservableCollection<CollectionTaskLogRow> Logs { get; } = [];
 
+    public bool CanClearLogs => Logs.Count > 0;
+
+    [RelayCommand(CanExecute = nameof(CanClearLogs))]
+    private void ClearLogs()
+    {
+        Logs.Clear();
+        OnPropertyChanged(nameof(CanClearLogs));
+        ClearLogsCommand.NotifyCanExecuteChanged();
+    }
+
+    [RelayCommand]
+    private void ToggleLogsExpanded() => IsLogsExpanded = !IsLogsExpanded;
+
     public ObservableCollection<CollectionStageRow> Stages { get; } = [];
 
     public ObservableCollection<PreflightCheckRow> PreflightChecks { get; } =
@@ -395,6 +493,15 @@ public sealed partial class CollectionTaskViewModel(
 
     public bool CanStartTask => CanStart();
 
+    private void NotifyActionButtonPriorityChanged()
+    {
+        OnPropertyChanged(nameof(CanStartTask));
+        OnPropertyChanged(nameof(StartPrimaryButtonVisibility));
+        OnPropertyChanged(nameof(StartSecondaryButtonVisibility));
+        OnPropertyChanged(nameof(CollectionBrowserPrimaryButtonVisibility));
+        OnPropertyChanged(nameof(CollectionBrowserSecondaryButtonVisibility));
+    }
+
     partial void OnIsRunningChanged(bool value)
     {
         UpdateCollectionBrowserPresentation();
@@ -410,7 +517,7 @@ public sealed partial class CollectionTaskViewModel(
         }
         ResetStages(BuildExecutionPlan(value));
         UpdateEnvironmentReadiness();
-        OnPropertyChanged(nameof(CanStartTask));
+        NotifyActionButtonPriorityChanged();
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
@@ -524,7 +631,7 @@ public sealed partial class CollectionTaskViewModel(
                     }
                     UpdateSelectedBuildingsText();
                     StartCommand.NotifyCanExecuteChanged();
-                    OnPropertyChanged(nameof(CanStartTask));
+                    NotifyActionButtonPriorityChanged();
                 }
             };
         }
@@ -634,7 +741,7 @@ public sealed partial class CollectionTaskViewModel(
 
         UpdateEnvironmentReadiness();
         StartCommand.NotifyCanExecuteChanged();
-        OnPropertyChanged(nameof(CanStartTask));
+        NotifyActionButtonPriorityChanged();
     }
 
     private static void ReplaceOptions(
@@ -653,10 +760,15 @@ public sealed partial class CollectionTaskViewModel(
         var selected = Buildings.Where(building => building.IsSelected).Select(building => building.Value).ToList();
         SelectedBuildingsText = selected.Count == 0
             ? "尚未选择楼栋"
-            : $"已选择 {selected.Count} 栋：{string.Join("、", selected)}";
+            : selected.Count == Buildings.Count
+                ? $"已选择全部 {selected.Count} 栋楼"
+                : $"已选择 {selected.Count} 栋：{string.Join("、", selected)}";
         CurrentDataImpactText = selected.Count == 0
             ? "选择至少一栋楼后才能开始"
-            : $"成功后只更新 {string.Join("、", selected)}，其他楼栋保持不变";
+            : selected.Count == Buildings.Count
+                ? string.Empty
+                : $"成功后只更新 {string.Join("、", selected)}，其他楼栋保\u2060持不变";
+        OnPropertyChanged(nameof(CurrentDataImpactVisibility));
     }
 
     private void ResetStages(CollectionTaskExecutionPlan plan)
@@ -1107,6 +1219,7 @@ public sealed partial class CollectionTaskViewModel(
             ? 0
             : summary.PassedCount * 100d / summary.TotalCount;
         StartCommand.NotifyCanExecuteChanged();
+        NotifyActionButtonPriorityChanged();
     }
 
     private CollectionTaskExecutionPlan BuildExecutionPlan(CollectionTaskModeOption? mode)
@@ -1939,6 +2052,9 @@ public sealed partial class CollectionTaskViewModel(
             {
                 Logs.RemoveAt(0);
             }
+
+            OnPropertyChanged(nameof(CanClearLogs));
+            ClearLogsCommand.NotifyCanExecuteChanged();
         });
     }
 
@@ -2053,12 +2169,14 @@ public sealed partial class CollectionTaskViewModel(
             CollectionBrowserActionToolTip = IsRunning
                 ? "采集期间不能关闭浏览器"
                 : "关闭 EMS Scout 专用采集浏览器";
+            NotifyActionButtonPriorityChanged();
             return;
         }
 
         CollectionBrowserActionText = "打开采集浏览器";
         CollectionBrowserActionGlyph = "\uE774";
         CollectionBrowserActionToolTip = "打开 EMS Scout 专用采集浏览器";
+        NotifyActionButtonPriorityChanged();
     }
 
     private bool IsOwnedBrowserProcessRunning()

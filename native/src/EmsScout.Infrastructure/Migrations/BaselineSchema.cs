@@ -11,7 +11,8 @@ internal static class BaselineSchema
     public const int V3Version = 3;
     public const int V4Version = 4;
     public const int V5Version = 5;
-    public const int LatestVersion = V5Version;
+    public const int V6Version = 6;
+    public const int LatestVersion = V6Version;
 
     public static readonly HashSet<string> CoreTables = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -53,6 +54,10 @@ internal static class BaselineSchema
         ["schedule_group_members"] = ["id", "schedule_group_id", "area_group_item_id", "target_type", "building", "floor_label", "floor_value", "sub_area_text", "card_name", "device_uid", "expected_status", "note", "created_at", "updated_at"],
         ["attention_issues"] = ["issue_id", "source_key", "issue_type", "severity", "run_id", "title", "detail", "scope", "issue_count", "navigation_json", "status", "ignore_reason", "first_seen_at", "last_seen_at", "resolved_at"],
         ["attention_issue_history"] = ["id", "issue_id", "changed_at", "previous_status", "current_status", "reason"],
+        ["area_group_rules"] = ["id", "group_id", "rule_type", "building", "floor_label", "floor_value", "match_value", "enabled", "note", "created_at", "updated_at"],
+        ["area_group_members"] = ["id", "group_id", "rule_id", "member_origin", "identity_key", "device_uid", "building", "floor_label", "floor_value", "sub_area_text", "page_name", "card_name", "source_key", "occurrence", "note", "created_at", "updated_at"],
+        ["area_group_exceptions"] = ["id", "group_id", "exception_type", "identity_key", "device_uid", "building", "floor_label", "sub_area_text", "page_name", "card_name", "source_key", "occurrence", "note", "created_at", "updated_at"],
+        ["area_group_change_requests"] = ["id", "group_id", "rule_id", "run_id", "action", "status", "identity_key", "device_uid", "building", "floor_label", "sub_area_text", "page_name", "card_name", "source_key", "occurrence", "match_reason", "decision_note", "detected_at", "decided_at"],
     };
 
     public static readonly AdditiveColumn[] V1AdditiveColumns =
@@ -148,6 +153,14 @@ internal static class BaselineSchema
         ["idx_attention_issues_source"] = new("attention_issues", false),
         ["idx_attention_issues_status"] = new("attention_issues", false),
         ["idx_attention_history_issue"] = new("attention_issue_history", false),
+        ["idx_area_group_rules_group"] = new("area_group_rules", false),
+        ["ux_area_group_rules_identity"] = new("area_group_rules", true),
+        ["idx_area_group_members_group"] = new("area_group_members", false),
+        ["ux_area_group_members_identity"] = new("area_group_members", true),
+        ["idx_area_group_exceptions_group"] = new("area_group_exceptions", false),
+        ["ux_area_group_exceptions_identity"] = new("area_group_exceptions", true),
+        ["idx_area_group_changes_status"] = new("area_group_change_requests", false),
+        ["ux_area_group_change_pending"] = new("area_group_change_requests", true),
     };
 
     public static bool TryGetAdditiveColumn(string table, string column, out AdditiveColumn addition)

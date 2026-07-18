@@ -72,3 +72,11 @@ internal static class AttentionQueueSql
 
     public static string Text => CachedSql.Value;
 }
+
+internal static class AreaGroupReconciliationSql
+{
+    private static readonly Lazy<string> CachedSql = new(
+        () => BaselineSql.LoadAndValidate(".Migrations.Sql.V006__area_group_reconciliation.sql"));
+
+    public static string Text => CachedSql.Value;
+}

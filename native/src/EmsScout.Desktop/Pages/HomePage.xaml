@@ -56,7 +56,7 @@
                     </Grid.RowDefinitions>
                     <StackPanel Padding="16,14,16,6" Spacing="2">
                         <TextBlock Style="{StaticResource SectionTitleStyle}" Text="优先处理" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="合并基础质量、实时审计、实时对账、历史批次和关注设备状态。" TextWrapping="WrapWholeWords" />
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="合并基础质量、实时审计、实时对账和历史批次状态。" TextWrapping="WrapWholeWords" />
                     </StackPanel>
                     <ListView
                         Grid.Row="1"

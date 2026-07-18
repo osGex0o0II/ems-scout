@@ -25,7 +25,6 @@ public sealed class SqliteDeviceReadRepository(
     public async Task<DeviceListResult> SearchAsync(DeviceQuery query, CancellationToken cancellationToken = default)
     {
         var source = DeviceSqlSource.For(query.RunId);
-        var (whereSql, parameters) = BuildWhereClause(query, source);
         var limit = Math.Clamp(query.Limit, 1, 50000);
         var offset = Math.Max(0, query.Offset);
 
@@ -33,6 +32,15 @@ public sealed class SqliteDeviceReadRepository(
             DatabasePathResolver,
             SqliteOpenMode.ReadOnly,
             SqliteCacheMode.Shared);
+        var canFilterDeviceUid = await HasDeviceUidColumnAsync(
+            connection,
+            source,
+            cancellationToken).ConfigureAwait(false);
+        var hasFormalGroupMembers = await SqliteSchemaGuard.TableExistsAsync(
+            connection,
+            "area_group_members",
+            cancellationToken).ConfigureAwait(false);
+        var (whereSql, parameters) = BuildWhereClause(query, source, canFilterDeviceUid, hasFormalGroupMembers);
         var annotations = source.IsHistory
             ? EmptyAnnotations()
             : await LoadAnnotationMapsAsync(connection, cancellationToken).ConfigureAwait(false);
@@ -83,9 +91,13 @@ public sealed class SqliteDeviceReadRepository(
         }
 
         return rows
-            .Select(row => evaluation.DeviceStates.TryGetValue(DeviceWatchKey.KeyFor(row), out var state)
-                ? row with { Watch = state }
-                : row)
+            .Select(row =>
+            {
+                return evaluation.DeviceStates.TryGetValue(DeviceWatchKey.RowKeyFor(row.Id), out var state) ||
+                       evaluation.DeviceStates.TryGetValue(DeviceWatchKey.KeyFor(row), out state)
+                    ? row with { Watch = state }
+                    : row;
+            })
             .ToList();
     }
 
@@ -103,7 +115,15 @@ public sealed class SqliteDeviceReadRepository(
             SqliteOpenMode.ReadOnly,
             SqliteCacheMode.Shared);
         var source = DeviceSqlSource.For(query.RunId);
-        var (runWhereSql, runParameters) = BuildWhereClause(query, source);
+        var canFilterDeviceUid = await HasDeviceUidColumnAsync(
+            connection,
+            source,
+            cancellationToken).ConfigureAwait(false);
+        var hasFormalGroupMembers = await SqliteSchemaGuard.TableExistsAsync(
+            connection,
+            "area_group_members",
+            cancellationToken).ConfigureAwait(false);
+        var (runWhereSql, runParameters) = BuildWhereClause(query, source, canFilterDeviceUid, hasFormalGroupMembers);
 
         var annotations = source.IsHistory
             ? EmptyAnnotations()
@@ -231,7 +251,9 @@ public sealed class SqliteDeviceReadRepository(
 
     private static (string Sql, IReadOnlyDictionary<string, object> Parameters) BuildWhereClause(
         DeviceQuery query,
-        DeviceSqlSource source)
+        DeviceSqlSource source,
+        bool canFilterDeviceUid,
+        bool hasFormalGroupMembers)
     {
         var clauses = new List<string>();
         var parameters = new Dictionary<string, object>();
@@ -248,6 +270,17 @@ public sealed class SqliteDeviceReadRepository(
         }
 
         AddCommunicationClause(clauses, parameters, query.CommunicationState);
+        if (query.CardId is long cardId)
+        {
+            clauses.Add("c.id = $card_id");
+            parameters["$card_id"] = cardId;
+        }
+
+        if (canFilterDeviceUid)
+        {
+            AddExactTextClause(clauses, parameters, "c.device_uid", query.DeviceUid, "device_uid");
+        }
+
         AddExactTextClause(clauses, parameters, "s.text", query.SubArea, "sub_area");
         AddPageNameClause(clauses, parameters, query.PageName);
         AddContainsTextClause(clauses, parameters, "c.name", query.DeviceName, "device_name");
@@ -267,7 +300,7 @@ public sealed class SqliteDeviceReadRepository(
                 groupClauses.Add(parameterName);
             }
 
-            clauses.Add($"""
+            var legacyGroupMatch = $"""
                 EXISTS (
                     SELECT 1
                     FROM monitor_group_items mgi
@@ -298,7 +331,65 @@ public sealed class SqliteDeviceReadRepository(
                         )
                       )
                 )
-                """);
+                """;
+            var occurrenceSourceJoins = source.IsHistory
+                ? """
+                  JOIN run_pages p2 ON p2.id = c2.run_page_id
+                  JOIN run_sub_areas s2 ON s2.id = p2.run_sub_area_id
+                  """
+                : """
+                  JOIN pages p2 ON p2.id = c2.page_id
+                  JOIN sub_areas s2 ON s2.id = p2.sub_area_id
+                  """;
+            var occurrenceRunScope = source.IsHistory
+                ? "AND c2.run_id = c.run_id"
+                : string.Empty;
+            var cardDeviceUidSql = canFilterDeviceUid ? "c.device_uid" : "NULL";
+            var occurrenceDeviceUidSql = canFilterDeviceUid ? "c2.device_uid" : "NULL";
+            var formalGroupMatch = hasFormalGroupMembers
+                ? $"""
+                  EXISTS (
+                    SELECT 1
+                    FROM area_group_members agm
+                    JOIN monitor_groups mg ON mg.id = agm.group_id
+                    WHERE agm.group_id IN ({string.Join(",", groupClauses)})
+                      AND mg.enabled = 1
+                      AND (
+                        (
+                          NULLIF(TRIM(agm.device_uid), '') IS NOT NULL
+                          AND UPPER(NULLIF(TRIM({cardDeviceUidSql}), '')) = UPPER(NULLIF(TRIM(agm.device_uid), ''))
+                        )
+                        OR (
+                          NULLIF(TRIM(agm.device_uid), '') IS NULL
+                          AND NULLIF(TRIM({cardDeviceUidSql}), '') IS NULL
+                          AND agm.building = s.building
+                          AND agm.card_name = c.name
+                          AND (agm.floor_value IS NULL OR ABS(COALESCE(s.floor, -999999) - COALESCE(agm.floor_value, -999998)) < 0.001)
+                          AND (IFNULL(agm.sub_area_text, '') = '' OR IFNULL(agm.sub_area_text, '') = IFNULL(s.text, ''))
+                          AND (IFNULL(agm.page_name, '') = '' OR IFNULL(agm.page_name, '') = IFNULL(p.page_name, ''))
+                          AND (IFNULL(agm.source_key, '') = '' OR IFNULL(agm.source_key, '') = IFNULL(c.source_key, ''))
+                          AND agm.occurrence = (
+                            SELECT COUNT(*)
+                            FROM {source.CardTableName} c2
+                            {occurrenceSourceJoins}
+                            WHERE s2.building = s.building
+                              AND NULLIF(TRIM({occurrenceDeviceUidSql}), '') IS NULL
+                              {occurrenceRunScope}
+                              AND ABS(COALESCE(s2.floor, -999999) - COALESCE(s.floor, -999998)) < 0.001
+                              AND IFNULL(s2.text, '') = IFNULL(s.text, '')
+                              AND IFNULL(p2.page_name, '') = IFNULL(p.page_name, '')
+                              AND c2.name = c.name
+                              AND (
+                                IFNULL(c2.source_key, '') < IFNULL(c.source_key, '')
+                                OR (IFNULL(c2.source_key, '') = IFNULL(c.source_key, '') AND c2.id <= c.id)
+                              )
+                          )
+                        )
+                      )
+                  )
+                  """
+                : string.Empty;
+            clauses.Add(hasFormalGroupMembers ? $"({formalGroupMatch})" : $"({legacyGroupMatch})");
         }
 
         if (clauses.Count == 0)
@@ -789,6 +880,18 @@ public sealed class SqliteDeviceReadRepository(
         }
     }
 
+    private static async Task<bool> HasDeviceUidColumnAsync(
+        SqliteConnection connection,
+        DeviceSqlSource source,
+        CancellationToken cancellationToken)
+    {
+        return await SqliteAreaGroupRepository.ColumnExistsAsync(
+                   connection,
+                   source.CardTableName,
+                   "device_uid",
+                   cancellationToken).ConfigureAwait(false);
+    }
+
     private static IReadOnlyList<string> ResolveRealtimeBuildings(DeviceQuery query, IReadOnlyList<DeviceRecord> rows)
     {
         if (!string.IsNullOrWhiteSpace(query.Building))
@@ -1116,7 +1219,8 @@ public sealed class SqliteDeviceReadRepository(
 
     private sealed record DeviceSqlSource(
         string FromSql,
-        long? RunId)
+        long? RunId,
+        string CardTableName)
     {
         public bool IsHistory => RunId is not null;
 
@@ -1129,14 +1233,16 @@ public sealed class SqliteDeviceReadRepository(
                     JOIN pages p ON c.page_id = p.id
                     JOIN sub_areas s ON p.sub_area_id = s.id
                     """,
-                    null)
+                    null,
+                    "cards")
                 : new DeviceSqlSource(
                     """
                     FROM run_cards c
                     JOIN run_pages p ON c.run_page_id = p.id
                     JOIN run_sub_areas s ON p.run_sub_area_id = s.id
                     """,
-                    runId);
+                    runId,
+                    "run_cards");
         }
     }
 

@@ -7,6 +7,8 @@ public sealed record DeviceQuery(
     string? Floor = null,
     string? SubArea = null,
     string? DeviceName = null,
+    string? DeviceUid = null,
+    long? CardId = null,
     string? Zuo = null,
     string? Mode = null,
     string? Fan = null,

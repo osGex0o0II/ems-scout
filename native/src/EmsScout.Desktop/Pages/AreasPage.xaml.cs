@@ -1,7 +1,8 @@
-using Microsoft.UI.Xaml.Controls;
+using EmsScout.Application.Groups;
+using EmsScout.Desktop.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
-using EmsScout.Desktop.ViewModels;
+using Microsoft.UI.Xaml.Controls;
 
 namespace EmsScout.Desktop.Pages;
 
@@ -20,119 +21,92 @@ public sealed partial class AreasPage : Page
         await ViewModel.LoadAsync();
     }
 
-    private void GroupList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void NavigateToAudit_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is ListView listView && listView.SelectedItem is GroupSummaryRow row)
-        {
-            ViewModel.SelectedGroup = row;
-        }
-    }
-
-    private void OpenInData_Click(object sender, RoutedEventArgs e)
-    {
-        ViewModel.OpenSelectedInData();
+        ViewModel.OpenAudit();
     }
 
     private async void DeleteGroup_Click(object sender, RoutedEventArgs e)
     {
-        if (!ViewModel.CanDeleteSelectedGroup || ViewModel.SelectedGroup is null)
-        {
-            return;
-        }
-
         var group = ViewModel.SelectedGroup;
-        var result = await ConfirmDeleteAsync(
-            "删除自定义分组",
-            $"将删除“{group.Name}”及其成员范围和关注规则。\n\n当前 SQLite 设备数据、设备备注和标签不会被删除。");
-
-        if (result == ContentDialogResult.Primary)
-        {
-            await ViewModel.DeleteGroupAsync();
-        }
-    }
-
-    private async void DeleteItem_Click(object sender, RoutedEventArgs e)
-    {
-        var item = sender is Button { DataContext: AreaGroupItemRow row }
-            ? row
-            : ViewModel.SelectedItem;
-        if (item is null)
+        if (group?.GroupId is null ||
+            !await ConfirmDestructiveActionAsync(
+                "删除区域组",
+                $"将永久删除“{group.Name}”的规则、正式成员、长期例外和待确认记录。",
+                "删除区域组"))
         {
             return;
         }
 
-        var result = await ConfirmDeleteAsync(
-            "删除分组成员",
-            $"将从当前分组移除：{item.TargetTypeLabel} / {item.TargetLabel}。\n\n这只影响分组筛选范围，不会删除设备数据。");
-
-        if (result == ContentDialogResult.Primary)
-        {
-            await ViewModel.DeleteItemAsync(item);
-        }
+        await ViewModel.DeleteGroupAsync();
     }
 
-    private async void EditItem_Click(object sender, RoutedEventArgs e)
+    private async void DeleteRule_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is Button { DataContext: AreaGroupItemRow item })
+        if (sender is Button { DataContext: AreaGroupRuleRecord rule })
         {
-            await ViewModel.BeginEditItemAsync(item);
+            if (!await ConfirmDestructiveActionAsync(
+                    "删除持续规则",
+                    $"删除“{rule.RuleTypeLabel} / {rule.ScopeLabel}”后，受影响的规则成员将在后续采集进入待确认移除。",
+                    "删除规则"))
+            {
+                return;
+            }
+
+            await ViewModel.DeleteRuleAsync(rule);
         }
     }
 
-    private async void DeleteFloor_Click(object sender, RoutedEventArgs e)
+    private async void DeleteManualMember_Click(object sender, RoutedEventArgs e)
     {
-        if (!ViewModel.CanDeleteSelectedFloor || ViewModel.SelectedFloorCatalog is null)
+        if (sender is Button { DataContext: AreaGroupMemberRecord member })
         {
-            return;
-        }
+            var effect = member.MemberOrigin == "rule"
+                ? "该规则成员会被移除并加入长期屏蔽名单。"
+                : "该成员会从区域组中移除。";
+            if (!await ConfirmDestructiveActionAsync(
+                    "移除分组成员",
+                    $"{member.CardName} · {member.Building} {member.FloorLabel}\n\n{effect}",
+                    "确认移除"))
+            {
+                return;
+            }
 
-        var floor = ViewModel.SelectedFloorCatalog;
-        var result = await ConfirmDeleteAsync(
-            "停用楼层目录",
-            $"将停用楼层目录：{floor.DisplayLabel}。\n\n已有分组成员不会被删除，但后续下拉选择不再显示该楼层。");
-
-        if (result == ContentDialogResult.Primary)
-        {
-            await ViewModel.DeleteFloorAsync();
+            await ViewModel.DeleteManualMemberAsync(member);
         }
     }
 
-    private async void DeleteWatch_Click(object sender, RoutedEventArgs e)
+    private async void DeleteException_Click(object sender, RoutedEventArgs e)
     {
-        if (!ViewModel.CanDeleteSelectedWatch)
+        if (sender is Button { DataContext: AreaGroupExceptionRecord exception })
         {
-            return;
-        }
+            if (!await ConfirmDestructiveActionAsync(
+                    "撤销长期例外",
+                    $"撤销“{exception.CardName}”的{exception.ExceptionTypeLabel}后，后续采集会重新按持续规则判断。",
+                    "撤销例外"))
+            {
+                return;
+            }
 
-        var result = await ConfirmDeleteAsync(
-            "删除关注规则",
-            "将删除当前分组的关注时间窗和异常判定规则。\n\n已经采集的设备数据和分组成员不会被删除。");
-
-        if (result == ContentDialogResult.Primary)
-        {
-            await ViewModel.DeleteWatchAsync();
+            await ViewModel.DeleteExceptionAsync(exception);
         }
     }
 
-    private void OpenWatchIncident_Click(object sender, RoutedEventArgs e)
-    {
-        ViewModel.OpenSelectedWatchIncident();
-    }
-
-    private void OpenDateManagement_Click(object sender, RoutedEventArgs e) => ViewModel.OpenDateManagement();
-
-    private async Task<ContentDialogResult> ConfirmDeleteAsync(string title, string content)
+    private async Task<bool> ConfirmDestructiveActionAsync(
+        string title,
+        string content,
+        string primaryButtonText)
     {
         var dialog = new ContentDialog
         {
             XamlRoot = XamlRoot,
             Title = title,
             Content = content,
-            PrimaryButtonText = "删除",
+            PrimaryButtonText = primaryButtonText,
             CloseButtonText = "取消",
             DefaultButton = ContentDialogButton.Close,
         };
 
-        return await dialog.ShowAsync();
+        return await dialog.ShowAsync() == ContentDialogResult.Primary;
     }
 }

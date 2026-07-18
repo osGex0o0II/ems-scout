@@ -1,4 +1,5 @@
 using EmsScout.Application.Devices;
+using System.Globalization;
 
 namespace EmsScout.Application.Watch;
 
@@ -49,9 +50,17 @@ public sealed record DeviceWatchEvaluation(
     IReadOnlyList<DeviceWatchIncident> Incidents,
     IReadOnlyDictionary<string, DeviceWatchState> DeviceStates)
 {
-    public int WatchedDevices => DeviceStates.Values.Count(state => state.IsWatched);
+    public int WatchedDevices => CountDistinct(state => state.IsWatched);
 
-    public int AbnormalDevices => DeviceStates.Values.Count(state => state.IsAbnormal);
+    public int AbnormalDevices => CountDistinct(state => state.IsAbnormal);
+
+    private int CountDistinct(Func<DeviceWatchState, bool> predicate) => DeviceStates
+        .Where(entry => predicate(entry.Value))
+        .Select(entry => string.IsNullOrWhiteSpace(entry.Value.IdentityKey)
+            ? entry.Key
+            : entry.Value.IdentityKey)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .Count();
 }
 
 public sealed record DeviceWatchIncident(
@@ -83,7 +92,8 @@ public sealed record DeviceWatchState(
     DateTimeOffset? StartAt,
     DateTimeOffset? EndAt,
     string Summary,
-    string Evidence)
+    string Evidence,
+    string IdentityKey = "")
 {
     public static DeviceWatchState Unwatched { get; } = new(
         IsWatched: false,
@@ -106,7 +116,9 @@ public sealed record DeviceWatchKey(
     string FloorLabel,
     string SubArea,
     string PageName,
-    string Name)
+    string Name,
+    string DeviceUid = "",
+    long? CardId = null)
 {
     public string Key => string.Join(
         "|",
@@ -128,6 +140,9 @@ public sealed record DeviceWatchKey(
         row.Name);
 
     public static string KeyFor(DeviceRecord row) => From(row).Key;
+
+    public static string RowKeyFor(long cardId) =>
+        "card:" + cardId.ToString(CultureInfo.InvariantCulture);
 
     private static string Normalize(string value) => (value ?? string.Empty).Trim().ToUpperInvariant();
 }

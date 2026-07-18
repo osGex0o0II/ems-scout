@@ -161,7 +161,7 @@ public sealed class CollectionRunRepositoryTests
             CREATE TABLE device_notes (id INTEGER PRIMARY KEY AUTOINCREMENT, card_name TEXT NOT NULL, building TEXT, note TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(card_name, building));
             CREATE INDEX idx_pg_sa ON pages(sub_area_id);
             CREATE INDEX idx_run_pages_sa ON run_pages(run_sub_area_id);
-            PRAGMA user_version = 5;
+            PRAGMA user_version = 6;
             INSERT INTO buildings (building, sub_area_count, menu_clicked, updated_at) VALUES ('1号', 1, 'yes', '2026-07-01T00:00:00Z');
             INSERT INTO sub_areas (id, building, sub_idx, floor, text, x, y) VALUES (1, '1号', 1, 1, '1F A', 10, 20);
             INSERT INTO pages (id, sub_area_id, page_name, count, raw_count, unique_count, duplicate_names, on_href, off_href, layout, quality_reason, err) VALUES (1, 1, '1F', 1, 1, 1, '', '', '', 'grid', 'stale_before_restore', '');

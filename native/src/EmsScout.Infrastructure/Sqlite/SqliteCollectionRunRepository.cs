@@ -128,6 +128,16 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         var run = await LoadRunAsync(connection, transaction, runId, cancellationToken).ConfigureAwait(false)
                   ?? throw new InvalidOperationException($"Run not found: {runId}");
 
+        if (await SqliteSchemaGuard.TableExistsAsync(connection, "area_group_change_requests", cancellationToken).ConfigureAwait(false))
+        {
+            await ExecuteCountAsync(
+                    connection,
+                    transaction,
+                    "UPDATE area_group_change_requests SET run_id = NULL WHERE run_id = $run_id",
+                    runId,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
         var deletedCards = await ExecuteCountAsync(connection, transaction, "DELETE FROM run_cards WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
         var deletedPages = await ExecuteCountAsync(connection, transaction, "DELETE FROM run_pages WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
         var deletedSubAreas = await ExecuteCountAsync(connection, transaction, "DELETE FROM run_sub_areas WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);

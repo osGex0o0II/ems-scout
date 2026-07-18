@@ -42,6 +42,7 @@ public sealed class DataViewModel(
     private DataFilterOption? _selectedBuilding;
     private DataFilterOption? _selectedCommunication;
     private DataFilterOption? _selectedFloor;
+    private DataFilterOption? _selectedSubArea;
     private DataFilterOption? _selectedZuo;
     private DataFilterOption? _selectedPageName;
     private DataFilterOption? _selectedMode;
@@ -52,6 +53,9 @@ public sealed class DataViewModel(
     private string _deviceNameText = string.Empty;
     private bool _isInitializing;
     private bool _contextAttached;
+    private bool _applyingNavigationRequest;
+    private string _navigationDeviceUid = string.Empty;
+    private long? _navigationCardId;
     private readonly DeviceDataQuerySession _querySession = new();
 
     public DataContextService DataContext { get; } = dataContext;
@@ -67,6 +71,8 @@ public sealed class DataViewModel(
     public ObservableCollection<DataFilterOption> CommunicationOptions { get; } = [];
 
     public ObservableCollection<DataFilterOption> FloorOptions { get; } = [];
+
+    public ObservableCollection<DataFilterOption> SubAreaOptions { get; } = [];
 
     public ObservableCollection<DataFilterOption> ZuoOptions { get; } = [];
 
@@ -326,6 +332,18 @@ public sealed class DataViewModel(
         }
     }
 
+    public DataFilterOption? SelectedSubArea
+    {
+        get => _selectedSubArea;
+        set
+        {
+            if (SetProperty(ref _selectedSubArea, value))
+            {
+                NotifyFilterInputChanged();
+            }
+        }
+    }
+
     public DataFilterOption? SelectedZuo
     {
         get => _selectedZuo;
@@ -438,6 +456,8 @@ public sealed class DataViewModel(
             if (navigationRequest is not null)
             {
                 ApplyNavigationRequest(navigationRequest);
+                await ReloadFilterOptionsAsync(cancellationToken).ConfigureAwait(true);
+                ApplyNavigationIdentity(navigationRequest);
             }
 
             CurrentPage = 1;
@@ -489,6 +509,7 @@ public sealed class DataViewModel(
         var selectedBuilding = SelectedBuilding?.Value ?? string.Empty;
         var selectedCommunication = SelectedCommunication?.Value ?? string.Empty;
         var selectedFloor = SelectedFloor?.Value ?? string.Empty;
+        var selectedSubArea = SelectedSubArea?.Value ?? string.Empty;
         var selectedZuo = SelectedZuo?.Value ?? string.Empty;
         var selectedPageName = SelectedPageName?.Value ?? string.Empty;
         var selectedMode = SelectedMode?.Value ?? string.Empty;
@@ -501,6 +522,7 @@ public sealed class DataViewModel(
         ReplaceOptions(BuildingOptions, DataFilterOption.All("全部楼栋"), options.Buildings.Select(DataFilterOption.From), selectedBuilding);
         ReplaceOptions(CommunicationOptions, DataFilterOption.All("全部开关机状态"), options.CommunicationStates.Select(DataFilterOption.From), selectedCommunication);
         ReplaceOptions(FloorOptions, DataFilterOption.All("全部楼层"), options.Floors.Select(DataFilterOption.From), selectedFloor);
+        ReplaceOptions(SubAreaOptions, DataFilterOption.All("全部子区"), options.SubAreas.Select(DataFilterOption.From), selectedSubArea);
         ReplaceOptions(ZuoOptions, DataFilterOption.All("全部座号"), options.Zuos.Select(DataFilterOption.From), selectedZuo);
         ReplaceOptions(PageNameOptions, DataFilterOption.All("全部页面"), options.PageNames.Select(DataFilterOption.From), selectedPageName);
         ReplaceOptions(ModeOptions, DataFilterOption.All("全部模式"), options.Modes.Select(DataFilterOption.From), selectedMode);
@@ -524,6 +546,7 @@ public sealed class DataViewModel(
         SelectedBuilding = SelectOption(BuildingOptions, selectedBuilding) ?? BuildingOptions.FirstOrDefault();
         SelectedCommunication = SelectOption(CommunicationOptions, selectedCommunication) ?? CommunicationOptions.FirstOrDefault();
         SelectedFloor = SelectOption(FloorOptions, selectedFloor) ?? FloorOptions.FirstOrDefault();
+        SelectedSubArea = SelectOption(SubAreaOptions, selectedSubArea) ?? SubAreaOptions.FirstOrDefault();
         SelectedZuo = SelectOption(ZuoOptions, selectedZuo) ?? ZuoOptions.FirstOrDefault();
         SelectedPageName = SelectOption(PageNameOptions, selectedPageName) ?? PageNameOptions.FirstOrDefault();
         SelectedMode = SelectOption(ModeOptions, selectedMode) ?? ModeOptions.FirstOrDefault();
@@ -576,6 +599,7 @@ public sealed class DataViewModel(
 
         SelectedZuo = ZuoOptions.FirstOrDefault();
         SelectedFloor = FloorOptions.FirstOrDefault();
+        SelectedSubArea = SubAreaOptions.FirstOrDefault();
         SelectedPageName = PageNameOptions.FirstOrDefault();
         await ApplyFiltersAsync(cancellationToken).ConfigureAwait(true);
     }
@@ -587,7 +611,23 @@ public sealed class DataViewModel(
             return;
         }
 
+        SelectedSubArea = SubAreaOptions.FirstOrDefault();
         SelectedPageName = PageNameOptions.FirstOrDefault();
+        await ApplyFiltersAsync(cancellationToken).ConfigureAwait(true);
+    }
+
+    public async Task ApplySubAreaSelectionAsync(CancellationToken cancellationToken = default)
+    {
+        if (IsLoading || _isInitializing)
+        {
+            return;
+        }
+
+        var nextQuery = DeviceNavigationFilterPolicy.ApplySubAreaSelection(
+            BuildQuery(limit: PageSize, offset: 0),
+            SelectedSubArea?.Value);
+        SelectedPageName = SelectOption(PageNameOptions, nextQuery.PageName ?? string.Empty)
+                           ?? PageNameOptions.FirstOrDefault();
         await ApplyFiltersAsync(cancellationToken).ConfigureAwait(true);
     }
 
@@ -703,6 +743,7 @@ public sealed class DataViewModel(
         SelectedBuilding = BuildingOptions.FirstOrDefault();
         SelectedCommunication = CommunicationOptions.FirstOrDefault();
         SelectedFloor = FloorOptions.FirstOrDefault();
+        SelectedSubArea = SubAreaOptions.FirstOrDefault();
         SelectedZuo = ZuoOptions.FirstOrDefault();
         SelectedPageName = PageNameOptions.FirstOrDefault();
         SelectedMode = ModeOptions.FirstOrDefault();
@@ -863,7 +904,10 @@ public sealed class DataViewModel(
             Building: EmptyToNull(SelectedBuilding?.Value),
             CommunicationState: EmptyToNull(SelectedCommunication?.Value),
             Floor: EmptyToNull(SelectedFloor?.Value),
+            SubArea: EmptyToNull(SelectedSubArea?.Value),
             DeviceName: EmptyToNull(DeviceNameText),
+            DeviceUid: EmptyToNull(_navigationDeviceUid),
+            CardId: _navigationCardId,
             Zuo: CanFilterByZuo ? EmptyToNull(SelectedZuo?.Value) : null,
             PageName: EmptyToNull(SelectedPageName?.Value),
             Mode: EmptyToNull(SelectedMode?.Value),
@@ -903,6 +947,7 @@ public sealed class DataViewModel(
         AddFilter(filters, "楼栋", query.Building);
         AddFilter(filters, "座号", query.Zuo);
         AddFilter(filters, "楼层", query.Floor);
+        AddFilter(filters, "子区", query.SubArea);
         AddFilter(filters, "页面", query.PageName);
         AddFilter(filters, "设备", query.DeviceName);
         AddFilter(filters, "状态", query.CommunicationState);
@@ -922,7 +967,7 @@ public sealed class DataViewModel(
                 "needs_review" => "需关注",
                 _ => query.QuickFilter,
             };
-            filters.Add($"快捷：{label}");
+            filters.Add($"{NonBreakingLabel("快捷")}：{label}");
         }
 
         return filters.Count == 0 ? "已生效条件：全部设备" : "已生效条件：" + string.Join(" · ", filters);
@@ -932,9 +977,11 @@ public sealed class DataViewModel(
     {
         if (!string.IsNullOrWhiteSpace(value))
         {
-            filters.Add($"{label}：{value.Trim()}");
+            filters.Add($"{NonBreakingLabel(label)}：{value.Trim()}");
         }
     }
+
+    private static string NonBreakingLabel(string label) => string.Join('\u2060', label.ToCharArray());
 
     private static bool QueryScopesEqual(DeviceQuery left, DeviceQuery right)
     {
@@ -943,6 +990,12 @@ public sealed class DataViewModel(
 
     private void NotifyFilterInputChanged()
     {
+        if (!_applyingNavigationRequest)
+        {
+            _navigationDeviceUid = string.Empty;
+            _navigationCardId = null;
+        }
+
         OnPropertyChanged(nameof(CanExport));
         OnPropertyChanged(nameof(ExportPreviewText));
     }
@@ -977,14 +1030,80 @@ public sealed class DataViewModel(
 
     private void ApplyNavigationRequest(DataNavigationRequest request)
     {
-        DeviceNameText = request.SearchText;
-        SelectedBuilding = SelectOption(BuildingOptions, request.Building) ?? SelectedBuilding;
-        SelectedCommunication = SelectOption(CommunicationOptions, request.CommunicationState) ?? SelectedCommunication;
-        SelectedArea = SelectOption(AreaOptions, request.AreaType) ?? SelectedArea;
-        SelectedFloor = SelectOption(FloorOptions, request.Floor) ?? FloorOptions.FirstOrDefault();
-        SelectedPageName = SelectOption(PageNameOptions, request.PageName) ?? PageNameOptions.FirstOrDefault();
-        SelectedZuo = SelectOption(ZuoOptions, request.Zuo) ?? ZuoOptions.FirstOrDefault();
-        CoerceZuoSelectionForBuilding();
+        var navigation = DeviceNavigationFilterPolicy.ResolveNavigation(
+            new DeviceQuery(
+                Building: request.Building,
+                CommunicationState: request.CommunicationState,
+                Floor: request.Floor,
+                SubArea: request.SubArea,
+                DeviceName: request.SearchText,
+                DeviceUid: request.DeviceUid,
+                CardId: request.CardId,
+                Zuo: request.Zuo,
+                PageName: request.PageName,
+                AreaType: request.AreaType),
+            ToApplicationOptions(BuildingOptions),
+            ToApplicationOptions(FloorOptions),
+            ToApplicationOptions(SubAreaOptions),
+            ToApplicationOptions(PageNameOptions));
+        var communicationState = DeviceNavigationFilterPolicy.ResolveOptionValue(
+            ToApplicationOptions(CommunicationOptions),
+            request.CommunicationState);
+        var areaType = DeviceNavigationFilterPolicy.ResolveOptionValue(
+            ToApplicationOptions(AreaOptions),
+            request.AreaType);
+        var zuo = DeviceNavigationFilterPolicy.ResolveOptionValue(
+            ToApplicationOptions(ZuoOptions),
+            request.Zuo);
+
+        _applyingNavigationRequest = true;
+        try
+        {
+            ApplyNavigationIdentity(request);
+            DeviceNameText = request.SearchText;
+            SelectedBuilding = SelectOption(BuildingOptions, request.Building)
+                               ?? AddNavigationOption(BuildingOptions, navigation.Building);
+            SelectedCommunication = SelectOption(CommunicationOptions, request.CommunicationState)
+                                    ?? AddNavigationOption(CommunicationOptions, communicationState);
+            SelectedArea = SelectOption(AreaOptions, request.AreaType)
+                           ?? AddNavigationOption(AreaOptions, areaType);
+            SelectedFloor = SelectOption(FloorOptions, request.Floor)
+                            ?? AddNavigationOption(FloorOptions, navigation.Floor);
+            SelectedSubArea = SelectOption(SubAreaOptions, request.SubArea)
+                              ?? AddNavigationOption(SubAreaOptions, navigation.SubArea);
+            SelectedPageName = SelectOption(PageNameOptions, request.PageName)
+                               ?? AddNavigationOption(PageNameOptions, navigation.PageName);
+            SelectedZuo = SelectOption(ZuoOptions, request.Zuo)
+                          ?? AddNavigationOption(ZuoOptions, zuo);
+            CoerceZuoSelectionForBuilding();
+        }
+        finally
+        {
+            _applyingNavigationRequest = false;
+        }
+    }
+
+    private void ApplyNavigationIdentity(DataNavigationRequest request)
+    {
+        _navigationDeviceUid = request.CardId is null ? string.Empty : request.DeviceUid.Trim();
+        _navigationCardId = request.CardId;
+    }
+
+    private static DeviceFilterOption[] ToApplicationOptions(IEnumerable<DataFilterOption> options)
+    {
+        return options
+            .Select(option => new DeviceFilterOption(option.Value, option.Label, option.Count))
+            .ToArray();
+    }
+
+    private static DataFilterOption AddNavigationOption(
+        ObservableCollection<DataFilterOption> options,
+        string? value)
+    {
+        var resolvedValue = value ?? string.Empty;
+        var option = new DataFilterOption(resolvedValue, resolvedValue, 0);
+        options.Add(option);
+        return option;
     }
 
     private static DataFilterOption? SelectOption(IEnumerable<DataFilterOption> options, string value)
