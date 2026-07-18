@@ -42,6 +42,8 @@ MSIX 的 Authenticode 状态，签名不合法立即失败。
 
 `finally` 必须清理由脚本安装的应用包。启动使用 Windows
 `IApplicationActivationManager`，不依赖直接运行无包身份的 EXE。
+干净环境预检通过后写入 `artifacts/ci/msix-install-owned.json`；只有该标记存在且
+身份匹配时，工作流级 `always()` 清理才允许删除应用包，避免误删预先存在的开发包。
 
 ### `.github/workflows/windows-x64.yml`
 
@@ -53,6 +55,7 @@ Sidecar manifest 和包目录，不上传私钥。
 
 - 任意测试、签名、安装、激活或卸载失败都使作业失败。
 - 已存在同身份应用包时安装烟测直接失败，不自动删除来源不明的本机包。
+- 证书加入信任存储失败时，按本次指纹清理 Personal/TrustedPeople 两个存储后再失败。
 - 签名证书主题、包 Publisher 或签名状态不一致时直接失败。
 - 启动后进程未出现或提前退出时直接失败。
 - 清理步骤始终执行，但不得掩盖此前失败。
@@ -67,4 +70,3 @@ Sidecar manifest 和包目录，不上传私钥。
 - 作业结束后 `Get-AppxPackage -Name 1FACE092-146B-4AE5-83DB-3990E6AE8371`
   无结果，临时证书不再位于 `CurrentUser\My` 或 `CurrentUser\TrustedPeople`。
 - Artifact 包含签名 MSIX，且不包含 `.pfx`、`.pvk` 或其他私钥文件。
-

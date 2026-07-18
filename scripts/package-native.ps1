@@ -3,7 +3,8 @@
   [string]$Configuration = 'Release',
   [switch]$SkipTests,
   [switch]$SkipSidecarSmoke,
-  [switch]$SkipSidecarPrepare
+  [switch]$SkipSidecarPrepare,
+  [string]$PackageCertificateThumbprint
 )
 
 $ErrorActionPreference = 'Stop'
@@ -46,16 +47,53 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 New-Item -ItemType Directory -Force -Path $PackageOutput | Out-Null
-& dotnet publish $DesktopProject `
-  -c $Configuration `
-  -r win-x64 `
-  -p:Platform=x64 `
-  -p:PublishProfile=win-x64 `
-  -p:GenerateAppxPackageOnBuild=true `
-  -p:AppxBundle=Never `
-  -p:AppxPackageDir="$PackageOutput\"
+$publishArgs = @(
+  'publish',
+  $DesktopProject,
+  '-c', $Configuration,
+  '-r', 'win-x64',
+  '-p:Platform=x64',
+  '-p:PublishProfile=win-x64',
+  '-p:GenerateAppxPackageOnBuild=true',
+  '-p:AppxBundle=Never',
+  "-p:AppxPackageDir=$PackageOutput\"
+)
+
+if (-not [string]::IsNullOrWhiteSpace($PackageCertificateThumbprint)) {
+  $certificatePath = "Cert:\CurrentUser\My\$PackageCertificateThumbprint"
+  if (-not (Test-Path -LiteralPath $certificatePath)) {
+    throw "Package signing certificate was not found: $certificatePath"
+  }
+
+  $publishArgs += '-p:AppxPackageSigningEnabled=true'
+  $publishArgs += "-p:PackageCertificateThumbprint=$PackageCertificateThumbprint"
+}
+
+& dotnet @publishArgs
 if ($LASTEXITCODE -ne 0) {
   throw "Native package build failed with exit code $LASTEXITCODE."
+}
+
+if (-not [string]::IsNullOrWhiteSpace($PackageCertificateThumbprint)) {
+  $mainPackages = @(
+    Get-ChildItem -LiteralPath $PackageOutput -Recurse -File -Filter '*.msix' |
+      Where-Object {
+        $_.FullName -notmatch '[\\/]Dependencies[\\/]' -and
+        $_.Name -like 'EmsScout.Desktop*.msix' -and
+        (($Configuration -eq 'Debug' -and $_.Name -like '*_Debug.msix') -or
+         ($Configuration -eq 'Release' -and $_.Name -notlike '*_Debug.msix'))
+      }
+  )
+  if ($mainPackages.Count -ne 1) {
+    throw "Expected one EMS Scout MSIX, found $($mainPackages.Count) in $PackageOutput."
+  }
+
+  $signature = Get-AuthenticodeSignature -LiteralPath $mainPackages[0].FullName
+  if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+    throw "Signature status for $($mainPackages[0].FullName) is $($signature.Status), expected Valid."
+  }
+
+  Write-Host "Signed MSIX verified: $($mainPackages[0].FullName)"
 }
 
 Write-Host "Native x64 package output: $PackageOutput"

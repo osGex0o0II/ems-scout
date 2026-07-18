@@ -11,11 +11,19 @@ The native app is a refactor, not a one-for-one port of the old web panel. Its f
 - Workbench
 - Collection
 - Device Data
-- Rules And Plans
+- Area Groups
 - Audit
 
-System Settings and Diagnostics are footer tools. Date management is reached from
-Rules And Plans and remains selected under that workflow destination.
+System Settings and Diagnostics are footer tools. Area Groups is the single place
+for editable groups, persistent floor/exact-name/keyword rules, confirmed members,
+the current-device directory, and durable blocked or retained exceptions. Public
+and non-public groups are one-time editable presets rather than locked system
+containers.
+
+Collection imports reconcile enabled rules inside the same SQLite transaction.
+Matches and rule drift become pending add/remove proposals; only an explicit Audit
+decision changes confirmed membership. The retired watch and calendar surfaces are
+not exposed, while their historical SQLite tables remain intact for compatibility.
 
 Data Management filtered Excel export is the only user-facing export path. Legacy TXT, Markdown, and multi-report generation are not native UI actions.
 
@@ -73,6 +81,12 @@ opens the production database through SQLite.
 The x64 package is self-contained and ReadyToRun, but intentionally not trimmed.
 WinUI/WinRT and the current versioned JSON, migration, settings, and logging paths
 require reflection metadata; enabling trimming without source-generated coverage is unsupported.
+
+The GitHub Actions package gate creates a non-exportable, short-lived test certificate,
+signs the Release MSIX, and runs two install/activation/uninstall rounds on the clean runner.
+`scripts\test-msix-install.ps1` refuses to run when the EMS Scout package identity is
+already registered, so it cannot silently replace a developer's local packaged app.
+This test certificate is not a production signing identity and does not validate upgrades.
 
 ## Database Lifecycle
 

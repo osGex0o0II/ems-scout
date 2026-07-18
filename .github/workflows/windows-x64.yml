@@ -38,6 +38,23 @@ jobs:
       - name: Restore native solution
         run: dotnet restore native/EmsScout.Native.slnx -r win-x64
 
+      - name: Validate packaging PowerShell syntax
+        shell: pwsh
+        run: |
+          foreach ($path in 'scripts/new-test-signing-certificate.ps1',
+                            'scripts/package-native.ps1',
+                            'scripts/test-msix-install.ps1') {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path -LiteralPath $path),
+              [ref]$tokens,
+              [ref]$errors)
+            if ($errors.Count -gt 0) {
+              throw "PowerShell syntax validation failed for ${path}: $($errors.Message -join '; ')"
+            }
+          }
+
       - name: Test contracts and Sidecar
         run: npm test
 
@@ -72,7 +89,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force artifacts/ci | Out-Null
           & node -e "const fs=require('fs');const Database=require('better-sqlite3');const db=new Database(process.argv[1]);db.exec(fs.readFileSync(process.argv[2],'utf8'));db.close();" `
-            artifacts/ci/archived-core-v0.db tests/contract-audit/fixtures/schema-v0.sql
+            artifacts/ci/archived-core-v0.db tests/fixtures/schema-baselines/archived-core-v0.sql
           if ($LASTEXITCODE -ne 0) { throw "Synthetic migration fixture creation failed with exit code $LASTEXITCODE" }
           & dotnet run --project native/tools/EmsScout.SchemaTool/EmsScout.SchemaTool.csproj `
             -c Release --no-restore -- `
@@ -103,9 +120,72 @@ jobs:
         shell: pwsh
         run: ./scripts/prepare-sidecar.ps1
 
+      - name: Create ephemeral test signing certificate
+        id: test_signing
+        shell: pwsh
+        run: |
+          $certificate = ./scripts/new-test-signing-certificate.ps1
+          "thumbprint=$($certificate.Thumbprint)" >> $env:GITHUB_OUTPUT
+
       - name: Build Windows x64 package
         shell: pwsh
-        run: ./scripts/package-native.ps1 -Configuration Release -SkipTests -SkipSidecarPrepare
+        run: |
+          ./scripts/package-native.ps1 `
+            -Configuration Release `
+            -SkipTests `
+            -SkipSidecarPrepare `
+            -PackageCertificateThumbprint '${{ steps.test_signing.outputs.thumbprint }}'
+
+      - name: Install, launch, reinstall, and uninstall package
+        shell: pwsh
+        run: |
+          ./scripts/test-msix-install.ps1 `
+            -PackageRoot artifacts/packages/win-x64 `
+            -OwnershipMarkerPath artifacts/ci/msix-install-owned.json
+
+      - name: Cleanup owned test package
+        if: always()
+        shell: pwsh
+        run: |
+          $ownershipMarker = 'artifacts/ci/msix-install-owned.json'
+          if (Test-Path -LiteralPath $ownershipMarker) {
+            $ownership = Get-Content -LiteralPath $ownershipMarker -Raw | ConvertFrom-Json
+            if ($ownership.contractVersion -ne 'ems.msix-install-ownership/v1' -or
+                $ownership.packageIdentityName -ne '1FACE092-146B-4AE5-83DB-3990E6AE8371') {
+              throw 'MSIX install ownership marker is invalid.'
+            }
+            $ownedPackages = @(
+              Get-ChildItem -LiteralPath artifacts/packages/win-x64 -Recurse -File -Filter '*.msix' |
+                Where-Object { $_.FullName -notmatch '[\\/]Dependencies[\\/]' }
+            )
+            if ($ownedPackages.Count -ne 1) {
+              throw "Expected one owned EMS Scout MSIX, found $($ownedPackages.Count)."
+            }
+            $ownedPackageHash = (Get-FileHash -LiteralPath $ownedPackages[0].FullName -Algorithm SHA256).Hash
+            if ($ownedPackageHash -ne $ownership.packageSha256) {
+              throw 'MSIX install ownership marker does not match the package artifact.'
+            }
+            Get-AppxPackage -Name $ownership.packageIdentityName -ErrorAction SilentlyContinue |
+              Remove-AppxPackage -ErrorAction Stop
+            if (Get-AppxPackage -Name $ownership.packageIdentityName -ErrorAction SilentlyContinue) {
+              throw 'Owned EMS Scout package remained registered after cleanup.'
+            }
+            Remove-Item -LiteralPath $ownershipMarker -Force
+          }
+
+      - name: Cleanup test signing certificate
+        if: always()
+        shell: pwsh
+        run: |
+          $thumbprint = '${{ steps.test_signing.outputs.thumbprint }}'
+          if (-not [string]::IsNullOrWhiteSpace($thumbprint)) {
+            foreach ($store in 'Cert:\CurrentUser\My', 'Cert:\CurrentUser\TrustedPeople') {
+              $certificatePath = Join-Path $store $thumbprint
+              if (Test-Path -LiteralPath $certificatePath) {
+                Remove-Item -LiteralPath $certificatePath -Force
+              }
+            }
+          }
 
       - name: Upload verification evidence
         if: always()
@@ -119,3 +199,5 @@ jobs:
             artifacts/ci/*.json
             artifacts/sidecar/win-x64/payload-manifest.json
             artifacts/packages/win-x64/**
+            !**/*.pfx
+            !**/*.pvk

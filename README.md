@@ -14,8 +14,8 @@ EMS Scout 是面向楼宇空调运维的 Windows 桌面工具。它通过 Edge C
 - 浏览器采集：Node.js + Playwright + Edge CDP Sidecar。
 - Windows 打包与现场验证：PowerShell。
 - 跨平台逻辑重构已完成。
-- Windows CI 已通过 XAML、干净克隆测试、Sidecar smoke 和 MSIX 构建。
-- 安装后运行、升级/卸载、内置 Sidecar 实际采集和真实 EMS 仍需在 Windows 设备验收。
+- Windows CI 门禁覆盖 XAML、干净克隆测试、Sidecar smoke、测试签名 MSIX 和干净用户安装生命周期。
+- 正式生产签名、版本升级、安装后 Sidecar 实采和真实 EMS 仍需在目标 Windows 设备验收。
 
 详见 [当前状态](docs/状态.md) 和 [架构说明](docs/architecture.md)。
 

@@ -39,8 +39,8 @@ test('architecture and handoff preserve current ownership and external gates', (
   assert.match(architecture, /只有 `EmsScout\.Infrastructure\/Migrations`/);
   assert.match(architecture, /不能描述成真实 EMS 端到端通过/);
   assert.match(handoff, /不通过 SQLite 打开 `out\/ac\.db`/);
-  assert.match(context, /Windows CI 已通过 XAML、干净克隆测试、Sidecar payload smoke 和 MSIX 构建/);
-  assert.match(context, /安装后运行、MSIX 全生命周期、内置 Sidecar 实际采集和真实 EMS 尚未验证/);
+  assert.match(context, /Windows CI 工作流已扩展为 XAML、干净克隆测试、Sidecar payload smoke、测试签名 MSIX 和干净用户安装生命周期/);
+  assert.match(context, /正式生产签名、跨版本升级、内置 Sidecar 实采和真实 EMS 尚未验证/);
   assert.match(context, /重构已按四组提交/);
   assert.doesNotMatch(context, /等待用户确认是否按建议分组暂存和提交/);
   assert.doesNotMatch(read('docs/状态.md'), /当前没有执行 `git add`、`git commit`/);
