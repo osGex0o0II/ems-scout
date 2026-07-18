@@ -137,7 +137,7 @@ jobs:
         id: test_signing
         shell: pwsh
         run: |
-          $certificate = ./scripts/new-test-signing-certificate.ps1
+          $certificate = ./scripts/new-test-signing-certificate.ps1 -TrustForInstall
           "thumbprint=$($certificate.Thumbprint)" >> $env:GITHUB_OUTPUT
 
       - name: Build Windows x64 package
@@ -200,7 +200,9 @@ jobs:
         run: |
           $thumbprint = '${{ steps.test_signing.outputs.thumbprint }}'
           if (-not [string]::IsNullOrWhiteSpace($thumbprint)) {
-            foreach ($store in 'Cert:\CurrentUser\My', 'Cert:\CurrentUser\TrustedPeople') {
+            foreach ($store in 'Cert:\CurrentUser\My',
+                                'Cert:\CurrentUser\TrustedPeople',
+                                'Cert:\LocalMachine\Root') {
               $certificatePath = Join-Path $store $thumbprint
               if (Test-Path -LiteralPath $certificatePath) {
                 Remove-Item -LiteralPath $certificatePath -Force

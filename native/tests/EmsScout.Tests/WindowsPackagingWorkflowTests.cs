@@ -12,6 +12,9 @@ public sealed class WindowsPackagingWorkflowTests
         Assert.Contains("Cert:\\CurrentUser\\My", script);
         Assert.Contains("TrustedPeople", script);
         Assert.DoesNotContain("Cert:\\CurrentUser\\Root", script);
+        Assert.Contains("TrustForInstall", script);
+        Assert.Contains("Cert:\\LocalMachine\\Root", script);
+        Assert.Contains("StoreLocation]::LocalMachine", script);
         Assert.Contains("X509Store", script);
         Assert.Contains("-KeyExportPolicy NonExportable", script);
         Assert.Contains("catch", script);
@@ -97,6 +100,7 @@ public sealed class WindowsPackagingWorkflowTests
         Assert.True(certificateCleanupStep > packageCleanupStep, "Certificate cleanup must be an independent later step.");
         Assert.True(uploadStep > certificateCleanupStep, "Artifact upload must run after both cleanup steps.");
         Assert.Contains("id: test_signing", workflow);
+        Assert.Contains("new-test-signing-certificate.ps1 -TrustForInstall", workflow);
         Assert.Contains("Validate packaging PowerShell syntax", workflow);
         Assert.Contains("System.Management.Automation.Language.Parser", workflow);
         Assert.Contains("scripts/verify-msix-signature.ps1", workflow);
@@ -111,6 +115,7 @@ public sealed class WindowsPackagingWorkflowTests
         Assert.Contains("if: always()", workflow);
         Assert.Contains("Cert:\\CurrentUser\\My", workflow);
         Assert.Contains("Cert:\\CurrentUser\\TrustedPeople", workflow);
+        Assert.Contains("Cert:\\LocalMachine\\Root", workflow);
         Assert.Contains("!**/*.pfx", workflow);
         Assert.Contains("!**/*.pvk", workflow);
 
@@ -129,6 +134,7 @@ public sealed class WindowsPackagingWorkflowTests
         Assert.Contains("if: always()", certificateCleanup);
         Assert.Contains("Cert:\\CurrentUser\\My", certificateCleanup);
         Assert.Contains("Cert:\\CurrentUser\\TrustedPeople", certificateCleanup);
+        Assert.Contains("Cert:\\LocalMachine\\Root", certificateCleanup);
     }
 
     [Fact]
