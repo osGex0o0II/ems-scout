@@ -84,6 +84,21 @@ namespace EmsScout.PackageSmoke
     public class ApplicationActivationManager
     {
     }
+
+    public static class PackageActivator
+    {
+        public static uint Activate(string appUserModelId)
+        {
+            var manager = (IApplicationActivationManager)new ApplicationActivationManager();
+            var result = manager.ActivateApplication(appUserModelId, string.Empty, 0, out var processId);
+            if (result < 0)
+            {
+                Marshal.ThrowExceptionForHR(result);
+            }
+
+            return processId;
+        }
+    }
 }
 '@
 
@@ -117,13 +132,7 @@ function Start-AndVerifyPackage([object]$InstalledPackage) {
   }
 
   $aumid = "$($InstalledPackage.PackageFamilyName)!$applicationId"
-  $activationManager = [EmsScout.PackageSmoke.ApplicationActivationManager]::new()
-  $activationInterface = [EmsScout.PackageSmoke.IApplicationActivationManager]$activationManager
-  [uint32]$processId = 0
-  $result = $activationInterface.ActivateApplication($aumid, '', 0, [ref]$processId)
-  if ($result -ne 0) {
-    [Runtime.InteropServices.Marshal]::ThrowExceptionForHR($result)
-  }
+  [uint32]$processId = [EmsScout.PackageSmoke.PackageActivator]::Activate($aumid)
 
   $deadline = (Get-Date).AddSeconds($LaunchTimeoutSeconds)
   $process = $null
