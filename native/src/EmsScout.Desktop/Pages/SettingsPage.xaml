@@ -67,6 +67,7 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <Border Style="{StaticResource WorkbenchCardStyle}">
@@ -165,6 +166,65 @@
                 </Border>
 
                 <Border Grid.Row="2" Grid.ColumnSpan="2" Style="{StaticResource WorkbenchCardStyle}">
+                    <Grid ColumnSpacing="16" RowSpacing="10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <StackPanel Spacing="8">
+                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="软件更新" />
+                            <Grid ColumnSpacing="18">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="当前版本" />
+                                    <TextBlock Text="{x:Bind ViewModel.CurrentVersionText, Mode=OneWay}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="可用版本" />
+                                    <TextBlock Text="{x:Bind ViewModel.AvailableVersionText, Mode=OneWay}" />
+                                </StackPanel>
+                            </Grid>
+                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                <ProgressRing
+                                    Width="16"
+                                    Height="16"
+                                    IsActive="{x:Bind ViewModel.IsCheckingForUpdate, Mode=OneWay}" />
+                                <TextBlock
+                                    VerticalAlignment="Center"
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="{x:Bind ViewModel.UpdateStatusText, Mode=OneWay}"
+                                    TextWrapping="WrapWholeWords" />
+                            </StackPanel>
+                        </StackPanel>
+                        <StackPanel
+                            Grid.Column="1"
+                            VerticalAlignment="Center"
+                            Orientation="Horizontal"
+                            Spacing="8">
+                            <Button Command="{x:Bind ViewModel.CheckForUpdateCommand}" Style="{StaticResource ToolbarButtonStyle}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <FontIcon FontSize="14" Glyph="&#xE895;" />
+                                    <TextBlock Text="检查更新" />
+                                </StackPanel>
+                            </Button>
+                            <Button Command="{x:Bind ViewModel.InstallUpdateCommand}" Style="{StaticResource PrimaryToolbarButtonStyle}">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <FontIcon FontSize="14" Glyph="&#xE896;" />
+                                    <TextBlock Text="安装更新" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <Border Grid.Row="3" Grid.ColumnSpan="2" Style="{StaticResource WorkbenchCardStyle}">
                     <Grid ColumnSpacing="12">
                         <StackPanel Spacing="4">
                             <TextBlock Style="{StaticResource SectionTitleStyle}" Text="高级" />

@@ -48,6 +48,7 @@ public sealed partial class CollectionTaskViewModel(
     private bool _currentDataUpdatedThisRun;
     private string? _activeDataDirectory;
     private bool _buildingEventsAttached;
+    private bool _operationStateAttached;
     private DateTimeOffset? _activeRunStartedAt;
     private DateTimeOffset? _lastActivityAt;
     private bool _environmentChecked;
@@ -528,6 +529,7 @@ public sealed partial class CollectionTaskViewModel(
             mode => mode.Value == CollectionTaskModeValues.Full);
         ApplyTaskModePreset(SelectedTaskMode);
         AttachBuildingEvents();
+        AttachOperationState();
         await LoadRecaptureLocationsAsync(cancellationToken).ConfigureAwait(true);
         UpdateSelectedBuildingsText();
         ResetStages(BuildExecutionPlan(SelectedTaskMode));
@@ -637,6 +639,21 @@ public sealed partial class CollectionTaskViewModel(
         }
 
         _buildingEventsAttached = true;
+    }
+
+    private void AttachOperationState()
+    {
+        if (_operationStateAttached)
+        {
+            return;
+        }
+
+        operationState.OperationStateChanged += (_, _) =>
+        {
+            StartCommand.NotifyCanExecuteChanged();
+            NotifyActionButtonPriorityChanged();
+        };
+        _operationStateAttached = true;
     }
 
     partial void OnSelectedRecaptureBuildingChanged(RecaptureLocationOption? value)
@@ -1103,7 +1120,10 @@ public sealed partial class CollectionTaskViewModel(
 
     private bool CanStart()
     {
-        if (IsRunning || IsCheckingEnvironment || !IsEnvironmentReady)
+        if (IsRunning ||
+            IsCheckingEnvironment ||
+            !IsEnvironmentReady ||
+            operationState.IsUpdateInstallPending)
         {
             return false;
         }
@@ -1259,7 +1279,9 @@ public sealed partial class CollectionTaskViewModel(
         }
         catch (InvalidOperationException)
         {
-            StatusText = "已有采集任务正在运行";
+            StatusText = operationState.IsUpdateInstallPending
+                ? "软件更新正在启动，不能开始采集"
+                : "已有采集任务正在运行";
             AddLog("任务未启动：" + StatusText);
             return;
         }

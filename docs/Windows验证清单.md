@@ -1,6 +1,6 @@
 # EMS Scout Windows 验证清单
 
-更新时间：2026-07-13
+更新时间：2026-07-18
 
 本清单用于在另一台 Windows x64 设备上从干净克隆继续验证。每一步通过后再进入下一步；
 失败时保留命令、完整输出和 `artifacts/`，不要用后续成功掩盖前序失败。
@@ -128,7 +128,47 @@ GitHub Actions 使用 `scripts\new-test-signing-certificate.ps1` 创建不可导
 该自动化只证明测试签名包的干净用户安装生命周期。正式生产证书、跨版本升级、安装包内置
 Sidecar 实采和真实 EMS 仍按本清单后续步骤独立验收。
 
-## 8. 可选生产证据测试
+## 8. 正式更新发布与跨版本验收
+
+正式更新依赖同一包身份、同一 Publisher 和连续可信的生产签名证书。现有云端安装门禁生成的
+临时 `CN=EMS Scout` 证书只用于一次 runner 验证，不能用于正式发布，也不能证明跨版本升级。
+
+仓库管理员必须在 GitHub Actions Secrets 中配置：
+
+- `EMS_SIGNING_CERTIFICATE_BASE64`：生产 PFX 的 Base64 内容。
+- `EMS_SIGNING_CERTIFICATE_PASSWORD`：PFX 密码。
+
+生产证书必须包含私钥，Subject 必须精确等于 `CN=EMS Scout`，且发布时剩余有效期至少 30 天。
+证书续期必须保持 Windows 包升级所需的 Publisher 信任连续性；不得为每个版本生成新自签证书。
+
+正式版本使用四段递增标签，例如：
+
+```powershell
+git tag v1.0.1.0
+git push origin v1.0.1.0
+```
+
+`.github/workflows/release-windows-x64.yml` 会重新运行测试和格式门禁，使用标签版本构建签名
+MSIX，生成 `EmsScout.appinstaller`，复核签名后发布两个 GitHub Release 资产。Release MSIX
+内嵌 Windows App SDK，不依赖单独的 `Microsoft.WindowsAppRuntime.2` 框架包；包内身份、
+Publisher、四段版本和依赖由打包脚本直接检查。生产签名必须带 RFC3161 时间戳，确保签名
+证书到期后历史安装包仍可验证。Secrets 缺失或
+证书校验失败时必须停止，不得回退到临时证书或未签名包。
+
+跨版本验收必须在隔离 Windows 用户和临时数据目录中执行：
+
+1. 通过上一正式 Release 的 `EmsScout.appinstaller` 安装 N-1。
+2. 启动应用，在临时数据目录写入合成数据库和设置，记录文件哈希及包版本。
+3. 发布 N，并在 N-1 的“系统设置 -> 软件更新”中检查更新。
+4. 确认发现 N；启动采集任务时“安装更新”必须禁用，结束采集后恢复。
+5. 点击“安装更新”，由 Windows App Installer 完成覆盖安装，然后通过 AUMID 启动。
+6. 核对 `Get-AppxPackage -Name 1FACE092-146B-4AE5-83DB-3990E6AE8371` 的 Version 和 Publisher。
+7. 核对临时数据库、设置和导出结果保留；数据库迁移只执行一次且无损。
+
+正式验收还要覆盖断网、Release 资产不存在、错误 Publisher、签名不可信和低版本包。不得在
+采集运行中强制安装，不得用生产 `out\ac.db`、WAL/SHM 或备份作为升级测试输入。
+
+## 9. 可选生产证据测试
 
 `out/` 不在 Git 中。只有在确认文件来源、权限和哈希后，才把所需 run17 DB、JSON、
 质量报告和实时文件放到本机仓库的 `out/`，然后运行：
@@ -140,7 +180,7 @@ npm run native:test:evidence
 该测试通过 `ProductionDataSnapshot` 复制数据库后查询，不直接通过 SQLite 打开源 DB。
 不要从聊天、临时网盘或未知备份获取生产证据。
 
-## 9. 真实 EMS 单栋 E2E
+## 10. 真实 EMS 单栋 E2E
 
 先关闭可能占用 Edge/CDP 的旧测试，再运行：
 
@@ -161,7 +201,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\field-e2e.ps1 `
 保留 runDir 内的 WorkflowEvent、snapshot、DB、质量、Excel 和 manifest 作为证据。
 任何阶段触碰生产 `out\ac.db`、WAL 或 SHM 都视为失败。
 
-## 10. 六栋 shadow parity
+## 11. 六栋 shadow parity
 
 单栋通过后再运行全量采集。将安装产品产生的 CollectionSnapshot 与当前权威口径比较：
 
@@ -175,7 +215,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\field-e2e.ps1 `
 通讯状态会随现场变化，不能要求固定开关数量；必须核查卡片唯一性、占位符、indicator、
 质量原因和已知来源缺陷。差异需按楼栋、子区、页面和设备名保留证据。
 
-## 11. 结果记录
+## 12. 结果记录
 
 每次 Windows 验证至少记录：
 

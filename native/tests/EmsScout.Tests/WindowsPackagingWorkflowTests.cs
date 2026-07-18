@@ -19,6 +19,7 @@ public sealed class WindowsPackagingWorkflowTests
         Assert.Contains("-KeyExportPolicy NonExportable", script);
         Assert.Contains("catch", script);
         Assert.Contains("Remove-Item -LiteralPath $personalStorePath", script);
+        Assert.Contains("Remove-Item -LiteralPath $personalStorePath -DeleteKey -Force", script);
         Assert.DoesNotContain("Export-PfxCertificate", script, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(".pfx", script, StringComparison.OrdinalIgnoreCase);
     }
@@ -31,7 +32,25 @@ public sealed class WindowsPackagingWorkflowTests
         Assert.Contains("PackageCertificateThumbprint", script);
         Assert.Contains("AppxPackageSigningEnabled=true", script);
         Assert.Contains("PackageCertificateThumbprint=$PackageCertificateThumbprint", script);
+        Assert.Contains("PackageTimestampServerUrl", script);
+        Assert.Contains("AppxPackageSigningTimestampServerUrl=$PackageTimestampServerUrl", script);
+        Assert.Contains("AppxPackageSigningTimestampDigestAlgorithm=SHA256", script);
+        Assert.Contains("-RequireTimestamp:($requireTimestamp)", script);
         Assert.Contains("verify-msix-signature.ps1", script);
+    }
+
+    [Fact]
+    public void ReleasePackageBundlesTheWindowsAppRuntime()
+    {
+        var project = ReadRequiredFile(
+            "native",
+            "src",
+            "EmsScout.Desktop",
+            "EmsScout.Desktop.csproj");
+
+        Assert.Contains("<WindowsAppSDKSelfContained", project);
+        Assert.Contains("Condition=\"'$(Configuration)' != 'Debug'\"", project);
+        Assert.Contains(">true</WindowsAppSDKSelfContained>", project);
     }
 
     [Fact]
@@ -58,9 +77,11 @@ public sealed class WindowsPackagingWorkflowTests
         Assert.Contains("finally", script);
         Assert.Contains("Package cleanup failed", script);
 
-        var dependencyValidation = script.IndexOf("No x64 MSIX dependencies were found", StringComparison.Ordinal);
+        Assert.DoesNotContain("No x64 MSIX dependencies were found", script);
+        Assert.Contains("if ($dependencyPackages.Count -gt 0)", script);
+        var dependencyValidation = script.IndexOf("$dependencyPackages = @(", StringComparison.Ordinal);
         var markerWrite = script.IndexOf("Set-Content -LiteralPath $OwnershipMarkerPath", StringComparison.Ordinal);
-        Assert.True(markerWrite > dependencyValidation, "Ownership marker must follow dependency validation.");
+        Assert.True(markerWrite > dependencyValidation, "Ownership marker must follow dependency discovery.");
     }
 
     [Fact]
@@ -70,6 +91,8 @@ public sealed class WindowsPackagingWorkflowTests
 
         Assert.Contains("Get-AuthenticodeSignature", script);
         Assert.Contains("SignerCertificate.Thumbprint", script);
+        Assert.Contains("RequireTimestamp", script);
+        Assert.Contains("TimeStamperCertificate", script);
         Assert.Contains("WinVerifyTrust", script);
         Assert.Contains("0x800B0109", script);
         Assert.Contains("Cert:\\CurrentUser\\TrustedPeople", script);
@@ -135,6 +158,7 @@ public sealed class WindowsPackagingWorkflowTests
         Assert.Contains("if: always()", packageCleanup);
         Assert.Contains("if: always()", certificateCleanup);
         Assert.Contains("Cert:\\CurrentUser\\My", certificateCleanup);
+        Assert.Contains("Remove-Item -LiteralPath $certificatePath -DeleteKey -Force", certificateCleanup);
         Assert.Contains("Cert:\\CurrentUser\\TrustedPeople", certificateCleanup);
         Assert.Contains("Cert:\\LocalMachine\\Root", certificateCleanup);
     }

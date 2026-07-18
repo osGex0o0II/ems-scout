@@ -3,7 +3,8 @@ param(
   [string]$PackagePath,
   [Parameter(Mandatory)]
   [ValidatePattern('^[A-Fa-f0-9]{40}$')]
-  [string]$ExpectedSignerThumbprint
+  [string]$ExpectedSignerThumbprint,
+  [switch]$RequireTimestamp
 )
 
 $ErrorActionPreference = 'Stop'
@@ -20,11 +21,21 @@ if (-not [string]::Equals(
     [StringComparison]::OrdinalIgnoreCase)) {
   throw "MSIX signer thumbprint does not match $ExpectedSignerThumbprint."
 }
+if ($RequireTimestamp -and $null -eq $signature.TimeStamperCertificate) {
+  throw "MSIX signature does not contain a trusted timestamp: $resolvedPackagePath"
+}
+$timestampThumbprint = if ($null -eq $signature.TimeStamperCertificate) {
+  $null
+}
+else {
+  $signature.TimeStamperCertificate.Thumbprint
+}
 
 if ($signature.Status -eq [System.Management.Automation.SignatureStatus]::Valid) {
   return [pscustomobject]@{
     Status = $signature.Status.ToString()
     SignerThumbprint = $signature.SignerCertificate.Thumbprint
+    TimestampThumbprint = $timestampThumbprint
     NativeTrustStatus = 0
   }
 }
@@ -138,5 +149,6 @@ if ($nativeTrustStatus -ne [EmsScout.Signing.WinTrustVerifier]::CertEUntrustedRo
 [pscustomobject]@{
   Status = 'ValidSelfSigned'
   SignerThumbprint = $signature.SignerCertificate.Thumbprint
+  TimestampThumbprint = $timestampThumbprint
   NativeTrustStatus = $nativeTrustStatus
 }
