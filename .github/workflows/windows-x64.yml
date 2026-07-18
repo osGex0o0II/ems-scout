@@ -73,7 +73,19 @@ jobs:
             --filter 'Fixture!=ProductionEvidence' `
             --results-directory artifacts/test-results `
             --logger 'trx;LogFileName=native-release.trx'
-          if ($LASTEXITCODE -ne 0) { throw "Native tests failed with exit code $LASTEXITCODE" }
+          $nativeExitCode = $LASTEXITCODE
+          if ($nativeExitCode -ne 0) {
+            $trxPath = 'artifacts/test-results/native-release.trx'
+            if (Test-Path -LiteralPath $trxPath) {
+              [xml]$trx = Get-Content -LiteralPath $trxPath -Raw
+              foreach ($result in @($trx.TestRun.Results.UnitTestResult | Where-Object outcome -eq 'Failed')) {
+                $testName = [string]$result.testName
+                $testName = $testName.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+                Write-Output "::error title=Native test failed::$testName"
+              }
+            }
+            throw "Native tests failed with exit code $nativeExitCode"
+          }
 
       - name: Verify native formatting
         run: dotnet format native/EmsScout.Native.slnx --verify-no-changes --no-restore
