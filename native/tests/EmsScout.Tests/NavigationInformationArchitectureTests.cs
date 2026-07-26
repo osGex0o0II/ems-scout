@@ -24,14 +24,14 @@ public sealed class NavigationInformationArchitectureTests
 
         Assert.Equal(
             [
-                ("工作台", "workbench"),
+                ("概览", "workbench"),
                 ("采集", "collection"),
-                ("设备数据", "devices"),
-                ("区域组", "rules"),
+                ("数据", "devices"),
+                ("区域", "rules"),
                 ("审计", "audit"),
             ],
             primary);
-        Assert.Equal([("系统设置", "settings"), ("诊断", "diagnostics")], footer);
+        Assert.Equal([("设置", "settings"), ("诊断", "diagnostics")], footer);
         Assert.DoesNotContain(primary, item => item.Tag == "dates");
     }
 
