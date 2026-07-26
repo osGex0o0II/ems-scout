@@ -8,6 +8,8 @@
 
 **Tech Stack:** C#/.NET 10, WinUI 3 XAML, xUnit.
 
+> **完成记录（2026-07-26）：** 步骤 1/3 的改动在接手时已存在于工作树（步骤 2 的红灯运行未独立复现）。步骤 4 聚焦测试 3/3 通过；步骤 5 以 `-UiValidation` 隔离目录启动并截图确认 7 个标签全部正确；步骤 6 已提交 `f4d8e30`。同轮门禁：.NET 非生产 360/360、Node 121 pass/2 skip、self-test、`dotnet format`、`git diff --check` 全部通过。
+
 ## Global Constraints
 
 - Keep all navigation item placement, icons, page routes, and Tags unchanged.
@@ -26,7 +28,7 @@
 - Consumes: `MainWindow.xaml` XML `NavigationView.MenuItems` and `NavigationView.FooterMenuItems` hosts.
 - Produces: `ShellUsesFiveWorkflowItemsAndTwoFooterTools`, which asserts the requested labels and unchanged route Tags.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Replace the expected arrays in `ShellUsesFiveWorkflowItemsAndTwoFooterTools` with:
 
@@ -42,7 +44,7 @@ Replace the expected arrays in `ShellUsesFiveWorkflowItemsAndTwoFooterTools` wit
 Assert.Equal([("设置", "settings"), ("诊断", "diagnostics")], footer);
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run:
 
@@ -52,7 +54,7 @@ dotnet test native\tests\EmsScout.Tests\EmsScout.Tests.csproj -c Debug --no-rest
 
 Expected: `ShellUsesFiveWorkflowItemsAndTwoFooterTools` fails because `MainWindow.xaml` still contains 工作台, 设备数据, 区域组, and 系统设置.
 
-- [ ] **Step 3: Write minimal implementation**
+- [x] **Step 3: Write minimal implementation**
 
 In `native/src/EmsScout.Desktop/MainWindow.xaml`, preserve all Tags and change only these attributes:
 
@@ -63,13 +65,13 @@ In `native/src/EmsScout.Desktop/MainWindow.xaml`, preserve all Tags and change o
 <NavigationViewItem Content="设置" Tag="settings">
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run the same focused `dotnet test` command.
 
 Expected: all three `NavigationInformationArchitectureTests` pass.
 
-- [ ] **Step 5: Verify application launch for visual inspection**
+- [x] **Step 5: Verify application launch for visual inspection**
 
 Run:
 
@@ -79,7 +81,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run-native.ps1 -UiVa
 
 Expected: the native `EMS Scout` window opens with the requested labels, using a unique `UI_VALIDATION_DIRECTORY` rather than repository or production data.
 
-- [ ] **Step 6: Commit the scoped change**
+- [x] **Step 6: Commit the scoped change**
 
 Run:
 
