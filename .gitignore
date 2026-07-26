@@ -22,5 +22,16 @@ node_modules/
 dist/
 artifacts/
 
+# SQLite sidecar files and local migration backups (production data must never be staged)
+*.db-shm
+*.db-wal
+data/ac.db
+data/*.backup.db
+
+# Agent tooling state
+.omo/
+.superpowers/
+.worktrees/
+
 # OS/editor metadata
 .DS_Store
