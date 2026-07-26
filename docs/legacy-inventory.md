@@ -1,6 +1,6 @@
 # Legacy Inventory And Removal Gates
 
-Updated: 2026-07-13
+Updated: 2026-07-18
 
 This inventory prevents cleanup from deleting a field fallback or a file that is still bundled into the native product. `protected` means deletion is blocked until the stated external gate passes. `product` means the file is still part of the current native workflow even when its implementation originated in the Node application.
 
@@ -15,7 +15,8 @@ This inventory prevents cleanup from deleting a field fallback or a file that is
 | Legacy reports | `scripts/report.js`, `dump-aircons.js`, `dump-public.js`, `report-monitor.js`, `verify-reports.js` | protected, disabled by environment gate | Emergency historical output only | Data Management filtered Excel and native diagnostics | Stakeholder confirmation that TXT/Markdown/multi-format recovery is no longer required after installed-package acceptance |
 | Web panel | `src/panel/`, `web/panel/`, `EMS-Panel.bat`, npm `legacy:panel` | protected, disabled by environment gate | Emergency diagnostics | Seven-page WinUI application | Clean Windows install acceptance and UI workflow parity |
 | Electron shell and packaging | `electron/`, `scripts/electron-after-pack.js`, `restore-node-native.js`, npm `legacy:desktop`, `legacy:pack:*`, `legacy:dist:*` | protected, disabled by environment gate | Emergency legacy desktop packaging | WinUI MSIX package | Signed/test-signed Windows x64 MSIX install, launch, upgrade and uninstall acceptance |
-| Legacy validators and diagnostics | `src/enum-validator.js`, `scripts/validate-enum.js`, `inspect-ems-source.js`, `reconcile.js`, `monitor-floors.js`, `dashboard.js`, `views.sql` | protected pending classification | Manual troubleshooting and old workflows | CollectionSnapshot validation, native audit/reconciliation/groups | Delete individually only after reference search, fixture coverage and troubleshooting replacement are documented |
+| Legacy validators and diagnostics | `src/enum-validator.js`, `scripts/validate-enum.js`, `inspect-ems-source.js`, `reconcile.js`, `monitor-floors.js` | protected pending classification | Manual troubleshooting and old workflows | CollectionSnapshot validation, native audit/reconciliation/groups | Delete individually only after reference search, fixture coverage and troubleshooting replacement are documented |
+| Retired unreferenced diagnostics | `scripts/dashboard.js`, `scripts/views.sql` | removed 2026-07-18 | None | Native source extraction, data repositories and realtime reconciliation | Architecture test requires both paths to remain absent |
 | Archived schema fixtures | `data/1号楼`, `data/2号楼`, `tests/fixtures/schema-baselines` | protected evidence | Migration and WAL compatibility tests | No replacement; these are evidence | Retain while v0/v1 migration support exists |
 
 Legacy Web panel 即使显式启用也只监听回环地址，并要求回环 `Host`、进程内随机会话令牌及同源写请求；JSON 请求体按原始字节限制为 1 MiB，静态文件解析后不得越出 `web/panel/`。这些是应急 fallback 的安全边界，不改变其默认禁用状态。

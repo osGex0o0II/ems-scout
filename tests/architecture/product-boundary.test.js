@@ -69,6 +69,19 @@ test('legacy removal gates distinguish product Sidecar files from protected fall
   assert.match(inventory, /real-EMS single-building parity/);
 });
 
+test('obsolete browser-console and schema-view diagnostics stay removed', () => {
+  assert.equal(fs.existsSync(path.join(root, 'scripts/dashboard.js')), false);
+  assert.equal(fs.existsSync(path.join(root, 'scripts/views.sql')), false);
+  assert.equal(fs.existsSync(path.join(
+    root,
+    'native/src/EmsScout.Infrastructure/Sqlite/SqliteRealtimeReconciliationService.cs')),
+  true);
+  assert.equal(fs.existsSync(path.join(
+    root,
+    'native/src/EmsScout.Infrastructure/Sqlite/SqliteDeviceReadRepository.cs')),
+  true);
+});
+
 test('collection task view model delegates environment probes and progress parsing', () => {
   const viewModel = read('native/src/EmsScout.Desktop/ViewModels/CollectionTaskViewModel.cs');
   const app = read('native/src/EmsScout.Desktop/App.xaml.cs');
