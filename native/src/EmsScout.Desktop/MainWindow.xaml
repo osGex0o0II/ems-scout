@@ -43,7 +43,7 @@
             SelectionChanged="NavView_SelectionChanged">
             <NavigationView.MenuItems>
                 <NavigationViewItem
-                    Content="工作台"
+                    Content="概览"
                     IsSelected="True"
                     Tag="workbench">
                     <NavigationViewItem.Icon>
@@ -55,12 +55,12 @@
                         <FontIcon Glyph="&#xE7C1;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="设备数据" Tag="devices">
+                <NavigationViewItem Content="数据" Tag="devices">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE8A5;" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItem Content="区域组" Tag="rules">
+                <NavigationViewItem Content="区域" Tag="rules">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE707;" />
                     </NavigationViewItem.Icon>
@@ -72,7 +72,7 @@
                 </NavigationViewItem>
             </NavigationView.MenuItems>
             <NavigationView.FooterMenuItems>
-                <NavigationViewItem Content="系统设置" Tag="settings">
+                <NavigationViewItem Content="设置" Tag="settings">
                     <NavigationViewItem.Icon>
                         <FontIcon Glyph="&#xE713;" />
                     </NavigationViewItem.Icon>
