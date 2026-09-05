@@ -40,7 +40,7 @@ function timestamp() {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
-function runNode(script, args) {
+function runNode(script, args, extraEnv = null) {
   const finalArgs = LOG_FILE && !args.some(a => a === '--log-file' || a.startsWith('--log-file='))
     ? [...args, '--log-file']
     : args;
@@ -49,17 +49,39 @@ function runNode(script, args) {
   const result = spawnSync(NODE, [script, ...finalArgs], {
     cwd: ROOT,
     stdio: 'inherit',
-    env: process.env,
+    env: { ...process.env, ...(extraEnv || {}) },
   });
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Command failed (${result.status}): node ${command}`);
 }
 
+let _runStartedAt = 0;
+let _overallTotal = 0;
+let _overallDoneBase = 0;
+
 function progress(event) {
   console.log(`[PROGRESS] ${JSON.stringify({
     ts: new Date().toISOString(),
+    elapsedMs: _runStartedAt ? Date.now() - _runStartedAt : undefined,
+    ...(typeof event.overallTotal === 'number' ? {} : (_overallTotal > 0 ? { overallTotal: _overallTotal } : {})),
+    ...(typeof event.overallDone === 'number' ? {} : (_overallDoneBase > 0 ? { overallDone: _overallDoneBase + (event.deviceDone || 0) } : {})),
     ...event,
   })}`);
+}
+
+function setOverallContext(startedAt, overallTotal, doneBase) {
+  _runStartedAt = startedAt;
+  _overallTotal = overallTotal;
+  _overallDoneBase = doneBase;
+}
+
+function buildingOverallTotal() {
+  let total = 0;
+  for (const b of BUILDINGS) {
+    const inv = inventoryRows(b);
+    total += MAX_DEVICES > 0 ? MAX_DEVICES : Number(inv?.unique || inv?.rows || 0);
+  }
+  return total;
 }
 
 function childBrowserArgs(managed) {
@@ -135,6 +157,7 @@ function validateResult(file) {
   const switchCounts = {};
   const cardCommCounts = {};
   const lockCounts = {};
+  const pageNames = new Map();
 
   for (const row of rows) {
     const key = String(row.devId || '');
@@ -162,6 +185,22 @@ function validateResult(file) {
     if (row.defaultLike) issues.push({ devId: row.devId, name: row.name, error: 'default-like' });
     if (row.fieldCount !== 26) issues.push({ devId: row.devId, name: row.name, error: `fieldCount=${row.fieldCount}` });
     if (row.realtimeTagCount !== 46) issues.push({ devId: row.devId, name: row.name, error: `tagCount=${row.realtimeTagCount}` });
+    const subAreaKey =
+      row.subAreaIdx !== undefined &&
+      row.subAreaIdx !== null &&
+      row.subAreaIdx !== ''
+        ? String(row.subAreaIdx)
+        : String(row.subAreaText || '');
+    const pageKey = [row.building || '', row.floor ?? '', subAreaKey, row.subAreaText || '', row.tab || '', row.pageName || ''].join('|');
+    if (!pageNames.has(pageKey)) pageNames.set(pageKey, []);
+    pageNames.get(pageKey).push(String(row.name || '').trim());
+  }
+
+  for (const [pageKey, names] of pageNames) {
+    const uniqueNames = new Set(names.filter(Boolean)).size;
+    if (names.length >= 3 && uniqueNames <= Math.max(1, Math.floor(names.length * 0.5))) {
+      issues.push({ error: `device name collapse ${pageKey}: ${uniqueNames}/${names.length}` });
+    }
   }
 
   const summary = data.summary || {};
@@ -197,6 +236,7 @@ async function main() {
   const startedAt = Date.now();
   const results = [];
   let browserSession = null;
+  setOverallContext(startedAt, buildingOverallTotal(), 0);
 
   try {
     if (USE_MANAGED_BROWSER) {
@@ -211,6 +251,7 @@ async function main() {
       browserSession = await ensureRealtimeBrowser({
         mode: 'persistent',
         cdpPort: DEFAULT_REALTIME_CDP_PORT,
+        focusPage: true,
         log: msg => console.log(msg),
       });
       progress({
@@ -294,7 +335,11 @@ async function main() {
       `--timeout=${TIMEOUT_MS}`,
       ...(MAX_DEVICES > 0 ? [`--max-devices=${MAX_DEVICES}`] : []),
       ...(WRITE_LATEST ? ['--write-latest'] : []),
-    ]);
+    ], {
+      EMS_OVERALL_TOTAL: String(_overallTotal || 0),
+      EMS_OVERALL_DONE_BASE: String(_overallDoneBase + results.reduce((acc, r) => acc + (r.summary.devices || 0), 0)),
+      EMS_RUN_STARTED_AT: String(startedAt),
+    });
 
     const resultFile = newestFile('realtime', building);
     if (!resultFile) throw new Error(`Cannot find batch output for ${building}`);
@@ -304,6 +349,23 @@ async function main() {
     if (validation.issues.length > 0) {
       console.log(`[QUALITY FAIL] ${building}: ${validation.issues.length} issue(s)`);
       console.log(JSON.stringify(validation.issues.slice(0, 20), null, 2));
+      const failedOutPath = path.join(OUT_DIR, `realtime_all_buildings_batch_failure_${timestamp()}.json`);
+      const failedReport = {
+        createdAt: new Date().toISOString(),
+        wallElapsedMs: Date.now() - startedAt,
+        failedBuilding: building,
+        completedBuildings: BUILDINGS.slice(0, results.length).map(b => {
+          const r = results.find(re => re.file && re.file.includes(`_${b}_`)) || null;
+          return r ? { building: b, devices: r.summary.devices || 0, issues: r.issues } : b;
+        }),
+        failedBuildingIssueCount: validation.issues.length,
+        issues: validation.issues.slice(0, 50),
+        currentBatchFile: resultFile,
+        capturedDevicesFromCompleted: results.reduce((acc, item) => acc + (item.summary.devices || 0), 0),
+        detail: results.map(r => ({ building: r.file.replace(/^.*_(.*?)_batch_.*\.json$/, '$1') || 'unknown', devices: r.summary.devices || 0, success: r.summary.success || 0, failed: r.summary.failed || 0, issues: r.issues })),
+      };
+      fs.writeFileSync(failedOutPath, JSON.stringify(failedReport, null, 2), 'utf8');
+      console.log(`[FAILURE REPORT] ${failedOutPath}`);
       throw new Error(`Quality gate failed for ${building}`);
     }
     progress({
@@ -314,6 +376,8 @@ async function main() {
       buildingTotal: BUILDINGS.length,
       deviceDone: validation.summary.devices || 0,
       deviceTotal: totalDevices || validation.summary.devices || 0,
+      overallDone: results.reduce((acc, r) => acc + (r.summary.devices || 0), 0),
+      overallTotal: _overallTotal || undefined,
       percent: Math.round((buildingIndex / BUILDINGS.length) * 100),
       message: `${building} 完成 ${validation.summary.devices || 0} 台`,
     });
@@ -374,5 +438,5 @@ async function main() {
 
 main().catch(err => {
   console.error(err.stack || err);
-  process.exit(1);
+  process.exitCode = 1;
 });

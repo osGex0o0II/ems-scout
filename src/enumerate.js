@@ -4,34 +4,51 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
-const { checkCardQuality, getZone } = require('./rules');
-const { createCapturePolling } = require('./capture-polling');
-const { auditCollectedOutput, pageFromData, summarizeCardStates } = require('./capture-result');
+const { BLDG_META, checkCardQuality, getZone, assessBuildingIdentity, labelSamePageDuplicateCards, classifyPersistentDeviceAnomalyPage, normalizeKnownSourceDefects, classifyKnownMissingIndicatorPage, isAcceptedCaptureQualityReason } = require('./rules');
 const { validateEnumData, formatValidation } = require('./enum-validator');
-const { matchesEmsPageUrl, parseEnumerateOptions } = require('./enumerate-options');
-const { createEnumerationOutputStore } = require('./enumerate-output');
-const { cardIdentity, tabIsActive } = require('./page-navigation');
-const { sanitizeErrorForDisplay, sanitizeUrlForDisplay } = require('./url-sanitizer');
 const { log: loggerLog, setLevel, setCategories, enableFileLog, close, LEVELS, CATEGORIES } = require('./logger');
+const { isAllowedEmsUrl, isAllowedCdpUrl, sanitizeUrlForDisplay } = require('./connection-policy');
 // Compat: old-style log() defaults to INFO+ENUM
 const LOG = { I: m => loggerLog(LEVELS.INFO, 'ENUM', m), D: (c, m, x) => loggerLog(LEVELS.DEBUG, c, m, x), 
   W: (c, m) => loggerLog(LEVELS.WARN, c, m), E: (c, m) => loggerLog(LEVELS.ERROR, c, m) };
 function log(...args) { loggerLog(LEVELS.INFO, 'ENUM', ...args); }
 
 // ===== Configuration =====
-const OPTIONS = parseEnumerateOptions(process.argv.slice(2), process.env, path.resolve(__dirname, '..'));
-const {
-  EMS_URL, CDP_URL, OUT_DIR, OUT_FILE, ENABLE_NETWORK_MONITOR, ENABLE_SELF_DIAGNOSE,
-  USE_CDP, USE_AUTO_LAUNCH, DRY_RUN, APPEND, CHECK_LOGIN, FAIL_IF_NOT_LOGGED_IN,
-  FILTER, RECAPTURE_TARGETS, RECAPTURE_MODE, LOG_LEVEL, LOG_CATEGORIES, LOG_FILE,
-} = OPTIONS;
-const isEmsPageUrl = url => matchesEmsPageUrl(url, EMS_URL);
+function argValue(name) {
+  const hit = process.argv.find(a => a.startsWith(name + '='));
+  return hit ? hit.slice(name.length + 1) : '';
+}
+const RAW_EMS_URL = argValue('--ems-url') || process.env.EMS_URL || 'http://172.29.248.4:8000/ui';
+function normalizeEmsUrl(value) {
+  try {
+    const url = new URL(value);
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return value;
+  }
+}
+const EMS_URL = normalizeEmsUrl(RAW_EMS_URL);
+const CDP_URL = argValue('--cdp-url') || process.env.CDP_URL || 'http://127.0.0.1:9222';
+if (!isAllowedEmsUrl(EMS_URL, EMS_URL)) {
+  throw new Error(`Invalid EMS URL: ${sanitizeUrlForDisplay(EMS_URL)}`);
+}
+if (!isAllowedCdpUrl(CDP_URL, process.env.EMS_ALLOW_REMOTE_CDP === '1')) {
+  throw new Error(`Unsafe CDP URL: ${sanitizeUrlForDisplay(CDP_URL)}`);
+}
+function isEmsPageUrl(url) {
+  return isAllowedEmsUrl(url, EMS_URL);
+}
+const OUT_DIR = path.resolve(argValue('--out-dir') || process.env.EMS_OUT_DIR || path.resolve(__dirname, '..', 'out'));
+const OUT_FILE = path.join(OUT_DIR, 'enum_full_v5.json');
 
 // Network monitoring & diagnostics
+const ENABLE_NETWORK_MONITOR = !process.argv.includes('--no-net-monitor');
+const ENABLE_SELF_DIAGNOSE = process.argv.includes('--self-diagnose');
 const DIAGNOSE_INTERVAL = 5000; // ms
 const NETWORK_LOG_MAX = 500; // max network entries to keep in memory
 
-const W = { PAGE_CLICK: 100, BM_CLICK: 500 };
+const W = { BM_CLICK: 500 };
 
 const BUILDINGS = [
   { menuMatch: '1号', building: '1号' },
@@ -42,22 +59,296 @@ const BUILDINGS = [
   { menuMatch: '6号', building: '6号' },
 ];
 
+// ===== Mode selection =====
+const USE_CDP = process.argv.includes('--edge');
+const USE_AUTO_LAUNCH = process.argv.includes('--auto-launch');
+const DRY_RUN = process.argv.includes('--dry');
+const APPEND = process.argv.includes('--append');
+const CHECK_LOGIN = !process.argv.includes('--skip-login-check');
+const FAIL_IF_NOT_LOGGED_IN = process.argv.includes('--fail-if-not-logged-in');
+const BUILDING_FILTER = process.argv.find(a => a.startsWith('--bldg='));
+const FILTER = BUILDING_FILTER ? BUILDING_FILTER.split('=')[1].split(',').map(s => s.trim()).filter(Boolean) : null;
+const RECAPTURE_ARG = process.argv.find(a => a.startsWith('--recapture='));
+// Formats:
+//   legacy coordinates: --recapture=3号:1087:144,6号:194:158
+//   user scope:         --recapture=3号:A座:6F,6号::
+let RECAPTURE_TARGETS = [];
+if (RECAPTURE_ARG) {
+  const val = RECAPTURE_ARG.split('=')[1];
+  RECAPTURE_TARGETS = val.split(',').map(s => {
+    const [b, second = '', third = ''] = s.split(':');
+    const x = Number.parseInt(second, 10);
+    const y = Number.parseInt(third, 10);
+    return Number.isFinite(x) && Number.isFinite(y)
+      ? { building: b, x, y }
+      : { building: b, seat: second, floorText: third };
+  });
+}
+const RECAPTURE_MODE = RECAPTURE_TARGETS.length > 0;
+
 // Logger configuration
-if (LOG_LEVEL) setLevel(LOG_LEVEL);
-if (LOG_CATEGORIES) setCategories(LOG_CATEGORIES);
+const LOG_LEVEL_ARG = process.argv.find(a => a.startsWith('--log-level='));
+if (LOG_LEVEL_ARG) setLevel(LOG_LEVEL_ARG.split('=')[1]);
+const LOG_CAT_ARG = process.argv.find(a => a.startsWith('--log-category='));
+if (LOG_CAT_ARG) setCategories(LOG_CAT_ARG.split('=')[1]);
+const LOG_FILE = process.argv.includes('--log-file');
 if (LOG_FILE) enableFileLog(OUT_DIR);
 
-// Output: append mode keeps not-yet-recaptured buildings; writes are atomic.
-const outputStore = createEnumerationOutputStore({ outputFile: OUT_FILE, append: APPEND });
+// Output: append mode appends each building run to existing file
+let outputInitialized = false;
+function loadExisting() {
+  try { return JSON.parse(fs.readFileSync(OUT_FILE, 'utf-8')); }
+  catch { return { buildings: [] }; }
+}
+function saveOutput(buildingResult) {
+  // Non-append runs start a fresh JSON on first save, then accumulate buildings
+  // captured during this process. Append runs keep old, not-yet-recaptured data.
+  const existing = (APPEND || outputInitialized) ? loadExisting() : { buildings: [] };
+  outputInitialized = true;
+  if (!existing.buildings) existing.buildings = [];
+  // Remove previous data for this building if exists
+  existing.buildings = existing.buildings.filter(b => b.building !== buildingResult.building);
+  // Insert in sorted order (1号→6号)
+  existing.buildings.push(buildingResult);
+  const order = ['1号', '2号', '3号', '4号', '5号', '6号'];
+  existing.buildings.sort((a, b) => order.indexOf(a.building) - order.indexOf(b.building));
+  existing.completedAt = new Date().toISOString();
+  fs.mkdirSync(OUT_DIR, { recursive: true });
+  fs.writeFileSync(OUT_FILE, JSON.stringify(existing, null, 2), 'utf-8');
+}
 
 // ===== Helpers =====
 function pause(ms) { return new Promise(r => setTimeout(r, ms)); }
-const { adaptivePolling, qualityCheckWithProgressiveRetry } = createCapturePolling({
-  logger: loggerLog,
-  levels: LEVELS,
-  log,
-  sleep: pause,
-});
+
+// ===== Enhanced Quality Assessment =====
+function assessDataQuality(cards) {
+  const n = cards.length;
+  if (n === 0) return { isGood: false, score: 0, details: 'no cards' };
+
+  const activeCards = cards.filter(c => c.comm === '开机' || c.comm === '关机');
+  const activeN = activeCards.length;
+  const switchRate = activeN > 0 ? activeCards.filter(c => c.switch === 'ON' || c.switch === 'OFF').length / activeN : 1;
+  const tempRate = activeN > 0 ? activeCards.filter(c => {
+    const indoor = parseFloat(c.indoor);
+    const setTemp = parseFloat(c.setTemp);
+    return Number.isFinite(indoor) && indoor > 0 && indoor <= 60 &&
+      Number.isFinite(setTemp) && setTemp >= 5 && setTemp <= 40;
+  }).length / activeN : 1;
+  const commRate = cards.filter(c => c.comm).length / n;
+  const modeRate = activeN > 0 ? activeCards.filter(c => c.mode !== '-' && c.fan !== '-' && c.fan !== '0').length / activeN : 1;
+  const allOffline = cards.every(c => c.comm === '离线');
+  const commComplete = cards.every(c => c.comm === '开机' || c.comm === '关机' || c.comm === '离线');
+
+  const qualityScore = (switchRate * 0.4 + tempRate * 0.3 + commRate * 0.2 + modeRate * 0.1);
+
+  return {
+    isGood: (allOffline || commComplete) && qualityScore >= 0.7,
+    score: qualityScore,
+    details: `score=${qualityScore.toFixed(2)} active=${activeN}/${n} switch=${switchRate.toFixed(2)} temp=${tempRate.toFixed(2)} comm=${commRate.toFixed(2)} mode=${modeRate.toFixed(2)}${allOffline ? ' allOffline' : ''}`
+  };
+}
+
+function buildPartialSignature(cards = []) {
+  return cards.map(c => [
+    c.name || '',
+    c.switch || '',
+    c.indoor || '',
+    c.setTemp || '',
+    c.mode || '',
+    c.fan || '',
+    c.indicator || '',
+    c.comm || '',
+  ].join('|')).join('||');
+}
+
+function isOfflineTemplateStable(cards, qc, prev = {}, elapsedMs = 0) {
+  if (!cards || cards.length < 2 || !qc || !qc.uniformTemplate || !qc.allOffline) {
+    return { accept: false, signature: '', rounds: 0 };
+  }
+  const signature = buildPartialSignature(cards);
+  const rounds = signature && signature === prev.signature ? (prev.rounds || 0) + 1 : 1;
+  const accept = rounds >= 3 && elapsedMs >= 600;
+  return { accept, signature, rounds };
+}
+
+function persistentDeviceAnomalyState(cards, meta, prev = {}) {
+  const classification = classifyPersistentDeviceAnomalyPage(cards, meta);
+  const rounds = classification.signature && classification.signature === prev.signature
+    ? (prev.rounds || 0) + 1
+    : (classification.eligible ? 1 : 0);
+  return {
+    ...classification,
+    accept: classification.eligible && rounds >= 3,
+    rounds,
+  };
+}
+
+function isAcceptableCapture(data, qc = null, quality = null) {
+  const cards = data && Array.isArray(data.cards) ? data.cards : [];
+  const currentQc = qc || checkCardQuality(cards, data || {});
+  const currentQuality = quality || assessDataQuality(cards);
+  return currentQc.ok && currentQuality.isGood;
+}
+
+async function qualityCheckWithProgressiveRetry(page, extractCards, description, maxAttempts = 5) {
+  const RETRY_DELAYS = [200, 500, 1000, 2000, 5000];
+  let prevOfflineTemplate = { signature: '', rounds: 0 };
+  let prevDeviceAnomaly = { signature: '', rounds: 0 };
+  const startTime = Date.now();
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const data = await extractCards();
+    const qc = checkCardQuality(data.cards, data);
+    const quality = assessDataQuality(data.cards);
+    const offlineTemplate = isOfflineTemplateStable(data.cards, qc, prevOfflineTemplate, Date.now() - startTime);
+    prevOfflineTemplate = { signature: offlineTemplate.signature, rounds: offlineTemplate.rounds };
+    const deviceAnomaly = persistentDeviceAnomalyState(data.cards, data, prevDeviceAnomaly);
+    prevDeviceAnomaly = { signature: deviceAnomaly.signature, rounds: deviceAnomaly.rounds };
+    const knownMissingIndicator = classifyKnownMissingIndicatorPage(data.cards, data);
+
+    if (isAcceptableCapture(data, qc, quality)) {
+      loggerLog(LEVELS.DEBUG, 'QUALITY', `${description} OK on attempt ${attempt + 1}: ${qc.details}`);
+      data.qualityReason = 'quality_pass';
+      return { data, qc, reason: 'quality_pass', attempt: attempt + 1 };
+    }
+
+    if (knownMissingIndicator.eligible) {
+      loggerLog(LEVELS.WARN, 'QUALITY', `${description} preserving known source indicator defect: ${knownMissingIndicator.details}`);
+      const reason = knownMissingIndicator.intermittent
+        ? 'known_intermittent_indicator_missing'
+        : 'known_source_indicator_missing';
+      data.qualityReason = reason;
+      return { data, qc: { ...qc, ok: true, knownSourceIndicatorMissing: true }, reason, attempt: attempt + 1 };
+    }
+
+    if (offlineTemplate.accept) {
+      loggerLog(LEVELS.WARN, 'QUALITY', `${description} offline template stable after attempt ${attempt + 1}: ${qc.details}`);
+      data.qualityReason = 'offline_template_stable';
+      return { data, qc: { ...qc, ok: true, offlineTemplateStable: true }, reason: 'offline_template_stable', attempt: attempt + 1 };
+    }
+
+    if (deviceAnomaly.accept) {
+      loggerLog(LEVELS.WARN, 'QUALITY', `${description} preserving stable device anomalies after attempt ${attempt + 1}: ${deviceAnomaly.details}`);
+      data.qualityReason = 'device_anomalies_preserved';
+      return { data, qc: { ...qc, ok: true, deviceAnomaliesPreserved: true }, reason: 'device_anomalies_preserved', attempt: attempt + 1 };
+    }
+
+    // Template values early exit: if template detected on first attempt, accept immediately
+    if (qc.uniformTemplate && attempt === 0) {
+      loggerLog(LEVELS.WARN, 'QUALITY', `${description} template values detected on first attempt, accepting as unconfirmed: ${qc.details}`);
+      data.qualityReason = 'template_values_unconfirmed';
+      return { data, qc: { ...qc, ok: true, templateValuesUnconfirmed: true }, reason: 'template_values_unconfirmed', attempt: attempt + 1 };
+    }
+
+    loggerLog(LEVELS.DEBUG, 'QUALITY', `${description} attempt ${attempt + 1} failed: ${qc.details}`, { n: data.cards.length });
+
+    if (attempt < maxAttempts - 1) {
+      await pause(RETRY_DELAYS[attempt] || 1000);
+    }
+  }
+
+  loggerLog(LEVELS.WARN, 'QUALITY', `${description} max attempts reached, using best available data`);
+  return { data: null, qc: null, attempt: maxAttempts };
+}
+
+async function adaptivePolling(page, extractCards, deadline, description) {
+  const startTime = Date.now();
+  const MIN_POLL_INTERVAL = 200;
+  const MAX_POLL_INTERVAL = 3000;
+  const QUALITY_IMPROVEMENT_THRESHOLD = 0.1;
+  const TEMPLATE_PAGE_CAP_MS = 8000; // Template pages get max 8s, not 45s
+
+  let lastQualityScore = 0;
+  let pollInterval = MIN_POLL_INTERVAL;
+  let prevOfflineTemplate = { signature: '', rounds: 0 };
+  let prevDeviceAnomaly = { signature: '', rounds: 0 };
+  let initialTemplateDetected = false;
+  let effectiveDeadline = deadline;
+  let lastExtractedData = null;
+  let lastExtractedQc = null;
+
+  while (Date.now() - startTime < effectiveDeadline) {
+    const data = await extractCards();
+    const qc = checkCardQuality(data.cards, data);
+    const quality = assessDataQuality(data.cards);
+    lastExtractedData = data;
+    lastExtractedQc = qc;
+    const offlineTemplate = isOfflineTemplateStable(data.cards, qc, prevOfflineTemplate, Date.now() - startTime);
+    prevOfflineTemplate = { signature: offlineTemplate.signature, rounds: offlineTemplate.rounds };
+    const deviceAnomaly = persistentDeviceAnomalyState(data.cards, data, prevDeviceAnomaly);
+    prevDeviceAnomaly = { signature: deviceAnomaly.signature, rounds: deviceAnomaly.rounds };
+    const knownMissingIndicator = classifyKnownMissingIndicatorPage(data.cards, data);
+
+    // Template page early cap: if first extraction shows template values,
+    // cap polling at TEMPLATE_PAGE_CAP_MS instead of full deadline (45s).
+    if (qc.uniformTemplate && !initialTemplateDetected) {
+      initialTemplateDetected = true;
+      effectiveDeadline = Math.min(deadline, startTime + TEMPLATE_PAGE_CAP_MS);
+      loggerLog(LEVELS.DEBUG, 'QUALITY', `${description} template detected, capping poll to ${TEMPLATE_PAGE_CAP_MS}ms`);
+    }
+
+    if (isAcceptableCapture(data, qc, quality)) {
+      loggerLog(LEVELS.DEBUG, 'QUALITY', `${description} OK after ${Date.now()-startTime}ms: ${qc.details}`);
+      data.qualityReason = 'quality_pass';
+      return { data, qc, quality, reason: 'quality_pass' };
+    }
+
+    if (knownMissingIndicator.eligible) {
+      loggerLog(LEVELS.WARN, 'QUALITY', `${description} preserving known source indicator defect after ${Date.now()-startTime}ms: ${knownMissingIndicator.details}`);
+      const reason = knownMissingIndicator.intermittent
+        ? 'known_intermittent_indicator_missing'
+        : 'known_source_indicator_missing';
+      data.qualityReason = reason;
+      return { data, qc: { ...qc, ok: true, knownSourceIndicatorMissing: true }, quality, reason };
+    }
+
+    if (offlineTemplate.accept) {
+      loggerLog(LEVELS.WARN, 'QUALITY', `${description} offline template stable after ${Date.now()-startTime}ms: ${qc.details}`);
+      data.qualityReason = 'offline_template_stable';
+      return { data, qc: { ...qc, ok: true, offlineTemplateStable: true }, quality, reason: 'offline_template_stable' };
+    }
+
+    if (deviceAnomaly.accept) {
+      loggerLog(LEVELS.WARN, 'QUALITY', `${description} preserving stable device anomalies after ${Date.now()-startTime}ms: ${deviceAnomaly.details}`);
+      data.qualityReason = 'device_anomalies_preserved';
+      return { data, qc: { ...qc, ok: true, deviceAnomaliesPreserved: true }, quality, reason: 'device_anomalies_preserved' };
+    }
+
+    // Accept only when communication state is complete; real temperature alone
+    // is not enough because indicator images can lag behind SVG text.
+    if (data && data.cards && data.cards.length > 0) {
+      const phCount = data.cards.filter(c => !c.name || c.name === '0-0001-KT').length;
+      // Non-template all-offline pages are a genuine comm state. Template-looking
+      // offline pages require the stability window above before acceptance.
+      if (phCount === 0 && data.cards.every(c => c.comm === '离线') && !qc.uniformTemplate) {
+        loggerLog(LEVELS.DEBUG, 'QUALITY', `${description} all offline after ${Date.now()-startTime}ms: ${qc.details}`);
+        data.qualityReason = 'all_offline';
+        return { data, qc, quality, reason: 'all_offline' };
+      }
+    }
+
+    if (quality.score > lastQualityScore + QUALITY_IMPROVEMENT_THRESHOLD) {
+      lastQualityScore = quality.score;
+      pollInterval = Math.max(MIN_POLL_INTERVAL, pollInterval * 0.8);
+      loggerLog(LEVELS.DEBUG, 'QUALITY', `${description} quality improving, reducing poll interval to ${pollInterval}ms`, { score: quality.score });
+    } else if (quality.score < lastQualityScore - QUALITY_IMPROVEMENT_THRESHOLD) {
+      pollInterval = Math.min(MAX_POLL_INTERVAL, pollInterval * 1.2);
+      loggerLog(LEVELS.DEBUG, 'QUALITY', `${description} quality not improving, increasing poll interval to ${pollInterval}ms`, { score: quality.score });
+    }
+
+    lastQualityScore = quality.score;
+    await pause(pollInterval);
+  }
+
+  log(`      ${description} timeout after ${Date.now()-startTime}ms`);
+  // If template was detected and we have data, accept with template_values_unconfirmed
+  if (initialTemplateDetected && lastExtractedData) {
+    lastExtractedData.qualityReason = 'template_values_unconfirmed';
+    log(`      ${description} accepting template data as template_values_unconfirmed`);
+    return { data: lastExtractedData, qc: lastExtractedQc, quality: null, reason: 'template_values_unconfirmed' };
+  }
+  return { data: null, qc: null, quality: null, reason: 'timeout' };
+}
 
 // ===== Inject DOM helpers into page context =====
 async function injectHelpers(page) {
@@ -284,8 +575,14 @@ async function injectHelpers(page) {
         const texts = Array.from(svg.querySelectorAll('text'));
         const items = texts.map(t => {
           const r = t.getBoundingClientRect();
-          return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), txt: t.textContent.trim() };
-        }).filter(i => i.txt);
+          const style = window.getComputedStyle(t);
+          return {
+            x: Math.round(r.left + r.width / 2),
+            y: Math.round(r.top + r.height / 2),
+            txt: t.textContent.trim(),
+            visible: r.width > 0 && r.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && parseFloat(style.opacity || '1') > 0,
+          };
+        }).filter(i => i.txt && i.visible);
 
         const imgs = Array.from(svg.querySelectorAll('image'));
         const imgList = imgs.map(i => {
@@ -300,12 +597,25 @@ async function injectHelpers(page) {
         });
 
         const switchImgs = imgList.filter(i => i.w >= 38 && i.w <= 50 && i.h >= 17 && i.h <= 30);
+        const switchByHref = {};
+        for (const si of switchImgs) {
+          if (!si.href) continue;
+          if (!switchByHref[si.href]) switchByHref[si.href] = 0;
+          switchByHref[si.href]++;
+        }
+        const hrefs = Object.keys(switchByHref);
         let offHref = null, onHref = null;
+        if (hrefs.length > 1) {
+          hrefs.sort((a, b) => switchByHref[b] - switchByHref[a]);
+          offHref = hrefs[0];
+          onHref = hrefs[1];
+        }
 
         // Indicator images (29x27) for comm status
         const indicatorImgs = imgList.filter(i => i.w >= 25 && i.w <= 33 && i.h >= 23 && i.h <= 31);
 
         const NOISE = /^(BM|1F|2F|3F|B1F|B2F|B3F|F|N|S|E|W|NE|NW|SE|SW|公区|电梯|楼梯|屋顶|机房)$/i;
+        const KNOWN_NO_INDICATOR = new Set(['2-2BC-2M001-KT-1', '2-2BC-2M001-KT-2']);
 
         // Detect layout: grid has rows with 2+ alphanumeric items (device-name-like)
         // Lowered threshold from 8 to 2 to catch partial rows (e.g. 6号 A座 1F row 2 has only 4 cards)
@@ -339,13 +649,43 @@ async function injectHelpers(page) {
           return best;
         }
 
+        function labelDuplicateNames(input) {
+          const groups = new Map();
+          input.forEach((card, index) => {
+            const baseName = String(card.name || '').trim();
+            if (!baseName) return;
+            if (!groups.has(baseName)) groups.set(baseName, []);
+            groups.get(baseName).push({ card, index });
+          });
+          const duplicateNames = [];
+          for (const [baseName, entries] of groups) {
+            if (entries.length < 2) continue;
+            const ordered = [...entries].sort((a, b) =>
+              (a.card._sourceY - b.card._sourceY) ||
+              (a.card._sourceX - b.card._sourceX) ||
+              (a.index - b.index));
+            const labeledNames = [];
+            ordered.forEach(({ card }, index) => {
+              card.sourceName = baseName;
+              card.name = `${baseName}#${index + 1}`;
+              labeledNames.push(card.name);
+            });
+            duplicateNames.push({ name: baseName, copies: entries.length, labeledNames });
+          }
+          for (const card of input) {
+            delete card._sourceX;
+            delete card._sourceY;
+          }
+          return { cards: input, duplicateNames };
+        }
+
         const cards = [];
         let rawCardCount = 0;
-        const duplicateNames = new Map();
+        const rejectedCandidates = [];
 
         if (isGrid) {
           const nameRows = [];
-          const seenGridNames = new Set();
+          const seenGridPositions = new Set();
           for (const yStr in byY) {
             const arr = byY[yStr];
             if (arr.length >= 2 && arr.every(it => /^[A-Z0-9\-]+$/i.test(it.txt) && it.txt.length >= 5 && it.txt.length < 20)) {
@@ -357,19 +697,24 @@ async function injectHelpers(page) {
 
           const modeTexts = items.filter(i => /^(制冷|通风|制热|送暖|地暖|制热\+地暖)$/.test(i.txt));
           const fanTexts = items.filter(i => /^(自动|高|中|低|0|1|2|3)$/.test(i.txt));
-          const tempTexts = items.filter(i => /\d+(\.\d+)?\s*℃/.test(i.txt));
+          const tempTexts = items.filter(i => {
+            if (!/^-?\d+(\.\d+)?\s*℃$/.test(i.txt)) return false;
+            const value = parseFloat(i.txt);
+            return Number.isFinite(value) && value >= 0 && value <= 60;
+          });
 
           for (let rowIndex = 0; rowIndex < nameRows.length; rowIndex++) {
             const row = nameRows[rowIndex];
             const nextRowY = nameRows[rowIndex + 1] ? nameRows[rowIndex + 1].y : Infinity;
             const rowBottom = Math.min(row.y + 285, nextRowY - 20);
             for (const nameIt of row.items) {
-              rawCardCount++;
-              if (seenGridNames.has(nameIt.txt)) {
-                duplicateNames.set(nameIt.txt, (duplicateNames.get(nameIt.txt) || 1) + 1);
+              const positionKey = `${nameIt.x}|${nameIt.y}`;
+              if (seenGridPositions.has(positionKey)) {
+                rejectedCandidates.push({ name: nameIt.txt, x: nameIt.x, y: nameIt.y, reason: 'duplicate-position' });
                 continue;
               }
-              seenGridNames.add(nameIt.txt);
+              seenGridPositions.add(positionKey);
+              rawCardCount++;
               const x = nameIt.x, ry = row.y;
               const sw = nearest(switchImgs, x, ry + 100, 80, 50);
               let swState = '-';
@@ -386,6 +731,11 @@ async function injectHelpers(page) {
               const setT = nearTemps[1] ? nearTemps[1].txt.replace(/\s*℃/, '') : '-';
               const fan = nearest(fanTexts, x, ry + 235, 100, 60);
               const indic = nearest(indicatorImgs, x, ry - 30, 80, 50);
+              const telemetrySignals = Number(Boolean(mode)) + Number(nearTemps.length > 0) + Number(Boolean(fan));
+              if (!sw && !indic && !(KNOWN_NO_INDICATOR.has(nameIt.txt) && telemetrySignals >= 2)) {
+                rejectedCandidates.push({ name: nameIt.txt, x: nameIt.x, y: nameIt.y, reason: 'no-card-visual' });
+                continue;
+              }
               cards.push({
                 name: nameIt.txt,
                 switch: swState,
@@ -393,7 +743,9 @@ async function injectHelpers(page) {
                 indoor,
                 setTemp: setT,
                 fan: fan ? fan.txt : '-',
-                indicator: indic ? indic.href : ''
+                indicator: indic ? indic.href : '',
+                _sourceX: nameIt.x,
+                _sourceY: nameIt.y,
               });
             }
           }
@@ -411,29 +763,26 @@ async function injectHelpers(page) {
           const seenCandidatePositions = new Set();
           const deviceCandidates = [];
           for (const d of [...deviceNames, ...altDeviceNames]) {
-            const posKey = `${d.txt}|${d.x}|${d.y}`;
-            if (seenCandidatePositions.has(posKey)) continue;
+            const posKey = `${d.x}|${d.y}`;
+            if (seenCandidatePositions.has(posKey)) {
+              rejectedCandidates.push({ name: d.txt, x: d.x, y: d.y, reason: 'duplicate-position' });
+              continue;
+            }
             seenCandidatePositions.add(posKey);
             deviceCandidates.push(d);
           }
           rawCardCount = deviceCandidates.length;
-          const seen = new Set();
-          const allDeviceNames = [];
-          for (const d of deviceCandidates) {
-            if (seen.has(d.txt)) {
-              duplicateNames.set(d.txt, (duplicateNames.get(d.txt) || 1) + 1);
-              continue;
-            }
-            seen.add(d.txt);
-            allDeviceNames.push(d);
-          }
 
           // Expanded mode regex to include 地暖 and 制热+地暖
           const modeTextsG = items.filter(i => /^(制冷|通风|制热|送暖|地暖|制热\+地暖)$/.test(i.txt));
           const fanTextsG = items.filter(i => /^(自动|高|中|低|0|1|2|3)$/.test(i.txt));
-          const tempTextsG = items.filter(i => /\d+(\.\d+)?\s*℃/.test(i.txt));
+          const tempTextsG = items.filter(i => {
+            if (!/^-?\d+(\.\d+)?\s*℃$/.test(i.txt)) return false;
+            const value = parseFloat(i.txt);
+            return Number.isFinite(value) && value >= 0 && value <= 60;
+          });
 
-          for (const dn of allDeviceNames) {
+          for (const dn of deviceCandidates) {
             const sw = nearest(switchImgs, dn.x, dn.y + 60, 80, 50);
             let swState = '-';
             if (sw) {
@@ -450,8 +799,23 @@ async function injectHelpers(page) {
             const setT = nearbyTemps[1] ? nearbyTemps[1].txt.replace(/\s*℃/, '') : '-';
             const fan = nearest(fanTextsG, dn.x, dn.y + 200, 80, 80);
             const indic = nearest(indicatorImgs, dn.x, dn.y - 30, 80, 50);
-            cards.push({ name: dn.txt, switch: swState, mode: mode ? mode.txt : '-', indoor, setTemp: setT, fan: fan ? fan.txt : '-', indicator: indic ? indic.href : '' });
+            const telemetrySignals = Number(Boolean(mode)) + Number(nearbyTemps.length > 0) + Number(Boolean(fan));
+            if (!sw && !indic && !(KNOWN_NO_INDICATOR.has(dn.txt) && telemetrySignals >= 2)) {
+              rejectedCandidates.push({ name: dn.txt, x: dn.x, y: dn.y, reason: 'no-card-visual' });
+              continue;
+            }
+            cards.push({ name: dn.txt, switch: swState, mode: mode ? mode.txt : '-', indoor, setTemp: setT, fan: fan ? fan.txt : '-', indicator: indic ? indic.href : '', _sourceX: dn.x, _sourceY: dn.y });
           }
+        }
+
+        // Drop numeric SVG matches that are outside EMS operating ranges before
+        // Vue enrichment. This prevents neighboring/transform text such as
+        // -1626 or 3301.5 from becoming a card field.
+        for (const card of cards) {
+          const indoor = parseFloat(card.indoor);
+          if (Number.isFinite(indoor) && (indoor < 0 || indoor > 60)) card.indoor = '-';
+          const setTemp = parseFloat(card.setTemp);
+          if (Number.isFinite(setTemp) && setTemp !== 0 && (setTemp < 5 || setTemp > 40)) card.setTemp = '-';
         }
 
         // ===== Vue state enrichment: override SVG field values with WS data =====
@@ -537,7 +901,7 @@ async function injectHelpers(page) {
                 }
               }
               if (f.fan) {
-                if (card.fan === '-' || /^\d$/.test(card.fan)) {
+                if (card.fan === '-' || /^\d$/.test(f.fan)) {
                   if (card.fan !== f.fan) loggerLog(LEVELS.DEBUG, 'VUE', `fan ${card.fan}→${f.fan}`, { card: card.name });
                   card.fan = f.fan;
                 }
@@ -574,15 +938,20 @@ async function injectHelpers(page) {
           }
         }
 
+        const labeled = labelDuplicateNames(cards);
+
         return {
-          count: cards.length,
-          rawCount: rawCardCount || cards.length,
-          uniqueCount: cards.length,
-          duplicateNames: [...duplicateNames.entries()].map(([name, copies]) => ({ name, copies })),
+          count: labeled.cards.length,
+          rawCount: labeled.cards.length,
+          uniqueCount: labeled.cards.length,
+          candidateCount: rawCardCount || labeled.cards.length,
+          rejectedCount: rejectedCandidates.length,
+          rejectedCandidates,
+          duplicateNames: labeled.duplicateNames,
           onHref,
           offHref,
           layout: isGrid ? 'grid' : 'group',
-          cards,
+          cards: labeled.cards,
         };
       },
 
@@ -631,9 +1000,9 @@ async function waitForLoadedCards(page, opts = {}) {
     let result;
     try {
       result = await page.evaluate(() => {
-        if (!window.__ems) return { ok: true };
+        if (!window.__ems || !window.__ems.extractCards) return { ok: false, helperMissing: true };
         const d = window.__ems.extractCards();
-        if (!d.cards || d.cards.length === 0) return { ok: true };
+        if (!d.cards || d.cards.length === 0) return { ok: false, count: 0 };
         const hasReal = d.cards.some(c => c.name && c.name !== '0-0001-KT');
         const switchLoaded = d.cards.some(c => c.switch !== '-');
         const withComm = d.cards.filter(c => c.comm === '开机' || c.comm === '关机' || c.comm === '离线').length;
@@ -664,49 +1033,166 @@ async function waitForLoadedCards(page, opts = {}) {
   return false;
 }
 
-// Wait until WebSocket data is sufficiently loaded (>85% of points received)
+function pageFromData(pageName, data, extra = {}) {
+  const rawCards = Array.isArray(data.cards) ? data.cards : [];
+  const rawNames = rawCards.map(card => String(card && card.name || '').trim()).filter(Boolean);
+  const hasUnlabeledDuplicates = new Set(rawNames).size !== rawNames.length;
+  const labeled = hasUnlabeledDuplicates
+    ? labelSamePageDuplicateCards(rawCards)
+    : { cards: rawCards.map(card => ({ ...card })), duplicateNames: [] };
+  const normalizedCards = normalizeKnownSourceDefects(labeled.cards);
+  const normalizedFieldCount = rawCards.reduce((count, card, index) => {
+    const normalized = normalizedCards[index] || {};
+    return count + (normalized.indoor !== card.indoor ? 1 : 0) + (normalized.setTemp !== card.setTemp ? 1 : 0);
+  }, 0);
+  if (normalizedFieldCount > 0) {
+    loggerLog(LEVELS.WARN, 'QUALITY', `${pageName} normalized out-of-range card fields: ${normalizedFieldCount}`);
+  }
+  const normalizedData = { ...data, cards: normalizedCards };
+  const duplicateNames = Array.isArray(data.duplicateNames) && data.duplicateNames.length
+    ? data.duplicateNames
+    : labeled.duplicateNames;
+  const qc = checkCardQuality(normalizedCards, normalizedData);
+  const knownMissingIndicator = classifyKnownMissingIndicatorPage(normalizedCards, normalizedData);
+  const persistentAnomaly = classifyPersistentDeviceAnomalyPage(normalizedCards, normalizedData);
+  const stableOfflineTemplate = normalizedCards.length > 0 &&
+    normalizedCards.every(c => c.comm === '离线') && qc.uniformTemplate;
+  const qualityReason = knownMissingIndicator.eligible
+    ? (knownMissingIndicator.intermittent ? 'known_intermittent_indicator_missing' : 'known_source_indicator_missing')
+    : (extra.qualityReason || data.qualityReason ||
+      (qc.ok ? 'quality_pass' :
+        (stableOfflineTemplate ? 'offline_template_stable' :
+          (persistentAnomaly.eligible ? 'device_anomalies_preserved' : ''))));
+  return {
+    page: pageName,
+    count: normalizedCards.length,
+    rawCount: data.rawCount ?? normalizedCards.length,
+    uniqueCount: normalizedCards.length,
+    candidateCount: data.candidateCount ?? normalizedCards.length,
+    rejectedCount: data.rejectedCount ?? 0,
+    rejectedCandidates: Array.isArray(data.rejectedCandidates) ? data.rejectedCandidates : [],
+    duplicateNames,
+    onHref: data.onHref,
+    offHref: data.offHref,
+    layout: data.layout,
+    qualityReason,
+    collectedAt: data.collectedAt || new Date().toISOString(),
+    cards: normalizedCards,
+    ...extra,
+    qualityReason,
+  };
+}
+
+function auditCollectedOutput(output) {
+  const issues = [];
+  for (const bldg of output.buildings || []) {
+    for (const sa of bldg.subAreas || []) {
+      for (const pageRow of sa.pages || []) {
+        const cards = Array.isArray(pageRow.cards) ? pageRow.cards : [];
+        const qc = checkCardQuality(cards, pageRow);
+        const reason = pageRow.qualityReason || pageRow.quality_reason || '';
+        const allowedNonPass = reason === 'device_anomalies_preserved'
+          ? classifyPersistentDeviceAnomalyPage(cards, pageRow).eligible
+          : (reason === 'known_source_indicator_missing' || reason === 'known_intermittent_indicator_missing')
+            ? classifyKnownMissingIndicatorPage(cards, pageRow).eligible
+            : reason !== 'quality_pass' && isAcceptedCaptureQualityReason(reason);
+        if (!qc.ok && !allowedNonPass) {
+          // Generate specific quality reason based on what failed
+          let specificReason = reason || 'missing_quality_reason';
+          if (reason === 'missing_quality_reason' || !reason) {
+            if (qc.uniformTemplate) specificReason = 'template_values_unconfirmed';
+            else if (qc.placeholderNames > 0) specificReason = `placeholder_cards:${qc.placeholderNames}`;
+            else if (qc.duplicateCollapse) specificReason = 'duplicate_collapse';
+            else if (qc.withResolvedState < cards.length) specificReason = `unresolved_comm:${cards.length - qc.withResolvedState}/${cards.length}`;
+            else if (qc.invalidIndoor > 0 || qc.invalidSetTemp > 0) specificReason = `invalid_values:${qc.invalidIndoor}+${qc.invalidSetTemp}`;
+            else if (qc.activeFieldOk === false) specificReason = 'active_fields_incomplete';
+          }
+          issues.push({
+            building: bldg.building,
+            floor: sa.floor,
+            subArea: sa.text,
+            page: pageRow.page,
+            reason: specificReason,
+            details: qc.details,
+          });
+        }
+      }
+    }
+  }
+  return issues;
+}
+
+async function readPageDataSignal(page) {
+  return page.evaluate(() => {
+    const w = document.querySelector('.pi-graphics-configuration-svg-new');
+    const vue = w && w.__vue__;
+    if (vue) {
+      const count = Object.keys(vue.$data?.websocketDataProp || {}).length;
+      return { mode: 'vue', count, signature: `vue:${count}` };
+    }
+    if (!window.__ems || !window.__ems.extractCards) return { mode: 'none', count: -1, signature: '' };
+    const data = window.__ems.extractCards();
+    const cards = Array.isArray(data.cards) ? data.cards : [];
+    const signature = cards.map(c => [
+      c.name || '', c.indicator || '', c.indoor || '', c.setTemp || '',
+      c.mode || '', c.fan || '', c.comm || '',
+    ].join('|')).join('||');
+    return { mode: 'svg', count: cards.length, signature };
+  }).catch(() => ({ mode: 'none', count: -1, signature: '' }));
+}
+
+// Wait until Vue/WebSocket data or SVG card data is stable.
 async function waitForDataReady(page, opts = {}) {
   const maxRetries = opts.maxRetries || 10;
   const waitMs = opts.waitMs || 200;
-  let prev = { count: -1, stable: 0 };
+  let prev = { mode: '', count: -1, signature: '' };
   for (let i = 0; i < maxRetries; i++) {
-    const ok = await page.evaluate(() => {
-      const w = document.querySelector('.pi-graphics-configuration-svg-new');
-      if (!w || !w.__vue__) return { count: -1 };
-      return { count: Object.keys(w.__vue__.$data.websocketDataProp || {}).length };
-    }).catch(() => ({ count: -1 }));
-    if (ok.count < 0) continue;
-    if (ok.count === prev.count && ok.count > 0) {
+    const ok = await readPageDataSignal(page);
+    if (ok.count < 0) {
+      await pause(waitMs);
+      continue;
+    }
+    if (ok.mode === 'svg') {
+      if (ok.count > 0 && ok.signature && ok.signature === prev.signature) {
+        log(`      SVG_DATA_READY (${ok.count} cards after ${(i+1)*waitMs}ms)`);
+        return true;
+      }
+      prev = ok;
+    } else if (ok.count === prev.count && ok.count > 0) {
       log(`      WS_READY (${ok.count} pts after ${(i+1)*waitMs}ms)`);
       return true;
     } else if (ok.count > 0) {
-      prev = { count: ok.count, stable: 1 };
+      prev = ok;
     }
     await new Promise(r => setTimeout(r, waitMs));
   }
-  log(`      WS_TIMEOUT after ${maxRetries*waitMs}ms — proceeding best-effort (last count: ${prev.count})`);
+  const label = prev.mode === 'svg' ? 'SVG_DATA_TIMEOUT' : 'WS_TIMEOUT';
+  log(`      ${label} after ${maxRetries*waitMs}ms — proceeding best-effort (last count: ${prev.count})`);
   return false;
 }
 
-// Wait for page switch to complete — detect NEW data arrival (WS count change)
-// Much faster: no "stable" wait, just detect count changed from before click
-async function waitForPageSwitch(page, beforeCount, opts = {}) {
+// Wait for page switch to complete using either Vue point count or SVG card signature.
+async function waitForPageSwitch(page, beforeSignal, opts = {}) {
   const maxRetries = opts.maxRetries || 6;
   const waitMs = opts.waitMs || 200;
-  let ok = { count: -1 };
+  const baseline = typeof beforeSignal === 'number'
+    ? { mode: 'vue', count: beforeSignal, signature: '' }
+    : (beforeSignal || { mode: '', count: -1, signature: '' });
+  let ok = { mode: 'none', count: -1, signature: '' };
   for (let i = 0; i < maxRetries; i++) {
-    ok = await page.evaluate(() => {
-      const w = document.querySelector('.pi-graphics-configuration-svg-new');
-      if (!w || !w.__vue__) return { count: -1 };
-      return { count: Object.keys(w.__vue__.$data.websocketDataProp || {}).length };
-    }).catch(() => ({ count: -1 }));
-    if (ok.count > 0 && ok.count !== beforeCount) {
-      log(`      PAGE_SWITCH: WS count ${beforeCount} -> ${ok.count} (${(i+1)*waitMs}ms)`);
+    ok = await readPageDataSignal(page);
+    const changed = ok.mode === 'svg'
+      ? Boolean(ok.signature && baseline.signature && ok.signature !== baseline.signature)
+      : ok.count > 0 && ok.count !== baseline.count;
+    if (changed) {
+      const from = baseline.mode === 'svg' ? 'svg-signature' : baseline.count;
+      const to = ok.mode === 'svg' ? 'svg-signature' : ok.count;
+      log(`      PAGE_SWITCH: ${from} -> ${to} (${(i+1)*waitMs}ms)`);
       return true;
     }
     await new Promise(r => setTimeout(r, waitMs));
   }
-  log(`      PAGE_SWITCH_TIMEOUT after ${maxRetries*waitMs}ms (last count: ${ok.count})`);
+  log(`      PAGE_SWITCH_TIMEOUT after ${maxRetries*waitMs}ms (last ${ok.mode}:${ok.count})`);
   return false;
 }
 
@@ -733,6 +1219,64 @@ async function waitForSvgStable(page, opts = {}) {
   }
   log(`      SVG_TIMEOUT (groups: ${prevSnapshot || 'none'}) — proceeding`);
   return false;
+}
+
+async function waitForCaptureReady(page, opts = {}) {
+  const ready = await waitForReady(page, opts.readyRetries || 10);
+  if (!ready) return { ok: false, ready: false, cards: false, ws: false, svg: false };
+  const [cards, ws, svg] = await Promise.all([
+    waitForLoadedCards(page, opts.cards || {}),
+    waitForDataReady(page, opts.ws || {}),
+    waitForSvgStable(page, opts.svg || {}),
+  ]);
+  return { ok: Boolean(cards && ws && svg), ready: true, cards, ws, svg };
+}
+
+async function waitForBuildingOverview(page, building, opts = {}) {
+  const expected = opts.expectedSubAreas ?? BLDG_META[building]?.baselineSubAreas;
+  const maxRetries = opts.maxRetries || 10;
+  const waitMs = opts.waitMs || 200;
+  let last = { subAreaCount: 0, menuText: '', details: '' };
+  for (let i = 0; i < maxRetries; i++) {
+    const state = await page.evaluate(() => {
+      const items = Array.from(document.querySelectorAll('.ivu-menu-item'));
+      const active = items.find(el => /ivu-menu-item-selected|active/.test(String(el.className || '')));
+      const groups = window.__ems && window.__ems.findAllSubAreaGroups
+        ? window.__ems.findAllSubAreaGroups()
+        : [];
+      return {
+        subAreaCount: groups.length,
+        menuText: active ? (active.textContent || '').trim() : '',
+      };
+    }).catch(() => ({ subAreaCount: 0, menuText: '' }));
+    last = { ...state, details: `subAreas=${state.subAreaCount}, expected=${expected}` };
+    const acceptedCount = Number.isFinite(expected) && (
+      state.subAreaCount === expected ||
+      (building === '6号' && (state.subAreaCount === 30 || state.subAreaCount === BLDG_META['6号']?.baselineSubAreas))
+    );
+    if (acceptedCount) return { ok: true, ...last };
+    await pause(waitMs);
+  }
+  loggerLog(LEVELS.ERROR, 'QUALITY', `BUILDING_OVERVIEW_NOT_READY ${building}: ${last.details}`);
+  return { ok: false, ...last };
+}
+
+async function waitForBuildingPage(page, building, opts = {}) {
+  const maxRetries = opts.maxRetries || 10;
+  const waitMs = opts.waitMs || 200;
+  let last = { cards: [], identity: null };
+  for (let i = 0; i < maxRetries; i++) {
+    const data = await page.evaluate(() => {
+      if (!window.__ems || !window.__ems.extractCards) return { cards: [] };
+      return window.__ems.extractCards();
+    }).catch(() => ({ cards: [] }));
+    const identity = assessBuildingIdentity(building, data.cards || []);
+    last = { cards: data.cards || [], identity };
+    if (last.cards.length > 0 && identity.ok) return { ok: true, ...last };
+    await pause(waitMs);
+  }
+  loggerLog(LEVELS.ERROR, 'QUALITY', `BUILDING_PAGE_IDENTITY_FAIL ${building}: ${last.identity ? last.identity.details : 'no cards'}`);
+  return { ok: false, ...last };
 }
 
 async function closeModals(page) {
@@ -770,8 +1314,8 @@ async function healthCheck(page) {
 async function recoverFromCrash(page, buildingName, partialResult) {
   log('!!! PAGE CRASHED — auto-reloading...');
   if (partialResult) {
-    const recoveryFile = outputStore.saveRecovery(partialResult);
-    log(`  Saved ${partialResult.subAreas.length} sub-areas to recovery snapshot: ${recoveryFile}`);
+    saveOutput(partialResult);
+    log(`  Saved ${partialResult.subAreas.length} sub-areas`);
   }
   // Reload page programmatically
   try { await page.evaluate(() => location.reload()); } catch {}
@@ -831,7 +1375,12 @@ async function clickMenuReady(page, menuMatch, opts = {}) {
     clicked = await clickMenu(page, menuMatch);
     if (!clicked) return { clicked: null, ready: false };
     await injectHelpers(page).catch(() => {});
-    if (await waitForReady(page, maxRetries)) return { clicked, ready: true };
+    if (await waitForReady(page, maxRetries)) {
+      if (!opts.building || (await waitForBuildingOverview(page, opts.building, { maxRetries: Math.min(maxRetries, 10) })).ok) {
+        return { clicked, ready: true };
+      }
+      loggerLog(LEVELS.WARN, 'QUALITY', `Menu ${menuMatch} rendered stale building content; retrying selection`);
+    }
     loggerLog(LEVELS.WARN, 'CRASH', `Menu ${menuMatch} not ready after click attempt ${i + 1}/${attempts}`);
     await pause(600);
   }
@@ -966,8 +1515,8 @@ async function verifyCardIntegrity(page) {
       }
       return {
         count: data.cards ? data.cards.length : 0,
-        onCount: data.cards ? data.cards.filter(c => c.comm === '开机').length : 0,
-        offCount: data.cards ? data.cards.filter(c => c.comm === '关机').length : 0,
+        onCount: data.onHref ? data.cards.filter(c => c.indicator === data.onHref).length : -1,
+        offCount: data.offHref ? data.cards.filter(c => c.indicator === data.offHref).length : -1,
         issues,
         placeholderCards: data.cards ? data.cards.filter(c => c.name && c.name.startsWith('0-')).map(c => c.name) : []
       };
@@ -983,11 +1532,15 @@ async function captureEnhancedSnapshot(page, label) {
   const pageState = await verifyPageState(page);
   const cardIntegrity = await verifyCardIntegrity(page);
   let cards = [];
+  let onHref = '';
+  let offHref = '';
   let layout = '';
 
   try {
     const data = await page.evaluate(() => window.__ems.extractCards());
     cards = data.cards || [];
+    onHref = data.onHref || '';
+    offHref = data.offHref || '';
     layout = data.layout || '';
   } catch (e) {
     // fallback
@@ -1000,7 +1553,6 @@ async function captureEnhancedSnapshot(page, label) {
     indicatorFreq[src] = (indicatorFreq[src] || 0) + 1;
   }
 
-  const stateSummary = summarizeCardStates(cards);
   return {
     label,
     ts: new Date().toISOString(),
@@ -1008,14 +1560,14 @@ async function captureEnhancedSnapshot(page, label) {
     pageState,
     cardIntegrity,
     cards,
+    onHref,
+    offHref,
     layout,
     indicatorFreq,
     cardCount: cards.length,
-    onCount: stateSummary.counts.开机,
-    offCount: stateSummary.counts.关机,
-    offlineCount: stateSummary.counts.离线,
-    unknownCount: stateSummary.counts.未知,
-    cardsByState: stateSummary.cardsByState
+    // Determine ON count using onHref frequency
+    onCount: onHref ? (indicatorFreq[onHref] || 0) : 0,
+    offCount: offHref ? (indicatorFreq[offHref] || 0) : 0
   };
 }
 
@@ -1066,7 +1618,7 @@ async function waitForVerifyHealthy(page, netLog, timeoutMs = 20000) {
   return last || await diagnosePage(page, netLog);
 }
 
-// ===== Login helpers for auto-launch =====
+// ===== Login helpers =====
 async function isLoggedIn(page) {
   try {
     return await page.evaluate(() => {
@@ -1126,7 +1678,7 @@ async function helpPage() {
 }
 
 async function waitForLogin(page) {
-  log('请在弹出的 Edge 窗口中登录 EMS。');
+  log(USE_CDP ? '请在当前采集浏览器窗口中登录 EMS。' : '请在 Edge 窗口中登录 EMS。');
   log('60 秒倒计时，超时后自动显示帮助页。\n');
   const MAX_WAIT = 60000;
   const start = Date.now();
@@ -1196,19 +1748,19 @@ async function main() {
       await ensureLoggedInOrExit(page);
       log('页面已加载，开始采集。');
     } catch (e) {
-      log('Auto-launch failed:', sanitizeErrorForDisplay(e, [EMS_URL]));
+      log('Auto-launch failed:', e.message);
       log('请确认 Microsoft Edge 已安装。');
-      log(`降级提示: 可使用 --edge 模式（先手动打开 ${CDP_URL}）。`);
+      log(`降级提示: 可使用 --edge 模式（先手动打开 ${sanitizeUrlForDisplay(CDP_URL)}）。`);
       process.exit(1);
     }
   } else if (USE_CDP) {
-    log(`Mode: CDP → Edge (${CDP_URL}, EMS ${sanitizeUrlForDisplay(EMS_URL)})`);
+    log(`Mode: CDP → Edge (${sanitizeUrlForDisplay(CDP_URL)}, EMS ${sanitizeUrlForDisplay(EMS_URL)})`);
     try { browser = await chromium.connectOverCDP(CDP_URL); }
-    catch (e) { log('Cannot connect to Edge CDP at', CDP_URL); process.exit(1); }
+    catch (e) { log('Cannot connect to Edge CDP at', sanitizeUrlForDisplay(CDP_URL)); process.exit(1); }
     context = browser.contexts()[0];
     const pages = context.pages();
     page = pages.find(p => isEmsPageUrl(p.url())) || pages[0];
-    log('Page:', sanitizeUrlForDisplay(page.url()));
+    log('Page:', page.url());
     if (!isEmsPageUrl(page.url())) {
       await page.goto(EMS_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
     }
@@ -1295,8 +1847,14 @@ async function main() {
 
     // Output detailed breakdown
     log(`--- Card breakdown ---`);
-    for (const [state, cards] of Object.entries(snapshot.cardsByState)) {
-      if (cards.length === 0) continue;
+    const byState = {};
+    for (const c of snapshot.cards) {
+      const state = c.indicator === snapshot.onHref ? '开机'
+        : c.indicator === snapshot.offHref ? '关机' : '离线';
+      if (!byState[state]) byState[state] = [];
+      byState[state].push(c);
+    }
+    for (const [state, cards] of Object.entries(byState)) {
       log(`${state} (${cards.length}):`);
       for (const c of cards) {
         log(`  ${c.name}${c.area ? ' [' + c.area + ']' : ''}${c.publicArea ? ' (公区)' : ''}`);
@@ -1321,21 +1879,42 @@ async function main() {
     for (const t of RECAPTURE_TARGETS) {
       log(`--- Recapture ${t.building} x=${t.x} y=${t.y} ---`);
       const bldg = BUILDINGS.find(b => b.building === t.building);
-      if (!bldg) {
-        log(`  Unknown building ${t.building}`);
-        recaptureResult.targets.push({ ...t, err: 'unknown building' });
-        continue;
-      }
-      const clickedMenu = await clickMenu(page, bldg.menuMatch);
+      if (!bldg) { log(`  Unknown building ${t.building}`); continue; }
+      const menuResult = await clickMenuReady(page, bldg.menuMatch, { building: bldg.building, maxRetries: 20, attempts: 3 });
+      const clickedMenu = menuResult.clicked;
       if (!clickedMenu) { log(`  Menu not found`); recaptureResult.targets.push({ ...t, err: 'menu' }); continue; }
       log(`  Menu: ${clickedMenu}`);
-      await pause(200);
-      if (!(await waitForReady(page))) { log(`  No shadow after menu`); recaptureResult.targets.push({ ...t, err: 'no shadow' }); continue; }
-      // Find target sub-area by position
+      if (!menuResult.ready) { log(`  No shadow or stale building after menu`); recaptureResult.targets.push({ ...t, err: 'no shadow' }); continue; }
+      const overview = await waitForBuildingOverview(page, bldg.building);
+      if (!overview.ok) { log(`  Building identity not ready`); recaptureResult.targets.push({ ...t, err: 'building identity' }); continue; }
+      // Resolve either legacy SVG coordinates or the user-friendly building/seat/floor scope.
       const subAreas = await page.evaluate(() => window.__ems.findAllSubAreaGroups());
-      const target = subAreas.find(s => Math.abs(s.x - t.x) <= 5 && Math.abs(s.y - t.y) <= 5);
+      let target;
+      if (Number.isFinite(t.x) && Number.isFinite(t.y)) {
+        target = subAreas.find(s => Math.abs(s.x - t.x) <= 5 && Math.abs(s.y - t.y) <= 5);
+      } else {
+        const seatLabels = t.building === '5号'
+          ? ['A座', 'B座', 'C座', 'D座', 'E座', 'F座']
+          : ['A座', 'B座', 'C座'];
+        const seatIndex = seatLabels.indexOf(t.seat);
+        const floorText = String(t.floorText || '').trim();
+        const candidates = subAreas.filter(s =>
+          (!floorText || String(s.text || '').trim() === floorText) &&
+          (seatIndex < 0 || getZone(s.x, t.building) === seatIndex));
+        if (candidates.length > 0) {
+          // Expand a broad scope into one legacy coordinate target per matching sub-area.
+          // Array iteration visits appended entries, so all selected floors/seats are captured.
+          for (const extra of candidates.slice(1)) {
+            RECAPTURE_TARGETS.push({ building: t.building, x: extra.x, y: extra.y });
+          }
+          target = candidates[0];
+        }
+      }
       if (!target) {
-        log(`  Target x=${t.x} y=${t.y} not found. Available:`);
+        const targetLabel = Number.isFinite(t.x) && Number.isFinite(t.y)
+          ? `x=${t.x} y=${t.y}`
+          : `${t.building}${t.seat || ''}${t.floorText || ''}`;
+        log(`  Target ${targetLabel} not found. Available:`);
         for (const s of subAreas) log(`    F${s.floor} ${s.text} x=${s.x} y=${s.y}`);
         recaptureResult.targets.push({ ...t, err: 'not found' });
         continue;
@@ -1343,10 +1922,11 @@ async function main() {
       log(`  Target: F${target.floor} ${target.text} (id=${target.id})`);
       const clicked = await page.evaluate((id) => window.__ems.clickById(id), target.id);
       if (!clicked) { log(`  Click failed`); recaptureResult.targets.push({ ...t, err: 'click' }); continue; }
-      await pause(100);
       if (!(await waitForReady(page))) { log(`  No shadow after click`); recaptureResult.targets.push({ ...t, err: 'no shadow after click' }); continue; }
-      // Wait for loaded cards (no 0-0001-KT placeholders)
-      await waitForLoadedCards(page);
+      const pageIdentity = await waitForBuildingPage(page, bldg.building);
+      if (!pageIdentity.ok) { log(`  Building identity failed after click`); recaptureResult.targets.push({ ...t, err: 'building identity after click' }); continue; }
+      // Prime all capture readiness checks before scanning pagination.
+      await waitForCaptureReady(page);
       // Reuse the collectPage flow by directly calling the page logic
       const saRes = { building: t.building, floor: target.floor, text: target.text, x: t.x, y: t.y, pages: [] };
       // Inline simplified collectPage
@@ -1356,29 +1936,22 @@ async function main() {
         const hasNumbered = Object.keys(btns).some(k => /^[一二三四五六七八九十]页$/.test(k));
         const pages = [];
         if (hasNext && !hasNumbered) {
-          await waitForDataReady(page);
-          await waitForSvgStable(page);
+          await waitForCaptureReady(page);
           let data0 = await page.evaluate(() => window.__ems.extractCards());
           pages.push(pageFromData(prefix + '一页', data0));
           let pageNum = 2; let prevCards = data0.cards;
           let curBtns = btns;
           while (curBtns['下页']) {
-            const beforeCount = await page.evaluate(() => {
-              const w = document.querySelector('.pi-graphics-configuration-svg-new');
-              if (!w || !w.__vue__) return -1;
-              return Object.keys(w.__vue__.$data.websocketDataProp || {}).length;
-            }).catch(() => -1);
-            const clickedNext = await page.evaluate((id) => window.__ems.clickById(id), curBtns['下页']);
-            if (!clickedNext) {
-              pages.push({ page: prefix + pageNum + '页', err: 'next page click failed', cards: [] });
-              break;
-            }
-            await pause(W.PAGE_CLICK);
+            const beforeSignal = await readPageDataSignal(page);
+            await page.evaluate((id) => window.__ems.clickById(id), curBtns['下页']);
             if (!(await waitForReady(page))) break;
-            await waitForPageSwitch(page, beforeCount);
-            await waitForDataReady(page, { maxRetries: 5, waitMs: 200 });
-            await waitForSvgStable(page, { maxRetries: 6, waitMs: 200 });
-            await waitForLoadedCards(page, { maxRetries: 3, waitMs: 250 });
+            await waitForPageSwitch(page, beforeSignal);
+            await waitForCaptureReady(page, {
+              readyRetries: 6,
+              cards: { maxRetries: 3, waitMs: 250 },
+              ws: { maxRetries: 5, waitMs: 200 },
+              svg: { maxRetries: 6, waitMs: 200 },
+            });
             let data = await page.evaluate(() => window.__ems.extractCards());
             const quality = assessDataQuality(data.cards);
             const qc = checkCardQuality(data.cards, data);
@@ -1394,10 +1967,14 @@ async function main() {
                 data = retryResult.data;
                 log(`      RECAPTURE PROGRESSIVE RETRY OK: ${retryResult.qc.details}`);
               } else {
-                log(`      RECAPTURE PROGRESSIVE RETRY FAILED — deeper WS wait fallback...`);
-                for (let f = 0; f < 10; f++) {
-                  await waitForDataReady(page, { maxRetries: 8, waitMs: 200 });
-                  await waitForSvgStable(page, { maxRetries: 8, waitMs: 200 });
+                log(`      PROGRESSIVE RETRY FAILED — deeper WS wait fallback (total cap 5s)...`);
+                const fallbackStart = Date.now();
+                const FALLBACK_DEADLINE = 5000;
+                for (let f = 0; f < 10 && Date.now() - fallbackStart < FALLBACK_DEADLINE; f++) {
+                  await Promise.all([
+                    waitForDataReady(page, { maxRetries: 6, waitMs: 200 }),
+                    waitForSvgStable(page, { maxRetries: 6, waitMs: 200 }),
+                  ]);
                   let dataN = await page.evaluate(() => window.__ems.extractCards()).catch(() => ({ cards: [], count: 0 }));
                   if (!dataN.cards || dataN.cards.length === 0) {
                     await injectHelpers(page);
@@ -1428,22 +2005,30 @@ async function main() {
           const order = { '一页': 1, '二页': 2, '三页': 3, '四页': 4, '五页': 5 };
           const sorted = numbered.sort((a, b) => (order[a]||99) - (order[b]||99));
           if (sorted.length === 0) {
-            await waitForLoadedCards(page);
-            await waitForDataReady(page);
-            await waitForSvgStable(page);
+            await waitForCaptureReady(page);
 
             // Re-scan for page buttons after SVG is stable — fix catch-22
             const reBtns = await page.evaluate(() => window.__ems.findPageBtns());
             const rePages = Object.keys(reBtns).filter(k => /^[一二三四五六七八九十]页$/.test(k));
             if (rePages.length > 0) return capturePages(prefix);
 
-            const data = await page.evaluate(() => window.__ems.extractCards());
+            let data = await page.evaluate(() => window.__ems.extractCards());
+            const qc = checkCardQuality(data.cards, data);
+            const quality = assessDataQuality(data.cards);
+            if (!isAcceptableCapture(data, qc, quality)) {
+              log(`      RECAPTURE FIRST PAGE QUALITY [${bldg.building} F${target.floor} ${prefix || 'default'}]: ${qc.details} ${quality.details} — adaptive polling up to 45s...`);
+              const result = await adaptivePolling(
+                page,
+                () => page.evaluate(() => window.__ems.extractCards()).catch(() => ({ cards: [], count: 0 })),
+                45000,
+                `RECAPTURE FIRST PAGE ${bldg.building} ${target.text} ${prefix || 'default'}`
+              );
+              if (result.data) data = result.data;
+            }
             pages.push(pageFromData(prefix + 'default', data));
           } else {
             // Full waits for initial floor SVG load
-            await waitForLoadedCards(page);
-            await waitForDataReady(page);
-            await waitForSvgStable(page);
+            await waitForCaptureReady(page);
 
             // Re-read page buttons AFTER waits — all buttons should now be rendered
             const finalBtns = await page.evaluate(() => window.__ems.findPageBtns());
@@ -1461,22 +2046,16 @@ async function main() {
               const curBtns2 = await page.evaluate(() => window.__ems.findPageBtns());
               const bid = curBtns2[plabel];
               if (!bid) continue;
-              const beforeCount = await page.evaluate(() => {
-                const w = document.querySelector('.pi-graphics-configuration-svg-new');
-                if (!w || !w.__vue__) return -1;
-                return Object.keys(w.__vue__.$data.websocketDataProp || {}).length;
-              }).catch(() => -1);
-              const clickedPage = await page.evaluate((id) => window.__ems.clickById(id), bid);
-              if (!clickedPage) {
-                pages.push({ page: prefix + plabel, err: 'page button click failed', cards: [] });
-                continue;
-              }
-              await pause(W.PAGE_CLICK);
+              const beforeSignal = await readPageDataSignal(page);
+              await page.evaluate((id) => window.__ems.clickById(id), bid);
               if (!(await waitForReady(page))) continue;
-              await waitForPageSwitch(page, beforeCount);
-              await waitForDataReady(page, { maxRetries: 5, waitMs: 200 });
-              await waitForSvgStable(page, { maxRetries: 6, waitMs: 200 });
-              await waitForLoadedCards(page, { maxRetries: 3, waitMs: 250 });
+              await waitForPageSwitch(page, beforeSignal);
+              await waitForCaptureReady(page, {
+                readyRetries: 6,
+                cards: { maxRetries: 3, waitMs: 250 },
+                ws: { maxRetries: 5, waitMs: 200 },
+                svg: { maxRetries: 6, waitMs: 200 },
+              });
               let data = await page.evaluate(() => window.__ems.extractCards());
               const quality = assessDataQuality(data.cards);
               const qc = checkCardQuality(data.cards, data);
@@ -1534,23 +2113,12 @@ async function main() {
             log(`    Sub-tab ${tab.txt} — already active, skipping`);
             continue;
           }
-          const clickedTab = tab.mainDom
-            ? await page.evaluate((t) => window.__ems.clickMainDomTab(t), tab)
-            : await page.evaluate((t) => window.__ems.clickShadowTab(t.id), tab);
-          if (!clickedTab) {
-            saRes.err = `sub-tab click failed: ${tab.txt}`;
-            continue;
-          }
-          await pause(W.PAGE_CLICK);
-          if (!(await waitForReady(page))) {
-            saRes.err = `sub-tab not ready: ${tab.txt}`;
-            continue;
-          }
-          const activeTabs = await page.evaluate(() => window.__ems.findSubTabs());
-          if (!tabIsActive(activeTabs, tab)) {
-            saRes.err = `sub-tab activation not confirmed: ${tab.txt}`;
-            continue;
-          }
+          if (tab.mainDom)
+            await page.evaluate((t) => window.__ems.clickMainDomTab(t), tab);
+          else
+            await page.evaluate((t) => window.__ems.clickShadowTab(t.id), tab);
+          if (!(await waitForReady(page))) continue;
+          await waitForCaptureReady(page);
           const tabPages = await capturePages(tab.txt + '/');
           // Skip if cards match default view
           const tabCardNames = tabPages.flatMap(p => p.cards || []).map(c => c.name).sort().join(',');
@@ -1573,9 +2141,7 @@ async function main() {
             if (ok) {
               await pause(W.BM_CLICK);
               if (await waitForReady(page)) {
-                 await waitForLoadedCards(page);
-                 await waitForDataReady(page);
-                 await waitForSvgStable(page);
+                 await waitForCaptureReady(page);
                  let dataBM = await page.evaluate(() => window.__ems.extractCards());
                   const qualityBM = assessDataQuality(dataBM.cards);
                   const qcBM = checkCardQuality(dataBM.cards, dataBM);
@@ -1631,68 +2197,33 @@ async function main() {
     fs.writeFileSync(recOut, JSON.stringify(recaptureResult, null, 2), 'utf-8');
     log(`Saved recapture result: ${recOut}`);
     const targetErrors = recaptureResult.targets.filter(t => t.err);
-    const targetQualityGateIssues = auditCollectedOutput({
+    const qualityGateIssues = auditCollectedOutput({
       buildings: recaptureResult.targets
         .filter(t => t.result)
         .map(t => ({ building: t.building, subAreas: [t.result] })),
     });
-    for (const issue of targetQualityGateIssues.slice(0, 20)) {
+    for (const issue of qualityGateIssues.slice(0, 20)) {
       loggerLog(LEVELS.ERROR, 'QUALITY', `RECAPTURE QUALITY GATE FAIL ${issue.building} F${issue.floor} ${issue.subArea} ${issue.page}: ${issue.details} reason=${issue.reason}`);
     }
-
-    const capturedByBuilding = new Map();
-    for (const targetResult of recaptureResult.targets.filter(targetResult => targetResult.result)) {
-      if (!capturedByBuilding.has(targetResult.building)) {
-        capturedByBuilding.set(targetResult.building, {
-          building: targetResult.building,
-          subAreas: [],
-        });
-      }
-      capturedByBuilding.get(targetResult.building).subAreas.push(targetResult.result);
-    }
-    const capturedBuildings = [...capturedByBuilding.values()];
-    let mergedValidation = null;
-    let mergedQualityGateIssues = [];
-    let mergeFailure = null;
-    if (targetErrors.length === 0 && targetQualityGateIssues.length === 0) {
-      try {
-        outputStore.saveRecapture(capturedBuildings, {
-          validate: (mergedOutput, selectedBuildings) => {
-            mergedValidation = validateEnumData(mergedOutput, { buildings: selectedBuildings });
-            mergedQualityGateIssues = auditCollectedOutput({
-              buildings: mergedOutput.buildings.filter(building => selectedBuildings.includes(building.building)),
-            });
-            return { ok: mergedValidation.ok && mergedQualityGateIssues.length === 0 };
-          },
-        });
-      } catch (error) {
-        mergeFailure = error;
-      }
-    }
-
-    if (mergedValidation) {
-      for (const line of formatValidation(mergedValidation)) log(`  ${line}`);
-    }
-    for (const issue of mergedQualityGateIssues.slice(0, 20)) {
-      loggerLog(LEVELS.ERROR, 'QUALITY', `RECAPTURE MERGED QUALITY FAIL ${issue.building} F${issue.floor} ${issue.subArea} ${issue.page}: ${issue.details} reason=${issue.reason}`);
-    }
     await browser.close();
-    if (targetErrors.length || targetQualityGateIssues.length || mergeFailure) {
+    if (targetErrors.length || qualityGateIssues.length) {
       if (targetErrors.length) log(`Recapture target failures: ${targetErrors.length}`);
-      if (targetQualityGateIssues.length) log(`Recapture quality failures: ${targetQualityGateIssues.length}`);
-      if (mergeFailure) log(`Recapture merge rejected: ${mergeFailure.message}`);
+      if (qualityGateIssues.length) log(`Recapture quality failures: ${qualityGateIssues.length}`);
       process.exit(2);
     }
-    log(`Saved merged recapture: ${OUT_FILE}`);
     return;
   }
 
   const allResults = [];
   const bldgs = FILTER ? BUILDINGS.filter(b => FILTER.includes(b.building)) : BUILDINGS;
   if (FILTER) log(`Building filter: ${FILTER.join(', ')}`);
+  const totalExpectedCards = bldgs.reduce((sum, b) => sum + (BLDG_META[b.building]?.baselineCards || 0), 0);
 
   let firstBldg = true;
+  const enumStartedAt = Date.now();
+  let globalCardAcc = 0;
   for (const bldg of bldgs) {
+    const bldgIndex = bldgs.indexOf(bldg);
     const bRes = { building: bldg.building, subAreas: [] };
     log(`--- ${bldg.building} ---`);
 
@@ -1701,6 +2232,8 @@ async function main() {
       if (!clicked) { bRes.err = 'menu not found'; allResults.push(bRes); continue; }
       if (firstBldg && !(await waitForReady(page))) { bRes.err = 'no shadow'; allResults.push(bRes); continue; }
       firstBldg = false;
+      const overview = await waitForBuildingOverview(page, bldg.building);
+      if (!overview.ok) { bRes.err = 'building identity'; allResults.push(bRes); continue; }
       const sas = await page.evaluate(() => window.__ems.findAllSubAreaGroups());
       log(`  Menu: ${clicked}, Sub-areas: ${sas.length}`);
       bRes.subAreaCount = sas.length;
@@ -1708,7 +2241,7 @@ async function main() {
       continue;
     }
 
-    const menuResult = await clickMenuReady(page, bldg.menuMatch, { maxRetries: firstBldg ? 20 : 10, attempts: 3 });
+    const menuResult = await clickMenuReady(page, bldg.menuMatch, { building: bldg.building, maxRetries: firstBldg ? 20 : 10, attempts: 3 });
     const clicked = menuResult.clicked;
     if (!clicked) { bRes.err = 'menu not found'; allResults.push(bRes); log('  MENU NOT FOUND'); continue; }
     bRes.menuClicked = clicked;
@@ -1716,6 +2249,12 @@ async function main() {
 
     if (!menuResult.ready) { bRes.err = 'no shadow after menu'; allResults.push(bRes); firstBldg = false; continue; }
     firstBldg = false;
+    const overview = await waitForBuildingOverview(page, bldg.building);
+    if (!overview.ok) {
+      bRes.err = 'building identity';
+      allResults.push(bRes);
+      continue;
+    }
 
     // Scan all sub-areas from overview, sort by floor ascending (B1F→1F→...→31F)
     const rawSubAreas = await page.evaluate(() => {
@@ -1746,7 +2285,7 @@ async function main() {
       visited.add(visitKey);
 
       // BM is handled as a special page within 6号 A座 1F, not as a standalone sub-area
-      if (bldg.building === '6号' && target.floor === -2) { bRes.subAreas.push({ idx: saIdx, floor: -2, text: target.text, status: 'captured_inline' }); continue; }
+      if (bldg.building === '6号' && target.floor === -2) { bRes.subAreas.push({ idx: saIdx, floor: -2, text: target.text, err: 'bm inline' }); continue; }
 
       // Page health check — skip first sub-area (page still loading after menu click)
       if (saIdx > 0 && !(await healthCheck(page))) {
@@ -1760,7 +2299,7 @@ async function main() {
       // Re-scan each time because SVG element IDs change after each re-render.
       if (saIdx > 0) {
         await closeModals(page);
-        const resetResult = await clickMenuReady(page, bldg.menuMatch, { maxRetries: 20, attempts: 3 });
+        const resetResult = await clickMenuReady(page, bldg.menuMatch, { building: bldg.building, maxRetries: 20, attempts: 3 });
         if (!(await waitForReady(page, 20))) {
           log(`  [${saIdx}] F${target.floor} SKIP: no shadow after reset`);
           bRes.subAreas.push({ idx: saIdx, floor: target.floor, text: target.text, err: 'no shadow after reset' });
@@ -1768,6 +2307,21 @@ async function main() {
         }
         if (!resetResult.ready) {
           log(`  [${saIdx}] F${target.floor} WARN: reset menu not fully ready, continuing with current DOM`);
+        }
+        // 6号 A座 BM is an inline entry that may disappear after returning from a
+        // device page. The initial 31-entry scan already captured it; subsequent
+        // overview resets only need the 30 regular sub-areas to be present.
+        const resetExpectedSubAreas = bldg.building === '6号'
+          ? BLDG_META[bldg.building].baselineSubAreas - 1
+          : undefined;
+        const resetOverview = await waitForBuildingOverview(page, bldg.building, {
+          maxRetries: 20,
+          expectedSubAreas: resetExpectedSubAreas,
+        });
+        if (!resetOverview.ok) {
+          log(`  [${saIdx}] F${target.floor} SKIP: building identity after reset`);
+          bRes.subAreas.push({ idx: saIdx, floor: target.floor, text: target.text, err: 'building identity after reset' });
+          continue;
         }
       }
 
@@ -1792,10 +2346,14 @@ async function main() {
       let clicked = await page.evaluate((id) => window.__ems.clickById(id), matchedFloor.id);
       if (!clicked) { log(`  [${saIdx}] F${target.floor} SKIP: click failed`); bRes.subAreas.push({ idx: saIdx, floor: target.floor, text: target.text, err: 'click failed' }); continue; }
 
-      // Quick pause for Vue to begin SVG re-render before polling
-      await pause(200);
-
       const saRes = { idx: saIdx, floor: target.floor, text: target.text, x: target.x, y: target.y, pages: [] };
+
+      const pageIdentity = await waitForBuildingPage(page, bldg.building);
+      if (!pageIdentity.ok) {
+        log(`  [${saIdx}] F${target.floor} SKIP: building identity on page`);
+        bRes.subAreas.push({ idx: saIdx, floor: target.floor, text: target.text, x: target.x, y: target.y, err: 'building identity on page' });
+        continue;
+      }
 
       // Collect default view FIRST, then click sub-tabs
       // Default view is often the first tab (e.g. 塔楼), sub-tab is the alternate (裙楼)
@@ -1810,22 +2368,17 @@ async function main() {
 
         if (hasNext && !hasNumbered) {
           // Collect current view first (parallel waits after SVG ready)
-          await waitForReady(page);
-          await Promise.all([
-            waitForLoadedCards(page),
-            waitForDataReady(page),
-            waitForSvgStable(page),
-          ]);
+          await waitForCaptureReady(page);
           let data0 = await page.evaluate(() => window.__ems.extractCards());
           const qc0 = checkCardQuality(data0.cards, data0);
           const quality0 = assessDataQuality(data0.cards);
           if (!isAcceptableCapture(data0, qc0, quality0)) {
-            log(`      FIRST PAGE QUALITY: ${qc0.details} ${quality0.details} — adaptive polling up to 45s for real data...`);
+            log(`      FIRST PAGE QUALITY [${bldg.building} F${target.floor} ${prefix || 'default'}]: ${qc0.details} ${quality0.details} — adaptive polling up to 45s for real data...`);
             const result = await adaptivePolling(
               page,
               () => page.evaluate(() => window.__ems.extractCards()).catch(() => ({ cards: [], count: 0 })),
               45000,
-              'FIRST PAGE'
+              `FIRST PAGE ${bldg.building} ${target.text} ${prefix || 'default'}`
             );
             if (result.data) {
               data0 = result.data;
@@ -1866,21 +2419,17 @@ async function main() {
           while (curBtns['下页']) {
             const bid = curBtns['下页'];
             // Get WS count BEFORE click to detect change
-            const beforeCount = await page.evaluate(() => {
-              const w = document.querySelector('.pi-graphics-configuration-svg-new');
-              if (!w || !w.__vue__) return -1;
-              return Object.keys(w.__vue__.$data.websocketDataProp || {}).length;
-            }).catch(() => -1);
+            const beforeSignal = await readPageDataSignal(page);
             if (!(await page.evaluate((id) => window.__ems.clickById(id), bid))) break;
-            await pause(W.PAGE_CLICK);
             if (!(await waitForReady(page))) break;
             // Fast path: wait for WS count to change (no stable wait)
-            await waitForPageSwitch(page, beforeCount);
-            // Wait for WS data to stabilize on the new page
-            await waitForDataReady(page, { maxRetries: 5, waitMs: 200 });
-            // Optional: quick SVG check (no full stable wait)
-            await waitForSvgStable(page, { maxRetries: 6, waitMs: 200 });
-            await waitForLoadedCards(page, { maxRetries: 3, waitMs: 250 });
+            await waitForPageSwitch(page, beforeSignal);
+            // Parallel waits: WS data + SVG stability + card loading (total cap ~2s)
+            await Promise.all([
+              waitForDataReady(page, { maxRetries: 6, waitMs: 200 }),
+              waitForSvgStable(page, { maxRetries: 6, waitMs: 200 }),
+              waitForLoadedCards(page, { maxRetries: 4, waitMs: 250 }),
+            ]);
             let data = await page.evaluate(() => {
               if (!window.__ems || !window.__ems.extractCards) return { cards: [], count: 0 };
               return window.__ems.extractCards();
@@ -1956,16 +2505,16 @@ async function main() {
             const cn = ['', '一','二','三','四','五','六','七','八','九','十'][pageNum] || pageNum.toString();
             // Validate: page switch must produce different cards
             const stale = prevCards.length > 0 && data.cards.length > 0 &&
-              cardIdentity(data.cards) === cardIdentity(prevCards);
+              data.cards.map(c => c.name).join(',') === prevCards.map(c => c.name).join(',');
             const pageEntry = pageFromData(prefix + cn + '页', data);
             if (stale) {
               pageEntry.stale = true;
               loggerLog(LEVELS.WARN, 'ENUM', `${prefix + cn}页 data unchanged — page switch may have failed, retrying...`);
+              // Retry: click 下页 again up to 2 times with 1.5s wait
               for (let r = 0; r < 2; r++) {
-                await pause(1500);
+                if (!(await page.evaluate((id) => window.__ems.clickById(id), bid))) break;
                 if (!(await waitForReady(page))) break;
-                await waitForDataReady(page);
-                await waitForSvgStable(page);
+                await waitForCaptureReady(page);
                 let dataRetry = await page.evaluate(() => {
                   if (!window.__ems || !window.__ems.extractCards) return { cards: [], count: 0 };
                   return window.__ems.extractCards();
@@ -1978,7 +2527,7 @@ async function main() {
                     return window.__ems.extractCards();
                   }).catch(() => ({ cards: [], count: 0 }));
                 }
-                const stillStale = dataRetry.cards.length > 0 && cardIdentity(dataRetry.cards) === cardIdentity(prevCards);
+                const stillStale = dataRetry.cards.length > 0 && dataRetry.cards.map(c => c.name).join(',') === prevCards.map(c => c.name).join(',');
                 if (!stillStale && dataRetry.cards.length > 0) {
                   Object.assign(pageEntry, pageFromData(prefix + cn + '页', dataRetry));
                   pageEntry.stale = false;
@@ -1991,7 +2540,7 @@ async function main() {
               }
             }
             results.push(pageEntry);
-            prevCards = pageEntry.cards || [];
+            prevCards = data.cards;
             pageNum++;
             curBtns = await page.evaluate(() => window.__ems.findPageBtns());
           }
@@ -2006,12 +2555,7 @@ async function main() {
 
         if (uniquePages.length === 0) {
           loggerLog(LEVELS.DEBUG, 'ENUM', `PAGE_BTNS initial none (${Object.keys(btns).join(',') || 'none'})`);
-          await waitForReady(page);
-          await Promise.all([
-            waitForLoadedCards(page),
-            waitForDataReady(page),
-            waitForSvgStable(page),
-          ]);
+          await waitForCaptureReady(page);
 
           // Re-scan after SVG is stable. Buttons may render late; cover both
           // numbered pagination and dynamic "下页" pagination.
@@ -2028,12 +2572,12 @@ async function main() {
           const qc = checkCardQuality(data.cards, data);
           const quality = assessDataQuality(data.cards);
           if (!isAcceptableCapture(data, qc, quality)) {
-            log(`      FIRST PAGE QUALITY: ${qc.details} ${quality.details} — adaptive polling up to 45s for real data...`);
+            log(`      FIRST PAGE QUALITY [${bldg.building} F${target.floor} ${prefix || 'default'}]: ${qc.details} ${quality.details} — adaptive polling up to 45s for real data...`);
             const result = await adaptivePolling(
               page,
               () => page.evaluate(() => window.__ems.extractCards()).catch(() => ({ cards: [], count: 0 })),
               45000,
-              'FIRST PAGE'
+              `FIRST PAGE ${bldg.building} ${target.text} ${prefix || 'default'}`
             );
             if (result.data) {
               data = result.data;
@@ -2043,8 +2587,10 @@ async function main() {
               let bestData = data;
               let gotQuality = false;
               for (let round = 1; Date.now() - start < DEADLINE; round++) {
-                await waitForDataReady(page, { maxRetries: 15, waitMs: 200 });
-                await waitForSvgStable(page, { maxRetries: 15, waitMs: 200 });
+                await Promise.all([
+                  waitForDataReady(page, { maxRetries: 8, waitMs: 200 }),
+                  waitForSvgStable(page, { maxRetries: 8, waitMs: 200 }),
+                ]);
                 const dataN = await page.evaluate(() => window.__ems.extractCards());
                 const qcN = checkCardQuality(dataN.cards, dataN);
                 const qualityN = assessDataQuality(dataN.cards);
@@ -2069,12 +2615,7 @@ async function main() {
           results.push(pageFromData(prefix + 'default', data));
         } else {
           // Full waits for initial floor SVG load (parallel after SVG ready)
-          await waitForReady(page);
-          await Promise.all([
-            waitForLoadedCards(page),
-            waitForDataReady(page),
-            waitForSvgStable(page),
-          ]);
+          await waitForCaptureReady(page);
 
           // Re-read page buttons AFTER waits — all buttons should now be rendered.
           // The early btns (line 1533) may only show 一页 if SVG was still transitioning.
@@ -2088,12 +2629,12 @@ async function main() {
           const qc0 = checkCardQuality(data0.cards, data0);
           const quality0 = assessDataQuality(data0.cards);
           if (!isAcceptableCapture(data0, qc0, quality0)) {
-            log(`      FIRST PAGE QUALITY: ${qc0.details} ${quality0.details} — adaptive polling up to 45s for real data...`);
+            log(`      FIRST PAGE QUALITY [${bldg.building} F${target.floor} ${prefix || 'default'}]: ${qc0.details} ${quality0.details} — adaptive polling up to 45s for real data...`);
             const result = await adaptivePolling(
               page,
               () => page.evaluate(() => window.__ems.extractCards()).catch(() => ({ cards: [], count: 0 })),
               45000,
-              'FIRST PAGE'
+              `FIRST PAGE ${bldg.building} ${target.text} ${prefix || 'default'}`
             );
             if (result.data) {
               data0 = result.data;
@@ -2136,22 +2677,18 @@ async function main() {
             const btnId = curBtns[plabel];
             if (!btnId) { results.push({ page: prefix + plabel, err: 'btn not found' }); continue; }
             // Get WS count BEFORE click to detect change
-            const beforeCount = await page.evaluate(() => {
-              const w = document.querySelector('.pi-graphics-configuration-svg-new');
-              if (!w || !w.__vue__) return -1;
-              return Object.keys(w.__vue__.$data.websocketDataProp || {}).length;
-            }).catch(() => -1);
+            const beforeSignal = await readPageDataSignal(page);
             const clickedBtn = await page.evaluate((id) => window.__ems.clickById(id), btnId);
             if (!clickedBtn) { results.push({ page: prefix + plabel, err: 'click failed' }); continue; }
-            await pause(W.PAGE_CLICK);
             if (!(await waitForReady(page))) { results.push({ page: prefix + plabel, err: 'no shadow after' }); continue; }
             // Fast path: wait for WS count to change
-            await waitForPageSwitch(page, beforeCount);
-            // Wait for WS data to stabilize on the new page
-            await waitForDataReady(page, { maxRetries: 5, waitMs: 200 });
-            // Optional: quick SVG check
-            await waitForSvgStable(page, { maxRetries: 6, waitMs: 200 });
-            await waitForLoadedCards(page, { maxRetries: 3, waitMs: 250 });
+            await waitForPageSwitch(page, beforeSignal);
+            await waitForCaptureReady(page, {
+              readyRetries: 6,
+              cards: { maxRetries: 3, waitMs: 250 },
+              ws: { maxRetries: 5, waitMs: 200 },
+              svg: { maxRetries: 6, waitMs: 200 },
+            });
             let data = await page.evaluate(() => {
               if (!window.__ems || !window.__ems.extractCards) return { cards: [], count: 0 };
               return window.__ems.extractCards();
@@ -2196,10 +2733,14 @@ async function main() {
                 data = retryResult.data;
                 log(`      PROGRESSIVE RETRY OK: ${retryResult.qc.details}`);
               } else {
-                log(`      PROGRESSIVE RETRY FAILED — deeper WS wait fallback...`);
-                for (let f = 0; f < 10; f++) {
-                  await waitForDataReady(page, { maxRetries: 8, waitMs: 200 });
-                  await waitForSvgStable(page, { maxRetries: 8, waitMs: 200 });
+                log(`      PROGRESSIVE RETRY FAILED — deeper WS wait fallback (total cap 5s)...`);
+                const fallbackStart = Date.now();
+                const FALLBACK_DEADLINE = 5000;
+                for (let f = 0; f < 10 && Date.now() - fallbackStart < FALLBACK_DEADLINE; f++) {
+                  await Promise.all([
+                    waitForDataReady(page, { maxRetries: 6, waitMs: 200 }),
+                    waitForSvgStable(page, { maxRetries: 6, waitMs: 200 }),
+                  ]);
                   let dataN = await page.evaluate(() => {
                     if (!window.__ems || !window.__ems.extractCards) return { cards: [], count: 0 };
                     return window.__ems.extractCards();
@@ -2226,24 +2767,20 @@ async function main() {
             }
             // Validate page switch
             const stale = prevCards.length > 0 && data.cards.length > 0 &&
-              cardIdentity(data.cards) === cardIdentity(prevCards);
+              data.cards.map(c => c.name).join(',') === prevCards.map(c => c.name).join(',');
             const pEntry = pageFromData(prefix + plabel, data);
             if (stale) {
               pEntry.stale = true;
               loggerLog(LEVELS.WARN, 'ENUM', `${prefix + plabel} data unchanged — page switch may have failed, retrying...`);
               // Retry: click the same page button up to 2 times
               for (let r = 0; r < 2; r++) {
-                const retryButtons = await page.evaluate(() => window.__ems.findPageBtns()).catch(() => ({}));
-                const retryButtonId = retryButtons[plabel];
                 const retryClicked = await page.evaluate((id) => {
                   if (!window.__ems || !window.__ems.clickById) return false;
                   return window.__ems.clickById(id);
-                }, retryButtonId).catch(() => false);
+                }, btnId).catch(() => false);
                 if (!retryClicked) break;
-                await pause(1500);
                 if (!(await waitForReady(page))) break;
-                await waitForDataReady(page);
-                await waitForSvgStable(page);
+                await waitForCaptureReady(page);
                 let dataRetry = await page.evaluate(() => {
                   if (!window.__ems || !window.__ems.extractCards) return { cards: [], count: 0 };
                   return window.__ems.extractCards();
@@ -2256,7 +2793,7 @@ async function main() {
                     return window.__ems.extractCards();
                   }).catch(() => ({ cards: [], count: 0 }));
                 }
-                const stillStale = dataRetry.cards.length > 0 && cardIdentity(dataRetry.cards) === cardIdentity(prevCards);
+                const stillStale = dataRetry.cards.length > 0 && dataRetry.cards.map(c => c.name).join(',') === prevCards.map(c => c.name).join(',');
                 if (!stillStale && dataRetry.cards.length > 0) {
                   Object.assign(pEntry, pageFromData(prefix + plabel, dataRetry));
                   pEntry.stale = false;
@@ -2269,7 +2806,7 @@ async function main() {
               }
             }
             results.push(pEntry);
-            prevCards = pEntry.cards || [];
+            prevCards = data.cards;
           }
         }
         return results;
@@ -2294,20 +2831,7 @@ async function main() {
           const tabClicked = tab.mainDom
             ? await page.evaluate((t) => window.__ems.clickMainDomTab(t), tab)
             : await page.evaluate((t) => window.__ems.clickShadowTab(t.id), tab);
-          if (!tabClicked) {
-            saRes.err = `sub-tab click failed: ${tab.txt}`;
-            continue;
-          }
-          await pause(W.PAGE_CLICK);
-          if (!(await waitForReady(page))) {
-            saRes.err = `sub-tab not ready: ${tab.txt}`;
-            continue;
-          }
-          const activeTabs = await page.evaluate(() => window.__ems.findSubTabs());
-          if (!tabIsActive(activeTabs, tab)) {
-            saRes.err = `sub-tab activation not confirmed: ${tab.txt}`;
-            continue;
-          }
+          await waitForCaptureReady(page);
           const tabPages = await collectPage(tab.txt + '/');
           // Skip if cards match default view
           const tabCardNames = tabPages.flatMap(p => p.cards || []).map(c => c.name).sort().join(',');
@@ -2331,8 +2855,7 @@ async function main() {
             if (clickedBM) {
               await pause(W.BM_CLICK);
               if (await waitForReady(page)) {
-                await waitForDataReady(page);
-                await waitForSvgStable(page);
+                await waitForCaptureReady(page);
                 const dataBM = await page.evaluate(() => window.__ems.extractCards());
                 saRes.pages.push(pageFromData('BM', dataBM));
                 // Return to 1F view — BM view breaks subsequent floor navigation
@@ -2365,18 +2888,57 @@ async function main() {
 
       const totalCards = saRes.pages.reduce((sum, p) => sum + (p && p.cards ? p.cards.length : 0), 0);
       bldgCardAcc += totalCards;
+      globalCardAcc += totalCards;
+      const lastPage = saRes.pages && saRes.pages.length > 0 ? saRes.pages[saRes.pages.length - 1] : null;
+      const seat = (bldg.building === '5号' || bldg.building === '6号')
+        ? `${String.fromCharCode(65 + getZone(target.x, bldg.building))}座`
+        : '';
       process.stdout.write('[PROGRESS]' + JSON.stringify({
         t: 'c', bldg: bldg.building,
         cards: totalCards, acc: bldgCardAcc,
-        totalSa: subAreas.length, curSa: saIdx + 1
+        totalSa: subAreas.length, curSa: saIdx + 1,
+        buildingIndex: bldgIndex + 1,
+        buildingTotal: bldgs.length,
+        floor: target.floor,
+        floorText: target.text,
+        seat,
+        pageName: lastPage ? lastPage.page : target.text,
+        deviceDone: totalCards,
+        deviceTotal: BLDG_META[bldg.building]?.baselineCards || totalCards,
+        overallDone: globalCardAcc,
+        overallTotal: totalExpectedCards,
+        stage: 'collecting',
+        elapsedMs: Date.now() - enumStartedAt
       }) + '\n');
       log(`    [${saIdx}/${subAreas.length}] F${target.floor}${subTabs.length > 0 ? ' +' + subTabs.length + ' tabs' : ''}: ${totalCards} cards`);
       bRes.subAreas.push(saRes);
     }
 
+    bRes.completedAt = new Date().toISOString();
     allResults.push(bRes);
     const bTotal = bRes.subAreas.reduce((sum, sa) => sum + (sa.pages ? sa.pages.reduce((s, p) => s + (p && p.cards ? p.cards.length : 0), 0) : 0), 0);
     log(`  ${bldg.building} total: ${bTotal} cards`);
+      const lastFloor = subAreas.length > 0 ? subAreas[subAreas.length - 1] : {};
+    const lastSeat = (bldg.building === '5号' || bldg.building === '6号') && Number.isFinite(lastFloor.x)
+      ? `${String.fromCharCode(65 + getZone(lastFloor.x, bldg.building))}座`
+      : '';
+    process.stdout.write('[PROGRESS]' + JSON.stringify({
+      t: 'c', bldg: bldg.building,
+      cards: bTotal, acc: globalCardAcc,
+      totalSa: subAreas.length, curSa: subAreas.length,
+      buildingIndex: bldgIndex + 1,
+      buildingTotal: bldgs.length,
+      floor: lastFloor.floor || 0,
+      floorText: lastFloor.text || '',
+      seat: lastSeat,
+      pageName: 'done',
+      deviceDone: bTotal,
+      deviceTotal: BLDG_META[bldg.building]?.baselineCards || bTotal,
+      overallDone: globalCardAcc,
+      overallTotal: totalExpectedCards,
+      stage: 'building_done',
+      elapsedMs: Date.now() - enumStartedAt
+    }) + '\n');
   }
 
   const output = { buildings: allResults, completedAt: new Date().toISOString() };
@@ -2399,7 +2961,8 @@ async function main() {
     process.exit(2);
   }
 
-  outputStore.saveRun(allResults);
+  // Save each building (append mode)
+  for (const bRes of allResults) saveOutput(bRes);
   log(`Saved: ${OUT_FILE}`);
 
   // Summary
@@ -2413,4 +2976,4 @@ async function main() {
   await browser.close();
 }
 
-main().catch(e => { console.error(sanitizeErrorForDisplay(e, [EMS_URL])); process.exit(1); });
+main().catch(e => { console.error(e); process.exit(1); });

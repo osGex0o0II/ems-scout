@@ -17,7 +17,7 @@
                 </Grid.ColumnDefinitions>
                 <StackPanel Spacing="3">
                     <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="系统设置" />
-                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="集中管理连接、目录、采集行为和界面偏好。" />
+                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="集中管理连接、目录和界面偏好。" />
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
                     <Button Command="{x:Bind ViewModel.SaveCommand}" Style="{StaticResource PrimaryToolbarButtonStyle}">
@@ -66,91 +66,46 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
                 <Border Style="{StaticResource WorkbenchCardStyle}">
-                    <ContentControl
-                        HorizontalContentAlignment="Stretch"
-                        IsEnabled="{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}">
-                        <StackPanel Spacing="10">
-                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="EMS 连接" />
-                            <TextBox Header="EMS 地址" Text="{x:Bind ViewModel.EmsUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                            <NumberBox
-                                Header="Edge CDP 端口"
-                                LargeChange="100"
-                                Minimum="1"
-                                Maximum="65535"
-                                SmallChange="1"
-                                SpinButtonPlacementMode="Inline"
-                                Value="{x:Bind ViewModel.EdgeCdpPort, Mode=TwoWay}" />
-                            <ToggleSwitch Header="启动采集前检查登录态" IsOn="{x:Bind ViewModel.CheckLoginBeforeCollection, Mode=TwoWay}" />
-                        </StackPanel>
-                    </ContentControl>
+                    <StackPanel Spacing="10">
+                        <TextBlock Style="{StaticResource SectionTitleStyle}" Text="EMS 连接" />
+                        <TextBox Header="EMS 地址" Text="{x:Bind ViewModel.EmsUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <NumberBox
+                            Header="Edge CDP 端口"
+                            LargeChange="100"
+                            Minimum="1"
+                            Maximum="65535"
+                            SmallChange="1"
+                            SpinButtonPlacementMode="Inline"
+                            Value="{x:Bind ViewModel.EdgeCdpPort, Mode=TwoWay}" />
+                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="采集前请手动启动 Edge，打开并登录 EMS 页面。" TextWrapping="WrapWholeWords" />
+                    </StackPanel>
                 </Border>
 
                 <Border Grid.Column="1" Style="{StaticResource WorkbenchCardStyle}">
-                    <ContentControl
-                        HorizontalContentAlignment="Stretch"
-                        IsEnabled="{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}">
-                        <StackPanel Spacing="10">
-                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="目录" />
-                            <Grid ColumnSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <TextBox Header="数据目录" Text="{x:Bind ViewModel.DataDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                <Button
-                                    Grid.Column="1"
-                                    VerticalAlignment="Bottom"
-                                    Click="PickDataDirectory_Click"
-                                    Style="{StaticResource ToolbarButtonStyle}"
-                                    ToolTipService.ToolTip="选择数据目录">
-                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                        <SymbolIcon Symbol="OpenFile" />
-                                        <TextBlock Text="选择" />
-                                    </StackPanel>
-                                </Button>
-                            </Grid>
-                            <Grid ColumnSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <TextBox Header="导出目录" Text="{x:Bind ViewModel.ExportDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                <Button
-                                    Grid.Column="1"
-                                    VerticalAlignment="Bottom"
-                                    Click="PickExportDirectory_Click"
-                                    Style="{StaticResource ToolbarButtonStyle}"
-                                    ToolTipService.ToolTip="选择导出目录">
-                                    <StackPanel Orientation="Horizontal" Spacing="6">
-                                        <SymbolIcon Symbol="OpenFile" />
-                                        <TextBlock Text="选择" />
-                                    </StackPanel>
-                                </Button>
-                            </Grid>
-                            <ToggleSwitch Header="跟踪最近 Excel 导出" IsOn="{x:Bind ViewModel.TrackRecentExports, Mode=TwoWay}" />
-                        </StackPanel>
-                    </ContentControl>
-                </Border>
-
-                <Border Grid.Row="1" Style="{StaticResource WorkbenchCardStyle}">
-                    <ContentControl
-                        HorizontalContentAlignment="Stretch"
-                        IsEnabled="{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}">
-                        <StackPanel Spacing="10">
-                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="采集日志" />
-                            <ComboBox Header="日志级别" SelectedIndex="{x:Bind ViewModel.LogLevelIndex, Mode=TwoWay}">
-                                <ComboBoxItem Content="ERROR" />
-                                <ComboBoxItem Content="INFO" />
-                                <ComboBoxItem Content="DEBUG" />
-                            </ComboBox>
-                            <ToggleSwitch Header="保存 NDJSON 日志" IsOn="{x:Bind ViewModel.SaveNdjsonLog, Mode=TwoWay}" />
-                        </StackPanel>
-                    </ContentControl>
+                    <StackPanel Spacing="10">
+                        <TextBlock Style="{StaticResource SectionTitleStyle}" Text="目录" />
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox Header="数据目录" Text="{x:Bind ViewModel.DataDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                            <Button
+                                Grid.Column="1"
+                                VerticalAlignment="Bottom"
+                                Click="PickDataDirectory_Click"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                ToolTipService.ToolTip="选择数据目录">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <SymbolIcon Symbol="OpenFile" />
+                                    <TextBlock Text="选择" />
+                                </StackPanel>
+                            </Button>
+                        </Grid>
+                    </StackPanel>
                 </Border>
 
                 <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource WorkbenchCardStyle}">
@@ -165,81 +120,11 @@
                     </StackPanel>
                 </Border>
 
-                <Border Grid.Row="2" Grid.ColumnSpan="2" Style="{StaticResource WorkbenchCardStyle}">
-                    <Grid ColumnSpacing="16" RowSpacing="10">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
-                        <StackPanel Spacing="8">
-                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="软件更新" />
-                            <Grid ColumnSpacing="18">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="当前版本" />
-                                    <TextBlock Text="{x:Bind ViewModel.CurrentVersionText, Mode=OneWay}" />
-                                </StackPanel>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
-                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="可用版本" />
-                                    <TextBlock Text="{x:Bind ViewModel.AvailableVersionText, Mode=OneWay}" />
-                                </StackPanel>
-                            </Grid>
-                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                <ProgressRing
-                                    Width="16"
-                                    Height="16"
-                                    IsActive="{x:Bind ViewModel.IsCheckingForUpdate, Mode=OneWay}" />
-                                <TextBlock
-                                    VerticalAlignment="Center"
-                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                    Text="{x:Bind ViewModel.UpdateStatusText, Mode=OneWay}"
-                                    TextWrapping="WrapWholeWords" />
-                            </StackPanel>
-                        </StackPanel>
-                        <StackPanel
-                            Grid.Column="1"
-                            VerticalAlignment="Center"
-                            Orientation="Horizontal"
-                            Spacing="8">
-                            <Button Command="{x:Bind ViewModel.CheckForUpdateCommand}" Style="{StaticResource ToolbarButtonStyle}">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <FontIcon FontSize="14" Glyph="&#xE895;" />
-                                    <TextBlock Text="检查更新" />
-                                </StackPanel>
-                            </Button>
-                            <Button Command="{x:Bind ViewModel.InstallUpdateCommand}" Style="{StaticResource PrimaryToolbarButtonStyle}">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <FontIcon FontSize="14" Glyph="&#xE896;" />
-                                    <TextBlock Text="安装更新" />
-                                </StackPanel>
-                            </Button>
-                        </StackPanel>
-                    </Grid>
-                </Border>
-
-                <Border Grid.Row="3" Grid.ColumnSpan="2" Style="{StaticResource WorkbenchCardStyle}">
+                <Border Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource WorkbenchCardStyle}">
                     <Grid ColumnSpacing="12">
                         <StackPanel Spacing="4">
                             <TextBlock Style="{StaticResource SectionTitleStyle}" Text="高级" />
                             <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.SettingsPath, Mode=OneWay}" TextWrapping="WrapWholeWords" />
-                            <Button
-                                HorizontalAlignment="Left"
-                                Click="MigrateLegacyOut_Click"
-                                IsEnabled="{x:Bind ViewModel.CanEditCriticalSettings, Mode=OneWay}"
-                                Style="{StaticResource ToolbarButtonStyle}"
-                                ToolTipService.ToolTip="选择旧 out 目录并迁移数据库和兼容数据">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <SymbolIcon Symbol="Upload" />
-                                    <TextBlock Text="迁移旧数据" />
-                                </StackPanel>
-                            </Button>
                         </StackPanel>
                     </Grid>
                 </Border>

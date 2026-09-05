@@ -6,6 +6,11 @@ public interface IDeviceExportService
         DeviceQuery query,
         string outputDirectory,
         CancellationToken cancellationToken = default);
+
+    Task<DeviceExportResult> ExportToFileAsync(
+        DeviceQuery query,
+        string outputPath,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed record DeviceExportResult(

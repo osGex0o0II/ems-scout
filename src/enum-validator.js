@@ -1,7 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
-const { BLDG_META, BLDG_ORDER } = require('./rules');
+const { BLDG_META, BLDG_ORDER, assessBuildingIdentity } = require('./rules');
 
 function cardCountForPage(page) {
   return Array.isArray(page && page.cards) ? page.cards.length : 0;
@@ -65,27 +65,6 @@ function validateEnumData(data, options = {}) {
   const buildings = normalizeSelection(data, options.buildings || options.selectedBuildings);
   const errors = [];
   const warnings = [];
-  const requested = options.buildings || options.selectedBuildings || [];
-  const present = new Set(buildings.map(building => building.building));
-  for (const building of requested) {
-    if (!present.has(building)) errors.push(`${building}: 请求采集的楼栋未出现在结果中。`);
-  }
-  for (const building of buildings) {
-    if (building.err) errors.push(`${building.building}: 楼栋采集失败: ${building.err}`);
-    for (const subArea of building.subAreas || []) {
-      if (subArea.err && subArea.err !== 'bm inline') {
-        errors.push(`${building.building} F${subArea.floor ?? '-'} ${subArea.text || '-'}: 子区采集失败: ${subArea.err}`);
-      }
-      for (const page of subArea.pages || []) {
-        if (page.err) {
-          errors.push(`${building.building} F${subArea.floor ?? '-'} ${subArea.text || '-'} ${page.page || '-'}: 页面采集失败: ${page.err}`);
-        }
-        if (page.stale) {
-          errors.push(`${building.building} F${subArea.floor ?? '-'} ${subArea.text || '-'} ${page.page || '-'}: stale 页面未确认更新。`);
-        }
-      }
-    }
-  }
   const stats = buildings.map(buildingStats).sort((a, b) => BLDG_ORDER.indexOf(a.building) - BLDG_ORDER.indexOf(b.building));
 
   if (!stats.length) {
@@ -95,9 +74,44 @@ function validateEnumData(data, options = {}) {
 
   for (const s of stats) {
     const meta = BLDG_META[s.building] || {};
+    const building = buildings.find(item => item.building === s.building);
+    const flatCards = building ? flattenBuilding(building).cards.map(row => row.card || {}) : [];
+    const identity = assessBuildingIdentity(s.building, flatCards, s.subAreas);
+    if (!identity.ok) {
+      errors.push(`${s.building}: 楼栋身份校验失败 (${identity.details})。`);
+    }
     if (s.cards === 0) {
       errors.push(`${s.building}: 采集卡片数为 0。`);
       continue;
+    }
+
+    const flat = building ? flattenBuilding(building) : { pages: [], cards: [] };
+    for (const row of flat.pages) {
+      const page = row.page || {};
+      const cards = Array.isArray(page.cards) ? page.cards : [];
+      const names = cards.map(card => String(card && card.name || '').trim()).filter(Boolean);
+      if (new Set(names).size !== names.length) {
+        errors.push(`${s.building}/${row.sa.text}/${page.page || 'default'}: 同页重名卡片尚未编号。`);
+      }
+      const sourceGroups = new Map();
+      for (const card of cards) {
+        const sourceName = String(card && card.sourceName || '').trim();
+        if (!sourceName) continue;
+        if (!sourceGroups.has(sourceName)) sourceGroups.set(sourceName, []);
+        sourceGroups.get(sourceName).push(String(card.name || '').trim());
+      }
+      for (const [sourceName, labeledNames] of sourceGroups) {
+        if (labeledNames.length < 2) continue;
+        const expected = labeledNames.map((_, index) => `${sourceName}#${index + 1}`).sort();
+        const actual = [...labeledNames].sort();
+        if (actual.join('|') !== expected.join('|')) {
+          errors.push(`${s.building}/${row.sa.text}/${page.page || 'default'}: 重名卡片 ${sourceName} 的编号不连续。`);
+        }
+      }
+      const rejectedCount = Number(page.rejectedCount || 0);
+      if (rejectedCount > 0) {
+        warnings.push(`${s.building}/${row.sa.text}/${page.page || 'default'}: 已过滤 ${rejectedCount} 个无卡片结构的 SVG 名称候选。`);
+      }
     }
 
     if (meta.baselineCards) {

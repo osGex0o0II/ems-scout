@@ -3,169 +3,129 @@ namespace EmsScout.Tests;
 public sealed class GroupSettingsUiContractTests
 {
     [Fact]
-    public void GroupsViewModelUsesReconciliationRepositoryWithoutWatchRuntime()
+    public void CustomGroupsOpenDataManagementWithTheirGroupId()
     {
-        var source = ReadDesktop("ViewModels", "GroupsViewModel.cs");
+        var root = LocateRepositoryRoot();
+        var rowPath = Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "GroupSummaryRow.cs");
+        var source = File.ReadAllText(rowPath);
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "GroupsViewModel.cs"));
 
-        Assert.Contains("IAreaGroupReconciliationRepository", source);
-        Assert.Contains("AreaGroupManagementSnapshot", source);
-        Assert.Contains("PendingAddCount", source);
-        Assert.Contains("PendingRemoveCount", source);
-        Assert.DoesNotContain("IDeviceWatchRepository", source);
-        Assert.DoesNotContain("Watch", source, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("FloorCatalog", source);
+        Assert.Contains("GroupId is not null", source);
+        Assert.Contains("AreaGroupId: SelectedGroup.GroupId", viewModel);
+        Assert.Contains("\"不可编辑\"", source);
     }
 
     [Fact]
-    public void GroupSettingsSupportEditableRulesMembersAndExceptionNotes()
+    public void GroupSettingsExplainsThatGroupsDriveDashboardFilteringAndExport()
     {
-        var source = ReadDesktop("Pages", "AreasPage.xaml");
+        var root = LocateRepositoryRoot();
+        var viewModelPath = Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "GroupsViewModel.cs");
+        var source = File.ReadAllText(viewModelPath);
 
-        Assert.Contains("SaveRuleCommand", source);
-        Assert.Contains("DeleteRule", source);
-        Assert.Contains("AddManualMemberCommand", source);
-        Assert.Contains("DeleteManualMember", source);
-        Assert.Contains("UpdateExceptionNote", source);
-        Assert.Contains("DeleteException", source);
-        Assert.Contains("UpdateMemberNote", source);
-        Assert.Contains("SelectedRule", source);
-        Assert.Contains("EditRuleEnabled", source);
-        Assert.Contains("Header=\"备注\"", source);
-        Assert.Contains("设备名 / 关键字", source);
-        Assert.Contains("设备名精确匹配", source);
+        Assert.Contains("数据管理中筛选并导出", source);
+        Assert.Contains("显示在首页", source);
+        Assert.DoesNotContain("数据管理仅保留基础筛选", source);
     }
 
     [Fact]
-    public void RuleEditorSupportsGlobalNameRulesButKeepsFloorRulesBuildingScoped()
+    public void GroupSettingsKeepsOnlyFloorCatalogAndMemberSelectionSettings()
     {
-        var xaml = ReadDesktop("Pages", "AreasPage.xaml");
-        var viewModel = ReadDesktop("ViewModels", "GroupsViewModel.cs");
+        var root = LocateRepositoryRoot();
+        var xamlPath = Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "AreasPage.xaml");
+        var xaml = File.ReadAllText(xamlPath);
+        var viewModelPath = Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "GroupsViewModel.cs");
+        var source = File.ReadAllText(viewModelPath);
 
-        Assert.Contains("ItemsSource=\"{x:Bind ViewModel.RuleBuildingOptions}\"", xaml);
-        Assert.Contains("DisplayMemberPath=\"Label\"", xaml);
-        Assert.Contains("SelectedValuePath=\"Value\"", xaml);
-        Assert.Contains("SelectedValue=\"{x:Bind ViewModel.RuleBuilding, Mode=TwoWay}\"", xaml);
-        Assert.Contains("new(string.Empty, \"全部楼栋\")", viewModel);
-        Assert.Contains("SelectedRuleType.Value == \"floor\"", viewModel);
-        Assert.Contains("!string.IsNullOrWhiteSpace(RuleBuilding)", viewModel);
-        Assert.Contains("!string.IsNullOrWhiteSpace(RuleFloorLabel)", viewModel);
-        Assert.Contains("SelectedRuleType.Value is \"name_exact\" or \"name_keyword\"", viewModel);
-        Assert.Contains("!string.IsNullOrWhiteSpace(RuleKeyword)", viewModel);
-        Assert.Contains("RuleBuilding = value.Building;", viewModel);
-        Assert.Contains("public partial string RuleBuilding { get; set; } = string.Empty;", viewModel);
-        Assert.Contains("SelectedRuleType.Value,\n                    RuleBuilding,", viewModel);
+        Assert.Contains("楼层候选目录", xaml);
+        Assert.Contains("这里仅维护可选楼层。要关注某个楼层，请在下方添加。", xaml);
+        Assert.Contains("AutomationProperties.Name=\"添加楼层或设备\"", xaml);
+        Assert.Contains("Header=\"更多设置：楼层目录\"", xaml);
+        Assert.DoesNotContain("更多设置：关注设备", xaml);
+        Assert.DoesNotContain("更多设置：系统区域判断", xaml);
+        Assert.DoesNotContain("WatchTimeValidationMessage", xaml);
+        Assert.Contains("TargetTypes", source);
+        Assert.Contains("name_contains", source);
+        Assert.Contains("name_excludes", source);
     }
 
     [Fact]
-    public void PresetsUseOrdinaryEditableGroupActions()
+    public void GroupSettingsKeepsThePrimaryWorkflowFocusedOnUserGroupsAndAddedScopes()
     {
-        var source = ReadDesktop("Pages", "AreasPage.xaml");
-        var viewModel = ReadDesktop("ViewModels", "GroupsViewModel.cs");
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "AreasPage.xaml"));
+        var source = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "GroupsViewModel.cs"));
+        var codeBehind = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "AreasPage.xaml.cs"));
+        var mainWindow = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "MainWindow.xaml"));
+        var home = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "HomePage.xaml"));
 
-        Assert.Contains("AutomationProperties.Name=\"保存分组\"", source);
-        Assert.Contains("AutomationProperties.Name=\"删除分组\"", source);
-        Assert.Contains("new(\"area_public\", \"预设公区分类\")", viewModel);
-        Assert.Contains("new(\"area_non_public\", \"预设非公区分类\")", viewModel);
-        Assert.DoesNotContain("SystemEditorVisibility", source);
-        Assert.DoesNotContain("系统区域不能删除", source);
+        Assert.Contains("Text=\"我的区域组\"", xaml);
+        Assert.Contains("\"已添加的楼层和设备\"", source);
+        Assert.Contains("Text=\"尚未添加楼层或设备\"", xaml);
+        Assert.Contains("Content=\"区域\" Tag=\"groups\"", mainWindow);
+        Assert.Contains("在区域组中添加要关注的楼层或设备", home);
+        Assert.Contains("Header=\"添加方式\"", xaml);
+        Assert.Contains("Header=\"区域组名\"", xaml);
+        Assert.Contains("Header=\"首页显示\"", xaml);
+        Assert.Contains("ViewModel.MemberDraftVisibility", xaml);
+        Assert.Contains("public Visibility MemberDraftVisibility", source);
+        Assert.Contains("SelectionChanged=\"MemberScope_SelectionChanged\"", xaml);
+        Assert.Contains("RefreshTargetOptionsAsync", codeBehind);
+        Assert.Contains("_targetOptionsLoadVersion", source);
+        Assert.Contains("group.GroupKind.Equals(\"custom\"", source);
+        Assert.Contains("group.GroupKind.Equals(\"system\"", source);
+        Assert.Contains("Header=\"名称条件\"", xaml);
+        Assert.DoesNotContain("\"派生筛选\"", source);
+        Assert.DoesNotContain("\"健康规则\"", source);
+        Assert.DoesNotContain("分组设置", mainWindow);
     }
 
     [Fact]
-    public void CurrentDeviceDirectorySupportsFloorRuleOrSingleDeviceButNoSubAreaCreation()
+    public void GroupSettingsRemovesWatchAndRulePanelsFromAreaPage()
     {
-        var source = ReadDesktop("Pages", "AreasPage.xaml");
-        var viewModel = ReadDesktop("ViewModels", "GroupsViewModel.cs");
+        var root = LocateRepositoryRoot();
+        var xamlPath = Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "AreasPage.xaml");
+        var xaml = File.ReadAllText(xamlPath);
 
-        Assert.Contains("现有设备目录", source);
-        Assert.Contains("选择楼层作为持续规则", source);
-        Assert.Contains("将设备直接加入分组", source);
-        Assert.Contains("DeviceDirectorySearchText", source);
-        Assert.DoesNotContain("新增子区", source);
-        Assert.DoesNotContain("\"sub_area\"", viewModel);
+        Assert.DoesNotContain("Watch", xaml);
+        Assert.DoesNotContain("系统区域判断", xaml);
     }
 
     [Fact]
-    public void CurrentDeviceDirectoryReportsCompleteCountOrExplicitFailure()
+    public void WatchIncidentNavigationUsesExactDeviceScope()
     {
-        var viewModel = ReadDesktop("ViewModels", "GroupsViewModel.cs");
+        var root = LocateRepositoryRoot();
+        var navigationPath = Path.Combine(root, "native", "src", "EmsScout.Desktop", "Services", "INavigationService.cs");
+        var navigationSource = File.ReadAllText(navigationPath);
+        var dataViewModelPath = Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs");
+        var dataSource = File.ReadAllText(dataViewModelPath);
+        var groupsViewModelPath = Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "GroupsViewModel.cs");
+        var groupsSource = File.ReadAllText(groupsViewModelPath);
 
-        Assert.Contains("现有设备目录已完整加载", viewModel);
-        Assert.Contains("读取现有设备目录失败", viewModel);
-    }
-
-    [Fact]
-    public void ReloadingDeviceDirectoryFailsClosedBeforeAnOverLimitRepositoryError()
-    {
-        var source = ReadDesktop("ViewModels", "GroupsViewModel.cs");
-        var loadStart = source.IndexOf("private async Task LoadDeviceDirectoryAsync", StringComparison.Ordinal);
-        var loadEnd = source.IndexOf("private bool CanAddManualMember", loadStart, StringComparison.Ordinal);
-        Assert.True(loadStart >= 0 && loadEnd > loadStart, "Cannot locate device-directory loading method.");
-
-        var loadMethod = source[loadStart..loadEnd];
-        var clearPosition = loadMethod.IndexOf("ClearDeviceDirectoryState();", StringComparison.Ordinal);
-        var repositoryPosition = loadMethod.IndexOf(".LoadTargetOptionsAsync(", StringComparison.Ordinal);
-        Assert.True(
-            clearPosition >= 0 && repositoryPosition > clearPosition,
-            "The previous directory must be cleared before a new repository request can fail.");
-        Assert.Contains("}, \"读取现有设备目录失败\")", loadMethod);
-
-        var clearStart = source.IndexOf("private void ClearDeviceDirectoryState()", StringComparison.Ordinal);
-        var clearEnd = source.IndexOf("private void ClearManagementState()", clearStart, StringComparison.Ordinal);
-        Assert.True(clearStart >= 0 && clearEnd > clearStart, "Cannot locate device-directory fail-closed cleanup.");
-
-        var clearMethod = source[clearStart..clearEnd];
-        Assert.Contains("_loadedDeviceDirectory.Clear();", clearMethod);
-        Assert.Contains("DeviceDirectory.Clear();", clearMethod);
-        Assert.Contains("SelectedDevice = null;", clearMethod);
-    }
-
-    [Fact]
-    public void PendingReminderNavigatesToFilteredAudit()
-    {
-        var source = ReadDesktop("Pages", "AreasPage.xaml");
-        var codeBehind = ReadDesktop("Pages", "AreasPage.xaml.cs");
-
-        Assert.Contains("AutomationProperties.Name=\"打开分组审计\"", source);
-        Assert.Contains("OpenAudit", source);
-        Assert.Contains("NavigateToAudit", codeBehind);
-    }
-
-    [Fact]
-    public void DestructiveAreaActionsRequireConfirmationAndExposeStableAutomationNames()
-    {
-        var source = ReadDesktop("Pages", "AreasPage.xaml");
-        var codeBehind = ReadDesktop("Pages", "AreasPage.xaml.cs");
-        var audit = ReadDesktop("Pages", "AuditPage.xaml");
-
-        Assert.Contains("ConfirmDestructiveActionAsync", codeBehind);
-        Assert.Contains("DeleteGroup_Click", codeBehind);
-        Assert.Contains("AutomationProperties.Name=\"删除持续规则\"", source);
-        Assert.Contains("AutomationProperties.Name=\"移除或屏蔽正式成员\"", source);
-        Assert.Contains("AutomationProperties.Name=\"撤销分组例外\"", source);
-        Assert.Contains("AutomationProperties.Name=\"确认加入正式成员\"", audit);
-        Assert.Contains("AutomationProperties.Name=\"拒绝加入并长期屏蔽\"", audit);
-        Assert.Contains("AutomationProperties.Name=\"确认移除正式成员\"", audit);
-        Assert.Contains("AutomationProperties.Name=\"拒绝移除并手动保留\"", audit);
-    }
-
-    private static string ReadDesktop(params string[] pathParts)
-    {
-        var path = new[] { LocateRepositoryRoot(), "native", "src", "EmsScout.Desktop" }
-            .Concat(pathParts)
-            .ToArray();
-        return File.ReadAllText(Path.Combine(path)).ReplaceLineEndings("\n");
+        Assert.Contains("string Floor = \"\"", navigationSource);
+        Assert.Contains("string SubArea = \"\"", navigationSource);
+        Assert.Contains("string PageName = \"\"", navigationSource);
+        Assert.Contains("SelectedFloor = SelectOption(FloorOptions, request.Floor)", dataSource);
+        Assert.DoesNotContain("SelectedSubArea = SelectOption(SubAreaOptions, request.SubArea)", dataSource);
+        Assert.Contains("SelectedPageName = SelectOption(PageNameOptions, request.PageName)", dataSource);
+        Assert.Contains("Floor: incident.Device.FloorLabel", groupsSource);
+        Assert.Contains("SubArea: incident.Device.SubArea", groupsSource);
+        Assert.Contains("PageName: incident.Device.PageName", groupsSource);
     }
 
     private static string LocateRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null &&
-               !(File.Exists(Path.Combine(directory.FullName, "package.json")) &&
-                 Directory.Exists(Path.Combine(directory.FullName, "native"))))
+        while (directory is not null)
         {
+            if (File.Exists(Path.Combine(directory.FullName, "package.json")) &&
+                Directory.Exists(Path.Combine(directory.FullName, "native")))
+            {
+                return directory.FullName;
+            }
+
             directory = directory.Parent;
         }
 
-        return directory?.FullName ?? throw new DirectoryNotFoundException("Repository root not found.");
+        throw new DirectoryNotFoundException("Cannot locate repository root.");
     }
 }

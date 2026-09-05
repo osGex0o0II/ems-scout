@@ -39,7 +39,8 @@ public sealed record CollectionRunRecord(
     int UnknownCount,
     string QualitySummary,
     bool IsAnomaly,
-    string Note)
+    string Note,
+    int SnapshotCardCount = 0)
 {
     public string ScopeLabel => Scope.Equals("partial", StringComparison.OrdinalIgnoreCase)
         ? string.Join("、", Buildings)

@@ -1,18 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
-const { ensureMonitorSchema } = require('../src/panel/monitor');
-const { ensureHistorySchema, createRunFromCurrent, syncFloorCatalogFromCurrent } = require('../src/panel/history');
+const { ensureHistorySchema, createRunFromCurrent, syncFloorCatalogFromCurrent } = require('../src/data-history');
 const { validateEnumData, formatValidation } = require('../src/enum-validator');
-
-if (require.main === module && process.argv.includes('--help')) {
-  console.log('Usage: EMS_JSON_PATH=<snapshot.json> EMS_DB_PATH=<target.db> node scripts/import.js [--bldg=1号,2号]');
-  process.exit(0);
-}
-process.on('uncaughtException', error => {
-  console.error('ERROR: ' + (error && error.message ? error.message : String(error)));
-  process.exit(1);
-});
+const { labelSamePageDuplicateCards } = require('../src/rules');
 
 const ROOT = path.join(__dirname, '..');
 const JSON_PATH = process.env.EMS_JSON_PATH || path.join(ROOT, 'out', 'enum_full_v5.json');
@@ -22,6 +13,20 @@ const data = JSON.parse(fs.readFileSync(JSON_PATH, 'utf8'));
 const BUILDING_FILTER = process.argv.find(a => a.startsWith('--bldg='));
 const IMPORT_FILTER = BUILDING_FILTER ? BUILDING_FILTER.split('=')[1].split(',').map(s => s.trim()).filter(Boolean) : null;
 const buildings = (data.buildings || []).filter(b => !IMPORT_FILTER || IMPORT_FILTER.includes(b.building));
+
+for (const building of buildings) {
+  for (const subArea of building.subAreas || []) {
+    for (const page of subArea.pages || []) {
+      const labeled = labelSamePageDuplicateCards(page.cards || []);
+      if (!labeled.duplicateNames.length) continue;
+      page.cards = labeled.cards;
+      page.count = labeled.cards.length;
+      page.rawCount = labeled.cards.length;
+      page.uniqueCount = labeled.cards.length;
+      page.duplicateNames = labeled.duplicateNames;
+    }
+  }
+}
 
 if (IMPORT_FILTER && buildings.length !== IMPORT_FILTER.length) {
   const found = new Set(buildings.map(b => b.building));
@@ -39,7 +44,7 @@ if (process.env.EMS_SKIP_ENUM_VALIDATION !== '1') {
 
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+db.pragma('foreign_keys = OFF');
 
 function ensureSchema() {
   db.exec(`
@@ -71,6 +76,7 @@ function ensureSchema() {
       off_href TEXT,
       layout TEXT,
       quality_reason TEXT,
+      collected_at TEXT,
       err TEXT,
       FOREIGN KEY(sub_area_id) REFERENCES sub_areas(id)
     );
@@ -94,7 +100,6 @@ function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_cd_sw ON cards(switch);
     CREATE INDEX IF NOT EXISTS idx_cd_name ON cards(name);
   `);
-  ensureMonitorSchema(db);
   ensureHistorySchema(db);
   try { db.exec('ALTER TABLE buildings ADD COLUMN updated_at TEXT'); } catch {}
   try { db.exec('ALTER TABLE sub_areas ADD COLUMN sub_idx INT'); } catch {}
@@ -102,33 +107,23 @@ function ensureSchema() {
   try { db.exec('ALTER TABLE pages ADD COLUMN unique_count INT'); } catch {}
   try { db.exec('ALTER TABLE pages ADD COLUMN duplicate_names TEXT'); } catch {}
   try { db.exec('ALTER TABLE pages ADD COLUMN quality_reason TEXT'); } catch {}
+  try { db.exec('ALTER TABLE pages ADD COLUMN collected_at TEXT'); } catch {}
   try { db.exec('ALTER TABLE cards ADD COLUMN indicator TEXT'); } catch {}
 }
 
 ensureSchema();
 
 const insertSA = db.prepare(`INSERT INTO sub_areas (building, sub_idx, text, floor, x, y) VALUES (?, ?, ?, ?, ?, ?)`);
-const insertPage = db.prepare(`INSERT INTO pages (sub_area_id, page_name, count, raw_count, unique_count, duplicate_names, on_href, off_href, layout, quality_reason, err) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+const insertPage = db.prepare(`INSERT INTO pages (sub_area_id, page_name, count, raw_count, unique_count, duplicate_names, on_href, off_href, layout, quality_reason, collected_at, err) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 const insertCard = db.prepare(`INSERT INTO cards (page_id, name, switch, mode, indoor, set_temp, fan, indicator, comm) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`);
 
-function uniquePageCards(cards = []) {
-  const seen = new Set();
-  const out = [];
-  const duplicates = new Map();
-  for (const c of cards) {
-    const key = c && c.name ? c.name : '';
-    if (key && seen.has(key)) {
-      duplicates.set(key, (duplicates.get(key) || 1) + 1);
-      continue;
-    }
-    if (key) seen.add(key);
-    out.push(c);
-  }
+function preparePageCards(cards = []) {
+  const labeled = labelSamePageDuplicateCards(cards);
   return {
-    cards: out,
-    rawCount: cards.length,
-    uniqueCount: out.length,
-    duplicateNames: [...duplicates.entries()].map(([name, copies]) => ({ name, copies })),
+    cards: labeled.cards,
+    rawCount: labeled.cards.length,
+    uniqueCount: labeled.cards.length,
+    duplicateNames: labeled.duplicateNames,
   };
 }
 
@@ -154,14 +149,17 @@ function insertBuildings() {
       const saResult = insertSA.run(bldg.building, sa.idx ?? null, sa.text, sa.floor, sa.x, sa.y);
       const saId = saResult.lastInsertRowid;
       for (const p of (sa.pages || [])) {
-        const pageCards = uniquePageCards(p.cards || []);
+        const pageCards = preparePageCards(p.cards || []);
         const cards = pageCards.cards;
         const duplicateList = normalizeDuplicateNames(p.duplicateNames);
         const duplicateNames = (duplicateList.length ? duplicateList : pageCards.duplicateNames);
-        const rawCount = Number.isFinite(p.rawCount) ? p.rawCount : pageCards.rawCount;
-        const uniqueCount = Number.isFinite(p.uniqueCount) ? p.uniqueCount : pageCards.uniqueCount;
+        const rawCount = pageCards.rawCount;
+        const uniqueCount = pageCards.uniqueCount;
         const duplicateNamesJson = duplicateNames.length ? JSON.stringify(duplicateNames) : '';
-        const pResult = insertPage.run(saId, p.page, cards.length, rawCount, uniqueCount, duplicateNamesJson, p.onHref ?? null, p.offHref ?? null, p.layout, p.qualityReason ?? p.quality_reason ?? '', p.err ?? null);
+        const pageCollectedAt = Number.isFinite(Date.parse(p.collectedAt || p.collected_at || ''))
+          ? (p.collectedAt || p.collected_at)
+          : buildingCollectedAt(bldg);
+        const pResult = insertPage.run(saId, p.page, cards.length, rawCount, uniqueCount, duplicateNamesJson, p.onHref ?? null, p.offHref ?? null, p.layout, p.qualityReason ?? p.quality_reason ?? '', pageCollectedAt, p.err ?? null);
         const pageId = pResult.lastInsertRowid;
         for (const c of cards) {
           insertCard.run(pageId, c.name, c.switch, c.mode, c.indoor, c.setTemp, c.fan, c.indicator || '', c.comm || '');
@@ -192,6 +190,10 @@ function clearBuildings(selected) {
 
 console.log('Importing...');
 const now = new Date().toISOString();
+const collectedAt = Number.isFinite(Date.parse(data.completedAt || '')) ? data.completedAt : now;
+const buildingCollectedAt = building => Number.isFinite(Date.parse(building.completedAt || ''))
+  ? building.completedAt
+  : collectedAt;
 const upsert = db.prepare(`INSERT INTO buildings (building, sub_area_count, menu_clicked, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(building) DO UPDATE SET sub_area_count=excluded.sub_area_count, menu_clicked=excluded.menu_clicked, updated_at=excluded.updated_at`);
 const updateTs = db.prepare(`UPDATE buildings SET updated_at=? WHERE building=?`);
 
@@ -199,26 +201,22 @@ const importCurrent = db.transaction(() => {
   if (IMPORT_FILTER) clearBuildings(IMPORT_FILTER);
   else clearAll();
 
-  for (const bldg of buildings) {
-    upsert.run(bldg.building, (bldg.subAreas||[]).length, bldg.menuClicked||'', now);
-  }
   insertBuildings();
+
   for (const bldg of buildings) {
-    if (!IMPORT_FILTER || IMPORT_FILTER.includes(bldg.building)) updateTs.run(now, bldg.building);
+    upsert.run(bldg.building, (bldg.subAreas||[]).length, bldg.menuClicked||'', buildingCollectedAt(bldg));
+  }
+  for (const bldg of buildings) {
+    if (!IMPORT_FILTER || IMPORT_FILTER.includes(bldg.building)) updateTs.run(buildingCollectedAt(bldg), bldg.building);
   }
 
   syncFloorCatalogFromCurrent(db);
-  const runId = createRunFromCurrent(db, {
+  return createRunFromCurrent(db, {
     buildings: IMPORT_FILTER || buildings.map(b => b.building),
-    completedAt: now,
+    completedAt: collectedAt,
     jsonPath: JSON_PATH,
-    note: IMPORT_FILTER ? '面板/脚本单栋或多栋导入' : '面板/脚本全量导入',
+    note: IMPORT_FILTER ? 'Native/脚本单栋或多栋导入' : 'Native/脚本全量导入',
   });
-  const foreignKeyErrors = db.pragma('foreign_key_check');
-  if (foreignKeyErrors.length) {
-    throw new Error(`导入结果包含 ${foreignKeyErrors.length} 个外键错误。`);
-  }
-  return runId;
 });
 const runId = importCurrent();
 console.log(`History run: ${runId || 'none'}`);

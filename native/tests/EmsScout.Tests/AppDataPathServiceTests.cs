@@ -20,7 +20,7 @@ public sealed class AppDataPathServiceTests
         var paths = new AppDataPathService(workspaceRoot, service);
 
         Assert.Equal(Path.Combine(workspaceRoot, "runtime-data"), paths.DataDirectory);
-        Assert.Equal(Path.Combine(workspaceRoot, "runtime-data", "collection_snapshot_v1.json"), paths.CollectionSnapshotPath);
+        Assert.Equal(Path.Combine(workspaceRoot, "runtime-data", "enum_full_v5.json"), paths.EnumJsonPath);
         Assert.Equal(Path.Combine(workspaceRoot, "runtime-data", "ac.db"), paths.DatabasePath);
         Assert.Equal(Path.Combine(workspaceRoot, "runtime-export"), paths.ExportDirectory);
 
@@ -43,7 +43,6 @@ public sealed class AppDataPathServiceTests
         Assert.True(Directory.Exists(dataDirectory));
         Assert.Equal(dataDirectory, environment["EMS_OUT_DIR"]);
         Assert.Equal(Path.Combine(dataDirectory, "enum_full_v5.json"), environment["EMS_JSON_PATH"]);
-        Assert.Equal(Path.Combine(dataDirectory, "collection_snapshot_v1.json"), environment["EMS_SNAPSHOT_PATH"]);
         Assert.Equal(Path.Combine(dataDirectory, "ac.db"), environment["EMS_DB_PATH"]);
         Assert.Equal(dataDirectory, environment["EMS_QUALITY_OUT"]);
 
@@ -51,61 +50,24 @@ public sealed class AppDataPathServiceTests
     }
 
     [Fact]
-    public void CapturedPathsRemainInternallyConsistentAfterSettingsSwitch()
+    public void RejectsRelativeTraversalOutsideWorkspace()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), "ems-scout-path-tests", Guid.NewGuid().ToString("N"));
-        var settings = new AppSettingsService(Path.Combine(tempDir, "settings.json"));
-        settings.Save(new AppSettings { DataDirectory = "data-a", ExportDirectory = "export-a" });
-        var paths = new AppDataPathService(Path.Combine(tempDir, "workspace"), settings);
-        var captured = paths.Capture();
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-path-tests", Guid.NewGuid().ToString("N"));
+        var service = new AppDataPathService(root, new AppSettingsService(Path.Combine(root, "settings.json")));
 
-        settings.Save(new AppSettings { DataDirectory = "data-b", ExportDirectory = "export-b" });
-        var environment = captured.BuildDataEnvironment();
-
-        Assert.EndsWith(Path.Combine("workspace", "data-a"), captured.DataDirectory, StringComparison.Ordinal);
-        Assert.Equal(Path.Combine(captured.DataDirectory, "ac.db"), captured.DatabasePath);
-        Assert.Equal(Path.Combine(captured.DataDirectory, "collection_snapshot_v1.json"), captured.CollectionSnapshotPath);
-        Assert.All(environment.Values, value =>
-            Assert.StartsWith(captured.DataDirectory, value, StringComparison.Ordinal));
-        Assert.EndsWith(Path.Combine("workspace", "data-b"), paths.Capture().DataDirectory, StringComparison.Ordinal);
-
-        Directory.Delete(tempDir, recursive: true);
+        Assert.Throws<InvalidOperationException>(() => service.ResolveWorkspacePath(".." + Path.DirectorySeparatorChar + "outside"));
     }
 
     [Fact]
-    public async Task ConcurrentSettingsSwitchNeverProducesMixedPathSnapshot()
+    public void RejectsExistingFileAsDirectory()
     {
-        var tempDir = Path.Combine(Path.GetTempPath(), "ems-scout-path-tests", Guid.NewGuid().ToString("N"));
-        var settings = new AppSettingsService(Path.Combine(tempDir, "settings.json"));
-        settings.Save(new AppSettings { DataDirectory = "data-a", ExportDirectory = "export-a" });
-        var paths = new AppDataPathService(Path.Combine(tempDir, "workspace"), settings);
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-path-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var file = Path.Combine(root, "not-a-directory");
+        File.WriteAllText(file, "x");
+        var service = new AppDataPathService(root, new AppSettingsService(Path.Combine(root, "settings.json")));
 
-        var writer = Task.Run(() =>
-        {
-            for (var index = 0; index < 100; index++)
-            {
-                var suffix = index % 2 == 0 ? "a" : "b";
-                settings.Save(new AppSettings
-                {
-                    DataDirectory = "data-" + suffix,
-                    ExportDirectory = "export-" + suffix,
-                });
-            }
-        });
-        var reader = Task.Run(() =>
-        {
-            for (var index = 0; index < 300; index++)
-            {
-                var snapshot = paths.Capture();
-                var dataSuffix = Path.GetFileName(snapshot.DataDirectory)[^1];
-                var exportSuffix = Path.GetFileName(snapshot.ExportDirectory)[^1];
-                Assert.Equal(dataSuffix, exportSuffix);
-                Assert.Equal(Path.Combine(snapshot.DataDirectory, "ac.db"), snapshot.DatabasePath);
-            }
-        });
-
-        await Task.WhenAll(writer, reader);
-        Assert.Empty(Directory.EnumerateFiles(tempDir, "*.tmp", SearchOption.AllDirectories));
-        Directory.Delete(tempDir, recursive: true);
+        Assert.Throws<InvalidOperationException>(() => service.ResolveWorkspacePath(file));
+        Directory.Delete(root, recursive: true);
     }
 }

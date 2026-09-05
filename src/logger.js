@@ -31,7 +31,13 @@ function ts() { return new Date().toISOString().substring(11, 19); }
 function tsFull() { return new Date().toISOString(); }
 
 function setLevel(level) {
-  const l = level.toUpperCase();
+  if (typeof level === 'number') {
+    // 兼容数值级别（LEVELS.DEBUG = 3），找到对应名称
+    const name = Object.keys(LEVELS).find(k => LEVELS[k] === level);
+    if (name) minLevel = LEVELS[name];
+    return;
+  }
+  const l = String(level || '').toUpperCase();
   if (l in LEVELS) minLevel = LEVELS[l];
 }
 
@@ -87,7 +93,10 @@ function log(level, category, msg, extra) {
 
   // File: NDJSON
   if (logFileStream) {
-    const entry = Object.assign({ ts: tsFull(), level: l, cat: c, msg }, extra);
+    const entry = { ts: tsFull(), level: l, cat: c, msg };
+    if (extra && typeof extra === 'object' && !Array.isArray(extra)) {
+      Object.assign(entry, extra);
+    }
     logFileStream.write(JSON.stringify(entry) + '\n');
   }
 }

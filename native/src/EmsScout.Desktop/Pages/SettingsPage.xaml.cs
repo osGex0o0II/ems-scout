@@ -44,24 +44,6 @@ public sealed partial class SettingsPage : Page
         }
     }
 
-    private async void PickExportDirectory_Click(object sender, RoutedEventArgs e)
-    {
-        var path = await PickFolderAsync();
-        if (!string.IsNullOrWhiteSpace(path))
-        {
-            ViewModel.ExportDirectory = path;
-        }
-    }
-
-    private async void MigrateLegacyOut_Click(object sender, RoutedEventArgs e)
-    {
-        var path = await PickFolderAsync();
-        if (!string.IsNullOrWhiteSpace(path))
-        {
-            await ViewModel.MigrateLegacyOutAsync(path);
-        }
-    }
-
     private async Task<string?> PickFolderAsync()
     {
         var picker = new FolderPicker

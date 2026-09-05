@@ -1,7 +1,12 @@
 using System.Collections.Specialized;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Data;
+using Microsoft.UI.Xaml.Media;
+using Windows.ApplicationModel.DataTransfer;
+using Windows.UI;
 using EmsScout.Desktop.ViewModels;
 
 namespace EmsScout.Desktop.Pages;
@@ -9,21 +14,33 @@ namespace EmsScout.Desktop.Pages;
 public sealed partial class TasksPage : Page
 {
     public CollectionTaskViewModel ViewModel { get; }
+    private bool _loaded;
+    private bool _logsSubscribed;
 
     public TasksPage()
     {
         ViewModel = App.Services.GetRequiredService<CollectionTaskViewModel>();
         InitializeComponent();
-        ViewModel.Logs.CollectionChanged += Logs_CollectionChanged;
+        AttachLogs();
     }
 
     private async void Page_Loaded(object sender, RoutedEventArgs e)
     {
-        await ViewModel.InitializeAsync();
-        if (ViewModel.CheckEnvironmentCommand.CanExecute(null))
+        AttachLogs();
+        if (!_loaded)
         {
-            await ViewModel.CheckEnvironmentCommand.ExecuteAsync(null);
+            await ViewModel.InitializeAsync();
+            if (ViewModel.CheckEnvironmentCommand.CanExecute(null))
+            {
+                await ViewModel.CheckEnvironmentCommand.ExecuteAsync(null);
+            }
+            _loaded = true;
         }
+    }
+
+    private void Page_Unloaded(object sender, RoutedEventArgs e)
+    {
+        DetachLogs();
     }
 
     private void Page_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -67,12 +84,11 @@ public sealed partial class TasksPage : Page
             .Where(building => building.IsSelected)
             .Select(building => building.Value)
             .ToList();
-        var mode = ViewModel.SelectedTaskMode?.Label ?? "采集任务";
         var dialog = new ContentDialog
         {
             XamlRoot = XamlRoot,
             Title = "开始采集",
-            Content = $"任务：{mode}\n范围：{string.Join("、", buildings)}\n\n{ViewModel.CurrentDataImpactText}\n采集期间请保持采集浏览器和 EMS 页面开启。",
+            Content = $"范围：{string.Join("、", buildings)}\n\n{ViewModel.CurrentDataImpactText}\n采集期间请保持采集浏览器和 EMS 页面开启。",
             PrimaryButtonText = "开始",
             CloseButtonText = "取消",
             DefaultButton = ContentDialogButton.Primary,
@@ -109,12 +125,54 @@ public sealed partial class TasksPage : Page
 
     private void Logs_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
     {
-        if (e.Action is not NotifyCollectionChangedAction.Add || ViewModel.Logs.Count == 0)
+        if (e.Action is not NotifyCollectionChangedAction.Add || ViewModel.FilteredLogs.Count == 0)
         {
             return;
         }
 
-        LogsList.ScrollIntoView(ViewModel.Logs[^1]);
+        LogsList.ScrollIntoView(ViewModel.FilteredLogs[^1]);
+    }
+
+    private void AttachLogs()
+    {
+        if (_logsSubscribed)
+        {
+            return;
+        }
+
+        ViewModel.FilteredLogs.CollectionChanged += Logs_CollectionChanged;
+        _logsSubscribed = true;
+    }
+
+    private void DetachLogs()
+    {
+        if (!_logsSubscribed)
+        {
+            return;
+        }
+
+        ViewModel.FilteredLogs.CollectionChanged -= Logs_CollectionChanged;
+        _logsSubscribed = false;
+    }
+
+    private void CopyLogs_Click(object sender, RoutedEventArgs e)
+    {
+        if (ViewModel.FilteredLogs.Count == 0)
+        {
+            return;
+        }
+
+        var text = string.Join(
+            Environment.NewLine,
+            ViewModel.FilteredLogs.Select(log => $"[{log.Time}] [{log.Severity}] {log.Message}"));
+        var package = new DataPackage();
+        package.SetText(text);
+        Clipboard.SetContent(package);
+    }
+
+    private void ClearLogs_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.ClearLogs();
     }
 
     private async void DeleteRun_Click(object sender, RoutedEventArgs e)
@@ -141,4 +199,49 @@ public sealed partial class TasksPage : Page
             await ViewModel.DeleteRunAsync();
         }
     }
+
+    private void PreflightDetails_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.PreflightExpanded = !ViewModel.PreflightExpanded;
+    }
+
+    public static bool IsNotNullOrEmpty(string? value) => !string.IsNullOrWhiteSpace(value);
+
+    public static Visibility BoolToVisibility(bool value) => value ? Visibility.Visible : Visibility.Collapsed;
+
+    public static Visibility InverseBoolToVisibility(bool value) => value ? Visibility.Collapsed : Visibility.Visible;
+
+    public static Visibility NotNullOrWhiteSpaceToVisibility(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? Visibility.Collapsed : Visibility.Visible;
+}
+
+public sealed class LogSeverityBrushConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language)
+    {
+        var key = value?.ToString() switch
+        {
+            "ERROR" => "SystemFillColorCriticalBrush",
+            "WARN" => "SystemFillColorCautionBrush",
+            _ => "TextFillColorSecondaryBrush",
+        };
+
+        return Microsoft.UI.Xaml.Application.Current.Resources.TryGetValue(key, out var resource) && resource is Brush brush
+            ? brush
+            : new SolidColorBrush(Color.FromArgb(255, 128, 128, 128));
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
+}
+
+public sealed class LogSeverityGlyphConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, string language) => value?.ToString() switch
+    {
+        "ERROR" => "\uE783",
+        "WARN" => "\uE7BA",
+        _ => "\uE946",
+    };
+
+    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
 }

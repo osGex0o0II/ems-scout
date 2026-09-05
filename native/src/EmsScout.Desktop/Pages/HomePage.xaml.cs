@@ -1,7 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using EmsScout.Desktop.Services;
 using EmsScout.Desktop.ViewModels;
 
 namespace EmsScout.Desktop.Pages;
@@ -24,14 +23,19 @@ public sealed partial class HomePage : Page
 
     private async void Refresh_Click(object sender, RoutedEventArgs e)
     {
-        await ViewModel.LoadAsync();
+        await ViewModel.RefreshLatestAsync();
     }
 
-    private void DataContext_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void LatestBatch_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is ComboBox comboBox && comboBox.SelectedItem is DataContextOption option)
+        await ViewModel.UseLatestDataSourceAsync();
+    }
+
+    private async void DataSource_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ComboBox comboBox && comboBox.SelectedItem is DataSourceOption option)
         {
-            ViewModel.DataContext.Select(option);
+            await ViewModel.SelectDataSourceAsync(option);
         }
     }
 
@@ -45,62 +49,34 @@ public sealed partial class HomePage : Page
         ViewModel.OpenBuilding(e.ClickedItem as BuildingSummaryRow);
     }
 
-    private void LocateAttention_Click(object sender, RoutedEventArgs e)
+    private void Risks_ItemClick(object sender, ItemClickEventArgs e)
     {
-        if (sender is Button { DataContext: DashboardRiskRow row })
-        {
-            ViewModel.OpenRisk(row);
-        }
+        ViewModel.OpenRisk(e.ClickedItem as DashboardRiskRow);
     }
 
-    private async void AcknowledgeAttention_Click(object sender, RoutedEventArgs e)
+    private void AreaGroups_ItemClick(object sender, ItemClickEventArgs e)
     {
-        if (sender is Button { DataContext: DashboardRiskRow row })
-        {
-            await ViewModel.AcknowledgeAttentionAsync(row);
-        }
+        ViewModel.OpenAreaGroup(e.ClickedItem as DashboardAreaGroupRow);
     }
 
-    private async void IgnoreAttention_Click(object sender, RoutedEventArgs e)
+    private void OpenAreaGroups_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is not Button { DataContext: DashboardRiskRow row })
-        {
-            return;
-        }
-
-        var reasonBox = new TextBox
-        {
-            Header = "忽略原因",
-            PlaceholderText = "说明为什么当前无需处理",
-            AcceptsReturn = true,
-            TextWrapping = TextWrapping.Wrap,
-            MinWidth = 360,
-        };
-        var dialog = new ContentDialog
-        {
-            XamlRoot = XamlRoot,
-            Title = "忽略待处理事项",
-            Content = reasonBox,
-            PrimaryButtonText = "忽略",
-            CloseButtonText = "取消",
-            DefaultButton = ContentDialogButton.Close,
-            IsPrimaryButtonEnabled = false,
-        };
-        reasonBox.TextChanged += (_, _) =>
-            dialog.IsPrimaryButtonEnabled = !string.IsNullOrWhiteSpace(reasonBox.Text);
-
-        if (await dialog.ShowAsync() == ContentDialogResult.Primary &&
-            !string.IsNullOrWhiteSpace(reasonBox.Text))
-        {
-            await ViewModel.IgnoreAttentionAsync(row, reasonBox.Text);
-        }
+        ViewModel.OpenAreaGroups();
     }
 
-    private async void ReopenAttention_Click(object sender, RoutedEventArgs e)
+    private void Page_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        if (sender is Button { DataContext: DashboardRiskRow row })
-        {
-            await ViewModel.ReopenAttentionAsync(row);
-        }
+        var compactGroups = e.NewSize.Width < 1050;
+        WideAreaGroupList.Visibility = compactGroups ? Visibility.Collapsed : Visibility.Visible;
+        CompactAreaGroupList.Visibility = compactGroups ? Visibility.Visible : Visibility.Collapsed;
+
+        var splitWorkspace = e.NewSize.Width >= 1600;
+        SecondaryWorkspaceColumn.Width = splitWorkspace
+            ? new GridLength(0.78, GridUnitType.Star)
+            : new GridLength(0);
+        Grid.SetColumn(RiskPanel, splitWorkspace ? 1 : 0);
+        Grid.SetRow(RiskPanel, splitWorkspace ? 0 : 1);
+        PrimaryWorkspace.ColumnSpacing = splitWorkspace ? 14 : 0;
+        PrimaryWorkspace.RowSpacing = splitWorkspace ? 0 : 14;
     }
 }

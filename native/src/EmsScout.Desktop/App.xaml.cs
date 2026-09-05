@@ -1,29 +1,19 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
-using Microsoft.Windows.AppLifecycle;
-using Windows.ApplicationModel.Activation;
 using EmsScout.Application.Collection;
 using EmsScout.Application;
-using EmsScout.Application.Attention;
 using EmsScout.Application.Devices;
 using EmsScout.Application.Groups;
-using EmsScout.Application.Logging;
 using EmsScout.Application.Quality;
 using EmsScout.Application.Settings;
-using EmsScout.Application.Updates;
-using EmsScout.Application.Workflows;
+using EmsScout.Application.Watch;
 using EmsScout.Desktop.Services;
 using EmsScout.Desktop.ViewModels;
 using EmsScout.Domain;
-using EmsScout.Infrastructure.Importing;
-using EmsScout.Infrastructure.Errors;
-using EmsScout.Infrastructure.Logging;
-using EmsScout.Infrastructure.Migrations;
 using EmsScout.Infrastructure.Quality;
+using EmsScout.Infrastructure.Importing;
 using EmsScout.Infrastructure.Realtime;
-using EmsScout.Infrastructure.Sidecar;
 using EmsScout.Infrastructure.Sqlite;
-using EmsScout.Infrastructure.Storage;
 
 namespace EmsScout.Desktop;
 
@@ -36,79 +26,37 @@ public partial class App : Microsoft.UI.Xaml.Application
     public App()
     {
         InitializeComponent();
+        Services = ConfigureServices();
     }
 
-    protected override async void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
+    protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args)
     {
-        var appActivationArguments = AppInstance.GetCurrent().GetActivatedEventArgs();
-        var desktopLaunchArguments = appActivationArguments.Data is ILaunchActivatedEventArgs launchArguments
-            ? launchArguments.Arguments
-            : args.Arguments;
-        var launchOptions = AppLaunchOptions.Parse(desktopLaunchArguments);
-        Services = ConfigureServices(launchOptions);
-
-        string? startupFailure = null;
-        try
-        {
-            await Services.GetRequiredService<StartupDatabaseInitializer>()
-                .InitializeAsync()
-                .ConfigureAwait(true);
-        }
-        catch (Exception ex)
-        {
-            startupFailure = ApplicationFailureClassifier.Classify(ex).DisplayText;
-        }
-
-        _window = new MainWindow(startupFailure);
-        _window.Closed += (_, _) =>
-        {
-            if (Services is IDisposable disposable) disposable.Dispose();
-        };
+        _window = new MainWindow();
         _window.Activate();
     }
 
-    private static IServiceProvider ConfigureServices(AppLaunchOptions launchOptions)
+    private static IServiceProvider ConfigureServices()
     {
         var workspaceRoot = WorkspaceLocator.LocateRepositoryRoot();
 
         var services = new ServiceCollection();
         services.AddSingleton(new InventorySummarizer());
-        services.AddSingleton<IApplicationLogger>(provider => new NdjsonApplicationLogger(
-            Path.Combine(AppStorageDefaults.ProductDirectory, "logs"),
-            enabled: () => provider.GetRequiredService<AppSettingsService>().Load().SaveNdjsonLog));
-        services.AddSingleton(launchOptions.SettingsPathOverride is null
-            ? new AppSettingsService()
-            : new AppSettingsService(launchOptions.SettingsPathOverride));
+        services.AddSingleton<AppSettingsService>();
         services.AddSingleton(provider => new AppDataPathService(
             workspaceRoot,
             provider.GetRequiredService<AppSettingsService>()));
-        services.AddSingleton<LegacyOutMigrationService>();
-        services.AddSingleton<SqliteSchemaMigrator>();
-        services.AddSingleton<StartupDatabaseInitializer>();
-        services.AddSingleton<ApplicationOperationState>();
-        services.AddSingleton<IAppVersionProvider, PackageAppVersionProvider>();
-        services.AddSingleton<IAppUpdateLauncher, WindowsAppUpdateLauncher>();
-        services.AddSingleton(new AppUpdateOptions(
-            new Uri("https://github.com/osGex0o0II/ems-scout/releases/latest/download/EmsScout.appinstaller"),
-            "1FACE092-146B-4AE5-83DB-3990E6AE8371",
-            "CN=EMS Scout",
-            ["github.com"]));
-        services.AddSingleton(new HttpClient
-        {
-            Timeout = TimeSpan.FromSeconds(10),
-        });
-        services.AddSingleton<AppUpdateService>();
         services.AddSingleton<AppUiSettingsService>();
-        services.AddSingleton<IInventorySnapshotSource>(provider => new SqliteInventorySnapshotSource(
-            () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
-        services.AddSingleton<IRecaptureLocationSource>(provider => new SqliteRecaptureLocationSource(
-            () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
+        services.AddSingleton<IInventorySnapshotSource>(provider => new EnumFullV5SnapshotSource(
+            () => provider.GetRequiredService<AppDataPathService>().EnumJsonPath));
         services.AddSingleton<IRealtimeDetailSource>(provider => new RealtimeLatestJsonSource(
             workspaceRoot,
             () => provider.GetRequiredService<AppDataPathService>().DataDirectory));
+        services.AddSingleton<IDeviceWatchRepository>(provider => new SqliteDeviceWatchRepository(
+            () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
         services.AddSingleton<IDeviceReadRepository>(provider => new SqliteDeviceReadRepository(
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath,
-            provider.GetRequiredService<IRealtimeDetailSource>()));
+            provider.GetRequiredService<IRealtimeDetailSource>(),
+            provider.GetRequiredService<IDeviceWatchRepository>()));
         services.AddSingleton<IDeviceExportService>(provider => new SqliteDeviceExportService(
             provider.GetRequiredService<IDeviceReadRepository>()));
         services.AddSingleton<IDeviceAnnotationService>(provider => new SqliteDeviceAnnotationService(
@@ -116,37 +64,24 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<IRealtimeReconciliationService>(provider => new SqliteRealtimeReconciliationService(
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath,
             provider.GetRequiredService<IRealtimeDetailSource>()));
-        services.AddSingleton<CollectionSnapshotReader>();
-        services.AddSingleton(provider => new CollectionSnapshotImporter(
-            provider.GetRequiredService<CollectionSnapshotReader>()));
-        services.AddSingleton(provider => new SqliteQualityAuditService(
-            () => provider.GetRequiredService<AppDataPathService>().DatabasePath,
-            () => Path.Combine(AppContext.BaseDirectory, "Config", "quality-known-findings.json")));
-        services.AddSingleton<INativeQualityAuditService>(provider =>
-            provider.GetRequiredService<SqliteQualityAuditService>());
-        services.AddSingleton<IQualityAuditService>(provider =>
-            provider.GetRequiredService<SqliteQualityAuditService>());
+        services.AddSingleton<IQualityAuditService>(provider => new JsonQualityAuditService(
+            () => provider.GetRequiredService<AppDataPathService>().QualityOutputDirectory,
+            () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
         services.AddSingleton<IRealtimeQualityAuditService>(provider => new JsonRealtimeQualityAuditService(
             () => provider.GetRequiredService<AppDataPathService>().QualityOutputDirectory));
         services.AddSingleton<ICollectionRunRepository>(provider => new SqliteCollectionRunRepository(
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
-        services.AddSingleton<IAttentionIssueRepository>(provider => new SqliteAttentionIssueRepository(
-            () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
         services.AddSingleton<IAreaGroupRepository>(provider => new SqliteAreaGroupRepository(
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
-        services.AddSingleton<IAreaGroupReconciliationRepository>(provider => new SqliteAreaGroupReconciliationRepository(
-            () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
         services.AddSingleton<NavigationService>();
-        services.AddSingleton<DataContextService>();
         services.AddSingleton<INavigationService>(provider => provider.GetRequiredService<NavigationService>());
         services.AddSingleton<WindowHandleProvider>();
         services.AddSingleton<DashboardOverviewService>();
         services.AddSingleton(new NodeCollectionTaskRunner(workspaceRoot));
-        services.AddSingleton<CollectionEnvironmentProbe>();
-        services.AddSingleton<HomeViewModel>();
+        services.AddTransient<HomeViewModel>();
         services.AddSingleton<CollectionTaskViewModel>();
-        services.AddSingleton<DataViewModel>();
-        services.AddSingleton<AuditViewModel>();
+        services.AddTransient<DataViewModel>();
+        services.AddTransient<AuditViewModel>();
         services.AddTransient<GroupsViewModel>();
         services.AddTransient<SettingsViewModel>();
         services.AddTransient<DiagnosticsViewModel>();

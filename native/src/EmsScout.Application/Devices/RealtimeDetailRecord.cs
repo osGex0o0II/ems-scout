@@ -35,13 +35,18 @@ public sealed record RealtimeDetailRecord(
 
     public string LockState => Field("集控锁定");
 
+    public bool LockStateValid =>
+        (LockState == "开启" || LockState == "关闭") &&
+        (!ValidFields.TryGetValue("集控锁定", out var valid) || valid);
+
     public string ModbusAddress => Field("通讯地址 (Modbus)");
 
     public bool PointsComplete => RealtimeTagCount > 0 && RealtimeValidTagCount >= RealtimeTagCount;
 
     public bool IsInvalid => !string.IsNullOrWhiteSpace(Error) ||
                              DefaultLike ||
-                             ValidFields.Any(item => item.Value == false);
+                             ValidFields.Any(item => item.Value == false) ||
+                             (!string.IsNullOrWhiteSpace(LockState) && !LockStateValid);
 
     public string PointSummary => RealtimeTagCount <= 0
         ? "--"

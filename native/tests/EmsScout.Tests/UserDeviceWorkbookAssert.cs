@@ -20,54 +20,57 @@ internal static class UserDeviceWorkbookAssert
         "设置温度",
         "环境温度",
         "集控锁定状态",
+        "采集时间",
     ];
 
     public static void AssertShape(DeviceExportResult export)
     {
-        Assert.Equal(["devices"], export.Sheets);
+        Assert.NotEmpty(export.Sheets);
+        Assert.Equal("全部设备", export.Sheets[0]);
         using var archive = ZipFile.OpenRead(export.Path);
         Assert.NotNull(archive.GetEntry("xl/workbook.xml"));
-        Assert.NotNull(archive.GetEntry("xl/worksheets/sheet1.xml"));
-        Assert.Null(archive.GetEntry("xl/worksheets/sheet2.xml"));
+        for (var index = 0; index < export.Sheets.Count; index++)
+        {
+            Assert.NotNull(archive.GetEntry($"xl/worksheets/sheet{index + 1}.xml"));
+        }
+        Assert.Null(archive.GetEntry($"xl/worksheets/sheet{export.Sheets.Count + 1}.xml"));
 
         var workbook = ReadEntry(archive, "xl/workbook.xml");
-        Assert.Contains("name=\"devices\"", workbook);
+        foreach (var sheet in export.Sheets)
+        {
+            Assert.Contains($"name=\"{sheet}\"", workbook);
+        }
         Assert.DoesNotContain("name=\"summary\"", workbook);
         Assert.DoesNotContain("name=\"filters\"", workbook);
 
-        var rows = ReadRows(archive);
-        Assert.NotEmpty(rows);
-        Assert.Equal(ExpectedHeader, rows[0]);
-        Assert.Equal(export.RowCount + 1, rows.Count);
-        Assert.All(rows, row => Assert.Equal(ExpectedHeader.Length, row.Count));
+        for (var index = 0; index < export.Sheets.Count; index++)
+        {
+            var rows = ReadRows(archive, index + 1);
+            Assert.NotEmpty(rows);
+            Assert.Equal(ExpectedHeader, rows[0]);
+            Assert.All(rows, row => Assert.Equal(ExpectedHeader.Length, row.Count));
+            var xml = ReadEntry(archive, $"xl/worksheets/sheet{index + 1}.xml");
+            Assert.Contains("state=\"frozen\"", xml);
+            Assert.Contains("<autoFilter", xml);
+            Assert.Contains("<cols>", xml);
+        }
     }
 
     public static IReadOnlyList<IReadOnlyList<string>> ReadRows(string path)
     {
         using var archive = ZipFile.OpenRead(path);
-        return ReadRows(archive);
+        return ReadRows(archive, 1);
     }
 
-    public static IReadOnlyList<string?> ReadCellTypes(string path)
+    public static IReadOnlyList<IReadOnlyList<string>> ReadRows(string path, int sheetNumber)
     {
         using var archive = ZipFile.OpenRead(path);
-        var document = XDocument.Parse(ReadEntry(archive, "xl/worksheets/sheet1.xml"));
-        XNamespace ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
-        return document
-            .Descendants(ns + "c")
-            .Select(cell => (string?)cell.Attribute("t"))
-            .ToArray();
+        return ReadRows(archive, sheetNumber);
     }
 
-    public static string ReadWorksheetXml(string path)
+    private static IReadOnlyList<IReadOnlyList<string>> ReadRows(ZipArchive archive, int sheetNumber)
     {
-        using var archive = ZipFile.OpenRead(path);
-        return ReadEntry(archive, "xl/worksheets/sheet1.xml");
-    }
-
-    private static IReadOnlyList<IReadOnlyList<string>> ReadRows(ZipArchive archive)
-    {
-        var xml = ReadEntry(archive, "xl/worksheets/sheet1.xml");
+        var xml = ReadEntry(archive, $"xl/worksheets/sheet{sheetNumber}.xml");
         var document = XDocument.Parse(xml);
         XNamespace ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
         return document

@@ -5,7 +5,7 @@ const http = require('http');
 const path = require('path');
 const { spawn } = require('child_process');
 const { chromium } = require('playwright');
-const { sanitizeErrorForDisplay, sanitizeUrlForDisplay } = require('../src/url-sanitizer');
+const { isAllowedEmsUrl, isAllowedCdpUrl, sanitizeUrlForDisplay } = require('../src/connection-policy');
 
 const ROOT = path.resolve(__dirname, '..');
 const OUT_DIR = path.resolve(process.env.EMS_OUT_DIR || path.join(ROOT, 'out'));
@@ -81,7 +81,7 @@ async function waitForCdpEndpoint(cdpUrl, timeoutMs = 12000) {
       await sleep(300);
     }
   }
-  throw new Error(`CDP 端口未就绪: ${cdpUrl} (${lastError ? lastError.message : 'timeout'})`);
+  throw new Error(`CDP 端口未就绪: ${sanitizeUrlForDisplay(cdpUrl)} (${lastError ? lastError.message : 'timeout'})`);
 }
 
 function edgeCandidates() {
@@ -95,7 +95,15 @@ function edgeCandidates() {
 }
 
 function findEdgeExecutable() {
-  const hit = edgeCandidates().find(file => fs.existsSync(file));
+  const override = process.env.EDGE_PATH;
+  if (override) {
+    const resolved = path.resolve(override);
+    if (!path.isAbsolute(override) || path.basename(resolved).toLowerCase() !== 'msedge.exe' || !fs.existsSync(resolved)) {
+      throw new Error('EDGE_PATH 必须是存在的 msedge.exe 绝对路径。');
+    }
+    return resolved;
+  }
+  const hit = edgeCandidates().slice(1).find(file => fs.existsSync(file));
   if (!hit) {
     throw new Error('未找到 Microsoft Edge。请安装 Edge，或设置 EDGE_PATH 指向 msedge.exe。');
   }
@@ -108,12 +116,13 @@ function launchEdgeCdp(cdpUrl, emsUrl, log) {
   const port = cdpPort(cdpUrl);
   const args = [
     `--remote-debugging-port=${port}`,
+    '--remote-debugging-address=127.0.0.1',
     `--user-data-dir=${EDGE_PROFILE}`,
     '--no-first-run',
     '--disable-default-apps',
-    'about:blank',
+    emsUrl,
   ];
-  logLine(log, `[CDP] 未发现 ${cdpUrl}，正在启动 Edge 调试端口 ${port}`);
+  logLine(log, `[CDP] 未发现 ${sanitizeUrlForDisplay(cdpUrl)}，正在启动 Edge 调试端口 ${port}`);
   const proc = spawn(edge, args, {
     cwd: ROOT,
     detached: true,
@@ -131,13 +140,7 @@ function normalizeBrowserMode(mode) {
 }
 
 function isEmsUrl(url, emsUrl) {
-  if (!url || url === 'about:blank') return false;
-  try {
-    const target = new URL(emsUrl);
-    return url.includes('/ui') || url.includes(target.host);
-  } catch {
-    return url.includes('/ui') || url.includes('172.29.248.4');
-  }
+  return isAllowedEmsUrl(url, emsUrl);
 }
 
 async function isEmsReady(page) {
@@ -173,13 +176,18 @@ async function waitForEmsReady(page, options = {}) {
   throw new Error('EMS 页面未登录或未就绪；请在自动打开的 Edge 中完成登录后重新开始实时详情采集。');
 }
 
-async function getOrOpenEmsPageFromContext(context, emsUrl, log, prefix = '[BROWSER]') {
+async function getOrOpenEmsPageFromContext(context, emsUrl, log, prefix = '[BROWSER]', focusPage = false) {
   let pages = context.pages();
   let page = pages.find(p => isEmsUrl(p.url(), emsUrl));
   if (!page) page = pages[0] || await context.newPage();
-  await page.bringToFront().catch(() => {});
+  if (focusPage) {
+    logLine(log, `${prefix} FOCUS 页面置前: ${sanitizeUrlForDisplay(page.url())}`);
+    await page.bringToFront().catch(() => {});
+  } else {
+    logLine(log, `${prefix} REUSE_PAGE 后台复用页面（不抢占焦点）: ${sanitizeUrlForDisplay(page.url())}`);
+  }
   if (!isEmsUrl(page.url(), emsUrl)) {
-    logLine(log, `${prefix} 打开 EMS: ${sanitizeUrlForDisplay(emsUrl)}`);
+    logLine(log, `${prefix} GOTO 打开 EMS: ${sanitizeUrlForDisplay(emsUrl)}`);
     await page.goto(emsUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
   }
   await page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
@@ -187,10 +195,10 @@ async function getOrOpenEmsPageFromContext(context, emsUrl, log, prefix = '[BROW
   return page;
 }
 
-async function getOrOpenEmsPage(browser, emsUrl, log) {
+async function getOrOpenEmsPage(browser, emsUrl, log, focusPage = false) {
   let context = browser.contexts()[0];
   if (!context) throw new Error('CDP 浏览器没有可用 context');
-  return getOrOpenEmsPageFromContext(context, emsUrl, log, '[CDP]');
+  return getOrOpenEmsPageFromContext(context, emsUrl, log, '[CDP]', focusPage);
 }
 
 async function connectCdp(cdpUrl) {
@@ -203,17 +211,21 @@ async function launchPersistentEdge(emsUrl, log, options = {}) {
   const edge = findEdgeExecutable();
   const debugPort = Number(options.cdpPort || 0);
   const cdpUrl = debugPort > 0 ? localCdpUrl(debugPort) : '';
-  logLine(log, '[BROWSER] 自动启动 Edge（persistent context，推荐）');
+  // 首次启动（或显式请求聚焦）才把窗口置前；后台任务复用窗口时不抢占焦点
+  const focusPage = !!options.focusPage;
+  logLine(log, '[BROWSER] LAUNCH 自动启动 Edge（persistent context，推荐）');
   logLine(log, `[BROWSER] 用户数据目录: ${REALTIME_EDGE_PROFILE}`);
   if (cdpUrl) logLine(log, `[BROWSER] 会话内复用端口: ${cdpUrl}`);
+  logLine(log, focusPage ? '[BROWSER] 窗口将置前等待登录' : '[BROWSER] 窗口后台运行，不抢占当前窗口');
   logLine(log, '[BROWSER] 首次使用如未登录 EMS，请在打开的窗口完成登录');
   let context = null;
   try {
     const args = [
       '--no-first-run',
       '--disable-default-apps',
-      '--start-maximized',
     ];
+    if (focusPage) args.push('--start-maximized');
+    else args.push('--start-minimized');
     if (debugPort > 0) args.unshift(`--remote-debugging-port=${debugPort}`);
     context = await chromium.launchPersistentContext(REALTIME_EDGE_PROFILE, {
       executablePath: edge,
@@ -223,7 +235,7 @@ async function launchPersistentEdge(emsUrl, log, options = {}) {
       args,
     });
     if (cdpUrl) await waitForCdpEndpoint(cdpUrl, 10000);
-    const page = await getOrOpenEmsPageFromContext(context, emsUrl, log, '[BROWSER]');
+    const page = await getOrOpenEmsPageFromContext(context, emsUrl, log, '[BROWSER]', focusPage);
     return {
       browser: context.browser() || null,
       context,
@@ -237,11 +249,11 @@ async function launchPersistentEdge(emsUrl, log, options = {}) {
     if (context) {
       await context.close().catch(() => {});
     }
-    const msg = sanitizeErrorForDisplay(err, [emsUrl]);
+    const msg = err && err.message ? err.message : String(err);
     if (/user data dir|profile|already in use|正在使用|占用|lock/i.test(msg)) {
       throw new Error(`自动启动 Edge 失败：实时采集用户数据目录正在被占用。请关闭上一次自动启动的 Edge 窗口后重试，或切换为“连接已有 Edge CDP（专家）”。原始错误：${msg}`);
     }
-    throw new Error(msg);
+    throw err;
   }
 }
 
@@ -250,28 +262,36 @@ async function ensureCdpBrowser(options = {}) {
   const emsUrl = options.emsUrl || DEFAULT_EMS_URL;
   const log = options.log;
   const strict = !!options.strictCdp || process.env.REALTIME_CDP_STRICT === '1';
+  // 首次连接/用户主动打开时才聚焦；后台采集中复用窗口不抢焦点
+  const focusPage = !!options.focusPage;
+  const allowRemoteCdp = !!options.allowRemoteCdp || process.env.REALTIME_ALLOW_REMOTE_CDP === '1';
+  if (!isAllowedCdpUrl(cdpUrl, allowRemoteCdp)) {
+    throw new Error(`拒绝不安全的 CDP 地址: ${sanitizeUrlForDisplay(cdpUrl)}；默认只允许本机回环地址。`);
+  }
   let launched = false;
   let browser = null;
 
   try {
     browser = await connectCdp(cdpUrl);
+    logLine(log, `[CDP] ATTACH 已连接已有 Edge CDP: ${sanitizeUrlForDisplay(cdpUrl)}`);
   } catch (firstErr) {
     if (strict) {
-      throw new Error(`无法连接实时采集浏览器: ${cdpUrl}。请确认采集任务打开的 Edge 窗口仍在运行。原始错误：${firstErr.message}`);
+      throw new Error(`无法连接实时采集浏览器: ${sanitizeUrlForDisplay(cdpUrl)}。请确认采集任务打开的 Edge 窗口仍在运行。原始错误：${firstErr.message}`);
     }
+    logLine(log, `[CDP] LAUNCH 未发现 ${sanitizeUrlForDisplay(cdpUrl)}，启动 Edge 调试端口`);
     launchEdgeCdp(cdpUrl, emsUrl, log);
     launched = true;
     await waitForCdpEndpoint(cdpUrl, 15000);
     try {
       browser = await chromium.connectOverCDP(cdpUrl, { timeout: 10000 });
     } catch (secondErr) {
-      throw new Error(`无法连接 Edge CDP: ${cdpUrl}; ${secondErr.message || firstErr.message}`);
+      throw new Error(`无法连接 Edge CDP: ${sanitizeUrlForDisplay(cdpUrl)}; ${secondErr.message || firstErr.message}`);
     }
   }
 
-  const page = await getOrOpenEmsPage(browser, emsUrl, log);
+  const page = await getOrOpenEmsPage(browser, emsUrl, log, focusPage);
   if (launched) logLine(log, '[CDP] Edge CDP 已就绪，继续实时详情采集');
-  else logLine(log, `[CDP] 已连接已有 Edge CDP: ${cdpUrl}`);
+  else logLine(log, `[CDP] 已连接已有 Edge CDP: ${sanitizeUrlForDisplay(cdpUrl)}`);
   return { browser, context: browser.contexts()[0] || null, page, launched, mode: 'cdp' };
 }
 
