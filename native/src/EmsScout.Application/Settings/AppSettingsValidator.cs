@@ -7,14 +7,11 @@ public static class AppSettingsValidator
     public static string? Validate(AppSettings settings)
     {
         if (!Uri.TryCreate(settings.EmsUrl?.Trim(), UriKind.Absolute, out var uri) ||
-            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
+            !string.IsNullOrEmpty(uri.UserInfo) ||
+            !IsEmsPath(uri.AbsolutePath))
         {
             return "EMS 地址必须是 http 或 https 开头的完整地址";
-        }
-
-        if (!string.IsNullOrWhiteSpace(uri.UserInfo))
-        {
-            return "EMS 地址不能包含用户信息";
         }
 
         if (settings.EdgeCdpPort is < 1 or > 65535)
@@ -33,6 +30,13 @@ public static class AppSettingsValidator
         }
 
         return null;
+    }
+
+    private static bool IsEmsPath(string path)
+    {
+        var normalized = (path ?? string.Empty).TrimEnd('/');
+        return normalized.Equals("/ui", StringComparison.OrdinalIgnoreCase) ||
+            normalized.StartsWith("/ui/", StringComparison.OrdinalIgnoreCase);
     }
 
     public static string? ValidateEdgeCdpPortInput(double value)

@@ -4,9 +4,8 @@
 // Usage: node src/verify-live.js [--building=1号] [--floor=1] [--json]
 const path = require('path');
 const { chromium } = require('playwright');
+const { isAllowedEmsUrl, isAllowedCdpUrl, sanitizeUrlForDisplay } = require('./connection-policy');
 const Database = require('better-sqlite3');
-const { filterFloorGroups } = require('./page-navigation');
-const { sanitizeUrlForDisplay } = require('./url-sanitizer');
 const { log: loggerLog, setLevel, setCategories, enableFileLog, close, LEVELS, CATEGORIES } = require('./logger');
 function log(...args) { loggerLog(LEVELS.INFO, 'ENUM', ...args); }
 
@@ -20,6 +19,9 @@ function formatDuplicateNames(list = []) {
 
 const CDP_URL = 'http://127.0.0.1:9222';
 const EMS_URL = 'http://172.29.248.4:8000/ui';
+if (!isAllowedEmsUrl(EMS_URL, EMS_URL) || !isAllowedCdpUrl(CDP_URL, process.env.EMS_ALLOW_REMOTE_CDP === '1')) {
+  throw new Error(`Unsafe EMS/CDP configuration: ${sanitizeUrlForDisplay(CDP_URL)}`);
+}
 const ROOT = path.resolve(__dirname, '..');
 const DB_PATH = path.join(ROOT, 'out', 'ac.db');
 
@@ -104,7 +106,7 @@ async function clickFloor(page, floorValue) {
   if (floorValue === undefined) return null;
   const floorNum = Number(floorValue);
   if (!Number.isFinite(floorNum)) throw new Error(`Invalid --floor value: ${floorValue}`);
-  let subAreas = filterFloorGroups(await page.evaluate(() => window.__ems.findAllSubAreaGroups()).catch(() => []));
+  let subAreas = await page.evaluate(() => window.__ems.findAllSubAreaGroups()).catch(() => []);
   const targetX = X_FILTER === undefined ? null : Number(X_FILTER);
   const targetY = Y_FILTER === undefined ? null : Number(Y_FILTER);
   let candidates = subAreas.filter(s => Number(s.floor) === floorNum);
@@ -118,7 +120,7 @@ async function clickFloor(page, floorValue) {
   let target = candidates[0];
   if (!target) {
     await waitForReady(page, 20);
-    subAreas = filterFloorGroups(await page.evaluate(() => window.__ems.findAllSubAreaGroups()).catch(() => []));
+    subAreas = await page.evaluate(() => window.__ems.findAllSubAreaGroups()).catch(() => []);
     candidates = subAreas.filter(s => Number(s.floor) === floorNum);
     if (Number.isFinite(targetX) || Number.isFinite(targetY)) {
       candidates = candidates.sort((a, b) => {
@@ -266,8 +268,14 @@ function injectHelpers(page) {
         const texts = Array.from(svg.querySelectorAll('text'));
         const items = texts.map(t => {
           const r = t.getBoundingClientRect();
-          return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), txt: t.textContent.trim() };
-        }).filter(i => i.txt);
+          const style = window.getComputedStyle(t);
+          return {
+            x: Math.round(r.left + r.width / 2),
+            y: Math.round(r.top + r.height / 2),
+            txt: t.textContent.trim(),
+            visible: r.width > 0 && r.height > 0 && style.display !== 'none' && style.visibility !== 'hidden' && parseFloat(style.opacity || '1') > 0,
+          };
+        }).filter(i => i.txt && i.visible);
 
         const imgs = Array.from(svg.querySelectorAll('image'));
         const imgList = imgs.map(i => {
@@ -282,9 +290,22 @@ function injectHelpers(page) {
         });
 
         const switchImgs = imgList.filter(i => i.w >= 38 && i.w <= 50 && i.h >= 17 && i.h <= 30);
+        const switchByHref = {};
+        for (const si of switchImgs) {
+          if (!si.href) continue;
+          if (!switchByHref[si.href]) switchByHref[si.href] = 0;
+          switchByHref[si.href]++;
+        }
+        const hrefs = Object.keys(switchByHref);
         let offHref = null, onHref = null;
+        if (hrefs.length > 1) {
+          hrefs.sort((a, b) => switchByHref[b] - switchByHref[a]);
+          offHref = hrefs[0];
+          onHref = hrefs[1];
+        }
 
         const indicatorImgs = imgList.filter(i => i.w >= 25 && i.w <= 33 && i.h >= 23 && i.h <= 31);
+        const KNOWN_NO_INDICATOR = new Set(['2-2BC-2M001-KT-1', '2-2BC-2M001-KT-2']);
 
         // Detect layout
         const byY = {};
@@ -317,13 +338,43 @@ function injectHelpers(page) {
           return best;
         }
 
+        function labelDuplicateNames(input) {
+          const groups = new Map();
+          input.forEach((card, index) => {
+            const baseName = String(card.name || '').trim();
+            if (!baseName) return;
+            if (!groups.has(baseName)) groups.set(baseName, []);
+            groups.get(baseName).push({ card, index });
+          });
+          const duplicateNames = [];
+          for (const [baseName, entries] of groups) {
+            if (entries.length < 2) continue;
+            const ordered = [...entries].sort((a, b) =>
+              (a.card._sourceY - b.card._sourceY) ||
+              (a.card._sourceX - b.card._sourceX) ||
+              (a.index - b.index));
+            const labeledNames = [];
+            ordered.forEach(({ card }, index) => {
+              card.sourceName = baseName;
+              card.name = `${baseName}#${index + 1}`;
+              labeledNames.push(card.name);
+            });
+            duplicateNames.push({ name: baseName, copies: entries.length, labeledNames });
+          }
+          for (const card of input) {
+            delete card._sourceX;
+            delete card._sourceY;
+          }
+          return { cards: input, duplicateNames };
+        }
+
         const cards = [];
         let rawCardCount = 0;
-        const duplicateNames = new Map();
+        const rejectedCandidates = [];
 
         if (isGrid) {
           const nameRows = [];
-          const seenGridNames = new Set();
+          const seenGridPositions = new Set();
           for (const yStr in byY) {
             const arr = byY[yStr];
             if (arr.length >= 2 && arr.every(it => /^[A-Z0-9\-]+$/i.test(it.txt) && it.txt.length >= 5 && it.txt.length < 20)) {
@@ -338,12 +389,13 @@ function injectHelpers(page) {
 
           for (const row of nameRows) {
             for (const nameIt of row.items) {
-              rawCardCount++;
-              if (seenGridNames.has(nameIt.txt)) {
-                duplicateNames.set(nameIt.txt, (duplicateNames.get(nameIt.txt) || 1) + 1);
+              const positionKey = `${nameIt.x}|${nameIt.y}`;
+              if (seenGridPositions.has(positionKey)) {
+                rejectedCandidates.push({ name: nameIt.txt, x: nameIt.x, y: nameIt.y, reason: 'duplicate-position' });
                 continue;
               }
-              seenGridNames.add(nameIt.txt);
+              seenGridPositions.add(positionKey);
+              rawCardCount++;
               const x = nameIt.x, ry = row.y;
               const sw = nearest(switchImgs, x, ry + 100, 80, 50);
               let swState = '-';
@@ -359,10 +411,16 @@ function injectHelpers(page) {
               const setT = nearTemps[1] ? nearTemps[1].txt.replace(/\s*℃/, '') : '-';
               const fan = nearest(fanTexts, x, ry + 235, 100, 60);
               const indic = nearest(indicatorImgs, x, ry - 30, 80, 50);
+              const telemetrySignals = Number(Boolean(mode)) + Number(nearTemps.length > 0) + Number(Boolean(fan));
+              if (!sw && !indic && !(KNOWN_NO_INDICATOR.has(nameIt.txt) && telemetrySignals >= 2)) {
+                rejectedCandidates.push({ name: nameIt.txt, x: nameIt.x, y: nameIt.y, reason: 'no-card-visual' });
+                continue;
+              }
               cards.push({
                 name: nameIt.txt, switch: swState,
                 mode: mode ? mode.txt : '-', indoor, setTemp: setT,
-                fan: fan ? fan.txt : '-', indicator: indic ? indic.href : ''
+                fan: fan ? fan.txt : '-', indicator: indic ? indic.href : '',
+                _sourceX: nameIt.x, _sourceY: nameIt.y,
               });
             }
           }
@@ -380,28 +438,21 @@ function injectHelpers(page) {
           const seenCandidatePositions = new Set();
           const deviceCandidates = [];
           for (const d of [...deviceNames, ...altDeviceNames]) {
-            const posKey = `${d.txt}|${d.x}|${d.y}`;
-            if (seenCandidatePositions.has(posKey)) continue;
+            const posKey = `${d.x}|${d.y}`;
+            if (seenCandidatePositions.has(posKey)) {
+              rejectedCandidates.push({ name: d.txt, x: d.x, y: d.y, reason: 'duplicate-position' });
+              continue;
+            }
             seenCandidatePositions.add(posKey);
             deviceCandidates.push(d);
           }
           rawCardCount = deviceCandidates.length;
-          const seen = new Set();
-          const allDeviceNames = [];
-          for (const d of deviceCandidates) {
-            if (seen.has(d.txt)) {
-              duplicateNames.set(d.txt, (duplicateNames.get(d.txt) || 1) + 1);
-              continue;
-            }
-            seen.add(d.txt);
-            allDeviceNames.push(d);
-          }
 
           const modeTextsG = items.filter(i => /^(制冷|通风|制热|送暖|地暖|制热\+地暖)$/.test(i.txt));
           const fanTextsG = items.filter(i => /^(自动|高|中|低|0|1|2|3)$/.test(i.txt));
           const tempTextsG = items.filter(i => /\d+(\.\d+)?\s*℃/.test(i.txt));
 
-          for (const dn of allDeviceNames) {
+          for (const dn of deviceCandidates) {
             const sw = nearest(switchImgs, dn.x, dn.y + 60, 80, 50);
             let swState = '-';
             if (sw) {
@@ -416,7 +467,12 @@ function injectHelpers(page) {
             const setT = nearbyTemps[1] ? nearbyTemps[1].txt.replace(/\s*℃/, '') : '-';
             const fan = nearest(fanTextsG, dn.x, dn.y + 200, 80, 80);
             const indic = nearest(indicatorImgs, dn.x, dn.y - 30, 80, 50);
-            cards.push({ name: dn.txt, switch: swState, mode: mode ? mode.txt : '-', indoor, setTemp: setT, fan: fan ? fan.txt : '-', indicator: indic ? indic.href : '' });
+            const telemetrySignals = Number(Boolean(mode)) + Number(nearbyTemps.length > 0) + Number(Boolean(fan));
+            if (!sw && !indic && !(KNOWN_NO_INDICATOR.has(dn.txt) && telemetrySignals >= 2)) {
+              rejectedCandidates.push({ name: dn.txt, x: dn.x, y: dn.y, reason: 'no-card-visual' });
+              continue;
+            }
+            cards.push({ name: dn.txt, switch: swState, mode: mode ? mode.txt : '-', indoor, setTemp: setT, fan: fan ? fan.txt : '-', indicator: indic ? indic.href : '', _sourceX: dn.x, _sourceY: dn.y });
           }
         }
 
@@ -497,7 +553,7 @@ function injectHelpers(page) {
                 }
               }
               if (f.fan) {
-                if (card.fan === '-' || /^\d$/.test(card.fan)) {
+                if (card.fan === '-' || /^\d$/.test(f.fan)) {
                   if (card.fan !== f.fan) log(LEVELS.DEBUG, 'VUE', `fan ${card.fan}→${f.fan}`, { card: card.name });
                   card.fan = f.fan;
                 }
@@ -520,15 +576,20 @@ function injectHelpers(page) {
           else                         c.switch = '-';
         }
 
+        const labeled = labelDuplicateNames(cards);
+
         return {
-          count: cards.length,
-          rawCount: rawCardCount || cards.length,
-          uniqueCount: cards.length,
-          duplicateNames: [...duplicateNames.entries()].map(([name, copies]) => ({ name, copies })),
+          count: labeled.cards.length,
+          rawCount: labeled.cards.length,
+          uniqueCount: labeled.cards.length,
+          candidateCount: rawCardCount || labeled.cards.length,
+          rejectedCount: rejectedCandidates.length,
+          rejectedCandidates,
+          duplicateNames: labeled.duplicateNames,
           onHref,
           offHref,
           layout: isGrid ? 'grid' : 'group',
-          cards,
+          cards: labeled.cards,
         };
       },
 
@@ -595,7 +656,7 @@ async function main() {
   // Step 1: Show page state
   const state = await verifyPageState(page);
   log(`=== Page State ===`);
-  log(`URL: ${sanitizeUrlForDisplay(state.url)}  |  Title: ${state.title}`);
+  log(`URL: ${state.url}  |  Title: ${state.title}`);
   log(`Ready: ${state.ready}  |  Shadow: ${state.shadowDOM}  |  SVG texts: ${state.textCount}  |  WS data: ${state.wsDataCount}`);
 
   // Step 2: Read current view

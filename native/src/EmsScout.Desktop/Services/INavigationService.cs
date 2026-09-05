@@ -6,10 +6,8 @@ public interface INavigationService
 {
     void NavigateToData(DataNavigationRequest request);
 
-    void NavigateToAudit(long? areaGroupId = null);
+    void NavigateToGroups(long? groupId = null);
 }
-
-public sealed record AuditNavigationRequest(long? AreaGroupId = null);
 
 public sealed record DataNavigationRequest(
     string SearchText = "",
@@ -19,9 +17,8 @@ public sealed record DataNavigationRequest(
     string Floor = "",
     string SubArea = "",
     string PageName = "",
-    string DeviceUid = "",
-    long? CardId = null,
-    string Zuo = "")
+    string Zuo = "",
+    long? AreaGroupId = null)
 {
     public static DataNavigationRequest From(DeviceNavigationTarget target)
     {
@@ -36,12 +33,14 @@ public sealed record DataNavigationRequest(
 public sealed class NavigationService : INavigationService
 {
     private Action<DataNavigationRequest>? _navigateToData;
-    private Action<AuditNavigationRequest>? _navigateToAudit;
+    private Action<long?>? _navigateToGroups;
 
-    public void Attach(Action<DataNavigationRequest> navigateToData, Action<AuditNavigationRequest> navigateToAudit)
+    public void Attach(
+        Action<DataNavigationRequest> navigateToData,
+        Action<long?> navigateToGroups)
     {
         _navigateToData = navigateToData;
-        _navigateToAudit = navigateToAudit;
+        _navigateToGroups = navigateToGroups;
     }
 
     public void NavigateToData(DataNavigationRequest request)
@@ -49,8 +48,8 @@ public sealed class NavigationService : INavigationService
         _navigateToData?.Invoke(request);
     }
 
-    public void NavigateToAudit(long? areaGroupId = null)
+    public void NavigateToGroups(long? groupId = null)
     {
-        _navigateToAudit?.Invoke(new AuditNavigationRequest(areaGroupId));
+        _navigateToGroups?.Invoke(groupId);
     }
 }

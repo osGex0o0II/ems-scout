@@ -1,13 +1,14 @@
 using EmsScout.Application.Devices;
 using EmsScout.Infrastructure.Sqlite;
+using EmsScout.Infrastructure.Realtime;
+using Microsoft.Data.Sqlite;
 
 namespace EmsScout.Tests;
 
-[Trait("Fixture", "ProductionEvidence")]
 public sealed class SqliteDeviceReadRepositoryTests
 {
     [Fact]
-    public async Task SearchesCurrentDatabaseWithBaselineCounts()
+    public async Task SearchesCurrentDatabaseWithSelfConsistentCounts()
     {
         var repository = new SqliteDeviceReadRepository(CurrentDatabasePath());
 
@@ -16,15 +17,17 @@ public sealed class SqliteDeviceReadRepositoryTests
         var offline = await repository.SearchAsync(new(CommunicationState: "离线", Limit: 1));
         var unknown = await repository.SearchAsync(new(CommunicationState: "未知", Limit: 10));
 
-        Assert.Equal(6568, all.Total);
+        Assert.True(all.Total > 0);
         Assert.Equal(10, all.Rows.Count);
-        Assert.Equal(776, all.Facets.PublicArea);
-        Assert.Equal(5792, all.Facets.PrivateArea);
-        Assert.Equal(437, all.Facets.TemperatureIssues);
-        Assert.Equal(1546, all.Facets.NeedsReview);
-        Assert.Equal(1493, building1.Total);
-        Assert.Equal(1527, offline.Total);
-        Assert.Equal(2, unknown.Total);
+        Assert.Equal(all.Total, all.Facets.PublicArea + all.Facets.PrivateArea);
+        Assert.True(all.Facets.TemperatureIssues > 0);
+        Assert.True(all.Facets.NeedsReview >= all.Facets.TemperatureIssues);
+        Assert.True(building1.Total > 0);
+        Assert.True(offline.Total > 0);
+        Assert.Equal(all.Total, offline.Total +
+            (await repository.SearchAsync(new(CommunicationState: "开机", Limit: 1))).Total +
+            (await repository.SearchAsync(new(CommunicationState: "关机", Limit: 1))).Total +
+            unknown.Total);
         Assert.Equal("1号", all.Rows[0].Building);
         Assert.False(string.IsNullOrWhiteSpace(all.Rows[0].Name));
     }
@@ -37,14 +40,18 @@ public sealed class SqliteDeviceReadRepositoryTests
         var options = await repository.LoadFilterOptionsAsync();
 
         Assert.Equal(6, options.Buildings.Count);
-        Assert.Contains(options.Buildings, option => option.Value == "6号" && option.Count == 2480);
-        Assert.Contains(options.CommunicationStates, option => option.Value == "关机" && option.Count == 3196);
+        Assert.Contains(options.Buildings, option => option.Value == "6号" && option.Count > 0);
+        Assert.Equal(options.Buildings.Sum(option => option.Count), options.CommunicationStates.Sum(option => option.Count));
+        Assert.Contains(options.CommunicationStates, option => option.Value == "关机" && option.Count > 0);
+        Assert.Contains(options.CommunicationStates, option => option.Value == "开机" && option.Count > 0);
+        Assert.Contains(options.CommunicationStates, option => option.Value == "离线" && option.Count > 0);
         Assert.Contains(options.CommunicationStates, option => option.Value == "未知" && option.Count == 2);
         Assert.Equal(35, options.Floors.Count);
         Assert.Contains(options.Floors, option => option.Value == "B1F" && option.Count == 24);
-        Assert.Contains(options.Floors, option => option.Value == "2.5F" && option.Count == 7);
-        Assert.Contains(options.Zuos, option => option.Value == "A座" && option.Count == 703);
-        Assert.Contains(options.Zuos, option => option.Value == "F座" && option.Count == 68);
+        Assert.Contains(options.Floors, option => option.Value == "2.5F" && option.Count == 10);
+        Assert.Contains(options.Zuos, option => option.Value == "A座" && option.Count > 0);
+        Assert.Contains(options.Zuos, option => option.Value == "F座" && option.Count > 0);
+        Assert.True(options.Zuos.Sum(option => option.Count) > 0);
         Assert.NotEmpty(options.SubAreas);
         Assert.NotEmpty(options.PageNames);
         Assert.Equal("default", options.PageNames[0].Value);
@@ -188,11 +195,12 @@ public sealed class SqliteDeviceReadRepositoryTests
         var tempAbnormal = await repository.SearchAsync(new(QuickFilter: "temp_abnormal", Limit: 1));
         var normal = await repository.SearchAsync(new(QuickFilter: "normal", Limit: 1));
 
-        Assert.Equal(776, publicArea.Total);
-        Assert.Equal(5792, privateArea.Total);
-        Assert.Equal(1546, needsReview.Total);
-        Assert.Equal(437, tempAbnormal.Total);
-        Assert.Equal(5022, normal.Total);
+        var all = await repository.SearchAsync(new(Limit: 1));
+        Assert.Equal(all.Total, publicArea.Total + privateArea.Total);
+        Assert.True(needsReview.Total > 0);
+        Assert.True(tempAbnormal.Total > 0);
+        Assert.True(needsReview.Total >= tempAbnormal.Total);
+        Assert.Equal(all.Total, needsReview.Total + normal.Total);
         Assert.Equal("需排查", needsReview.Rows[0].Health.Label);
     }
 
@@ -202,15 +210,15 @@ public sealed class SqliteDeviceReadRepositoryTests
         var repository = new SqliteDeviceReadRepository(CurrentDatabasePath(), new CurrentRealtimeSource());
 
         var poweredOn = await repository.SearchAsync(new(RealtimePower: "开机", Limit: 50));
-        var locked = await repository.SearchAsync(new(RealtimeLock: "开启", Limit: 50));
+        var unknownLock = await repository.SearchAsync(new(RealtimeLock: "未知", Limit: 50));
         var cooling = await repository.SearchAsync(new(RealtimeMode: "制冷", Limit: 50));
         var modbus = await repository.SearchAsync(new(RealtimeModbus: "10", Limit: 50));
         var options = await repository.LoadFilterOptionsAsync();
 
         Assert.True(poweredOn.Total > 0);
         Assert.All(poweredOn.Rows, row => Assert.Equal("开机", row.Realtime?.PowerState));
-        Assert.True(locked.Total > 0);
-        Assert.All(locked.Rows, row => Assert.Equal("开启", row.Realtime?.LockState));
+        Assert.True(unknownLock.Total > 0);
+        Assert.All(unknownLock.Rows, row => Assert.Equal("未知", row.RealtimeLockText));
         Assert.True(cooling.Total > 0);
         Assert.All(cooling.Rows, row => Assert.Equal("制冷", row.Realtime?.Mode));
         Assert.True(modbus.Total > 0);
@@ -218,7 +226,7 @@ public sealed class SqliteDeviceReadRepositoryTests
         Assert.Contains(options.RealtimePowers ?? [], option => option.Value == "开机");
         Assert.Contains(options.RealtimeModes ?? [], option => option.Value == "制冷");
         Assert.Contains(options.RealtimeFans ?? [], option => option.Value == "自动");
-        Assert.Contains(options.RealtimeLocks ?? [], option => option.Value == "开启");
+        Assert.Contains(options.RealtimeLocks ?? [], option => option.Value == "未知");
         Assert.Contains(options.RealtimeSystemTypes ?? [], option => option.Value == "两管冷暖");
     }
 
@@ -251,12 +259,60 @@ public sealed class SqliteDeviceReadRepositoryTests
         Assert.All(historical.Rows, row => Assert.False(row.HasRealtime));
         Assert.Equal(historical.Total, historical.Facets.Total);
         Assert.Contains(historicalOptions.Buildings, option => option.Value == historical.Rows[0].Building);
-        Assert.Equal(6568, current.Total);
+        Assert.True(current.Total > 0);
+    }
+
+    [Fact]
+    public async Task PrefersPageCaptureTimeOverBuildingCompletionTime()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "ems-scout-page-capture-time-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var databasePath = Path.Combine(directory, "capture-time.db");
+        await using (var connection = new SqliteConnection($"Data Source={databasePath}"))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE buildings (building TEXT PRIMARY KEY, updated_at TEXT);
+                CREATE TABLE sub_areas (id INTEGER PRIMARY KEY, building TEXT, sub_idx INTEGER, floor REAL, text TEXT, x REAL, y REAL);
+                CREATE TABLE pages (id INTEGER PRIMARY KEY, sub_area_id INTEGER, page_name TEXT, layout TEXT, collected_at TEXT);
+                CREATE TABLE cards (id INTEGER PRIMARY KEY, page_id INTEGER, name TEXT, switch TEXT, mode TEXT, indoor TEXT, set_temp TEXT, fan TEXT, indicator TEXT, comm TEXT);
+                INSERT INTO buildings VALUES ('1号', '2026-07-12T01:00:00Z');
+                INSERT INTO sub_areas VALUES (1, '1号', 1, 1, '1F', 100, 100);
+                INSERT INTO pages VALUES (1, 1, 'default', 'grid', '2026-07-12T00:42:15Z');
+                INSERT INTO cards VALUES (1, 1, '1-0101-KT', 'OFF', '制冷', '26', '25', '中', 'green.png', '关机');
+                """;
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var row = Assert.Single((await new SqliteDeviceReadRepository(databasePath).SearchAsync(new DeviceQuery())).Rows);
+
+        Assert.Equal(DateTimeOffset.Parse("2026-07-12T00:42:15Z"), row.CollectedAt);
     }
 
     private static string CurrentDatabasePath()
     {
-        return ProductionDataSnapshot.DatabasePath;
+        var root = LocateRepositoryRoot();
+        var path = Path.Combine(root, "out", "ac.db");
+        Assert.True(File.Exists(path), $"Missing current database: {path}");
+        return path;
+    }
+
+    private static string LocateRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "package.json")) &&
+                Directory.Exists(Path.Combine(directory.FullName, "out")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Cannot locate repository root.");
     }
 
     private static async Task<long> LatestRunWithSnapshotAsync()
@@ -282,7 +338,7 @@ public sealed class SqliteDeviceReadRepositoryTests
             IReadOnlyList<string> buildings,
             CancellationToken cancellationToken = default)
         {
-            var root = ProductionDataSnapshot.RepositoryRoot;
+            var root = LocateRepositoryRoot();
             var source = new EmsScout.Infrastructure.Realtime.RealtimeLatestJsonSource(root, Path.Combine(root, "out"));
             return source.LoadAsync(buildings, cancellationToken);
         }

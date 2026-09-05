@@ -3,62 +3,41 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.Extensions.DependencyInjection;
 using EmsScout.Desktop.Pages;
 using EmsScout.Desktop.Services;
-using EmsScout.Infrastructure.Errors;
+using Windows.Graphics;
 
 namespace EmsScout.Desktop;
 
 public sealed partial class MainWindow : Window
 {
-    public MainWindow(string? startupFailure = null)
+    private bool _initialSizeApplied;
+
+    public MainWindow()
     {
         InitializeComponent();
 
+        ExtendsContentIntoTitleBar = true;
+        SetTitleBar(AppTitleBar);
         AppWindow.SetIcon("Assets/AppIcon.ico");
+        WindowSizeConstraint.Attach(this);
+        Activated += MainWindow_Activated;
         App.Services.GetRequiredService<WindowHandleProvider>().Attach(this);
         App.Services.GetRequiredService<AppUiSettingsService>().ApplyTheme(RootGrid);
-        App.Services.GetRequiredService<NavigationService>().Attach(NavigateToData, NavigateToAudit);
+        App.Services.GetRequiredService<NavigationService>().Attach(NavigateToData, NavigateToGroups);
         NavFrame.Navigate(typeof(HomePage));
-        if (!string.IsNullOrWhiteSpace(startupFailure))
-        {
-            ShowStartupFailure(startupFailure);
-        }
     }
 
-    private async void RetryStartupMigration_Click(object sender, RoutedEventArgs e)
+    private void MainWindow_Activated(object sender, WindowActivatedEventArgs args)
     {
-        RetryStartupMigrationButton.IsEnabled = false;
-        StartupFailureMessage.Text = "正在重新迁移数据库...";
-        try
+        if (_initialSizeApplied)
         {
-            await App.Services.GetRequiredService<StartupDatabaseInitializer>()
-                .InitializeAsync()
-                .ConfigureAwait(true);
-            StartupFailureBar.IsOpen = false;
-            NavFrame.Navigate(typeof(HomePage));
-            NavFrame.BackStack.Clear();
+            return;
         }
-        catch (Exception ex)
-        {
-            ShowStartupFailure(ApplicationFailureClassifier.Classify(ex).DisplayText);
-        }
-        finally
-        {
-            RetryStartupMigrationButton.IsEnabled = true;
-        }
-    }
 
-    private void OpenSettings_Click(object sender, RoutedEventArgs e)
-    {
-        SelectNavigationItem("settings");
-        NavFrame.Navigate(typeof(SettingsPage));
-        NavFrame.BackStack.Clear();
-    }
-
-    private void ShowStartupFailure(string message)
-    {
-        var initializer = App.Services.GetRequiredService<StartupDatabaseInitializer>();
-        StartupFailureMessage.Text = $"{message}\n\n错误日志：{initializer.LogPath}";
-        StartupFailureBar.IsOpen = true;
+        _initialSizeApplied = true;
+        Activated -= MainWindow_Activated;
+        WindowSizeConstraint.Restore(this);
+        AppWindow.Resize(WindowSizeConstraint.ScaleSizeForWindow(this, new SizeInt32(1280, 820)));
+        WindowSizeConstraint.Restore(this);
     }
 
     private void NavView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
@@ -70,11 +49,11 @@ public sealed partial class MainWindow : Window
 
         var pageType = item.Tag switch
         {
-            "workbench" => typeof(HomePage),
-            "collection" => typeof(TasksPage),
-            "devices" => typeof(DataPage),
+            "overview" => typeof(HomePage),
+            "tasks" => typeof(TasksPage),
+            "data" => typeof(DataPage),
             "audit" => typeof(AuditPage),
-            "rules" => typeof(AreasPage),
+            "groups" => typeof(AreasPage),
             "settings" => typeof(SettingsPage),
             "diagnostics" => typeof(DiagnosticsPage),
             _ => throw new InvalidOperationException($"Unknown navigation item tag: {item.Tag}")
@@ -83,22 +62,19 @@ public sealed partial class MainWindow : Window
         if (NavFrame.CurrentSourcePageType != pageType)
         {
             NavFrame.Navigate(pageType);
-            NavFrame.BackStack.Clear();
         }
     }
 
     private void NavigateToData(DataNavigationRequest request)
     {
-        SelectNavigationItem("devices");
+        SelectNavigationItem("data");
         NavFrame.Navigate(typeof(DataPage), request);
-        NavFrame.BackStack.Clear();
     }
 
-    private void NavigateToAudit(AuditNavigationRequest request)
+    private void NavigateToGroups(long? groupId)
     {
-        SelectNavigationItem("audit");
-        NavFrame.Navigate(typeof(AuditPage), request);
-        NavFrame.BackStack.Clear();
+        SelectNavigationItem("groups");
+        NavFrame.Navigate(typeof(AreasPage), groupId);
     }
 
     private void SelectNavigationItem(string tag)

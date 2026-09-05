@@ -24,7 +24,7 @@ public sealed class GroupSummaryRow(
             record.Total,
             string.IsNullOrWhiteSpace(record.Description) ? record.AreaLabel : record.Description,
             record.SystemKey == "public" ? DeviceAreaClassifier.PublicArea : record.SystemKey == "non_public" ? DeviceAreaClassifier.PrivateArea : string.Empty,
-            groupId: record.Id,
+            groupId: record.GroupKind.Equals("custom", StringComparison.OrdinalIgnoreCase) ? record.Id : null,
             isCustom: record.GroupKind.Equals("custom", StringComparison.OrdinalIgnoreCase),
             isLocked: record.Locked,
             isEnabled: record.Enabled,
@@ -37,6 +37,10 @@ public sealed class GroupSummaryRow(
         OffCount = record.OffCount;
         OfflineCount = record.OfflineCount;
         UnknownCount = record.UnknownCount;
+        PublicCount = record.PublicTotal;
+        PublicRunningCount = record.PublicOnCount;
+        PublicStoppedCount = record.PublicOffCount;
+        PublicOfflineCount = record.PublicOfflineCount;
         CoveredAreas = record.CoveredAreas;
     }
 
@@ -78,15 +82,38 @@ public sealed class GroupSummaryRow(
 
     public int OffCount { get; } = 0;
 
+    public int OnlineCount => OnCount + OffCount;
+
+    public int RunningCount => OnCount;
+
+    public int StoppedCount => OffCount;
+
     public int OfflineCount { get; } = 0;
 
     public int UnknownCount { get; } = 0;
 
+    public int PublicCount { get; } = 0;
+
+    public int PrivateCount => Math.Max(0, Count - PublicCount);
+
+    public int PublicRunningCount { get; } = 0;
+
+    public int PublicStoppedCount { get; } = 0;
+
+    public int PublicOfflineCount { get; } = 0;
+
+    public int PrivateRunningCount => Math.Max(0, RunningCount - PublicRunningCount);
+
+    public int PrivateStoppedCount => Math.Max(0, StoppedCount - PublicStoppedCount);
+
+    public string AreaBreakdownText => $"公区 {PublicCount:N0} / 非公区 {PrivateCount:N0}";
+
     public int CoveredAreas { get; } = 0;
 
-    public string StateLabel => IsCustom ? IsEnabled ? "启用" : "停用" : "规则分类";
+    public string StateLabel => IsCustom ? IsEnabled ? "启用" : "停用" : "不可编辑";
 
     public bool CanOpenInData =>
+        GroupId is not null ||
         !string.IsNullOrWhiteSpace(AreaFilter) ||
         !string.IsNullOrWhiteSpace(CommunicationFilter);
 }

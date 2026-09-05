@@ -1,13 +1,15 @@
-using EmsScout.Application.Groups;
-using EmsScout.Desktop.ViewModels;
+using Microsoft.UI.Xaml.Controls;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
-using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Navigation;
+using EmsScout.Desktop.ViewModels;
 
 namespace EmsScout.Desktop.Pages;
 
 public sealed partial class AreasPage : Page
 {
+    private long? _requestedGroupId;
+
     public GroupsViewModel ViewModel { get; }
 
     public AreasPage()
@@ -19,94 +21,116 @@ public sealed partial class AreasPage : Page
     private async void Page_Loaded(object sender, RoutedEventArgs e)
     {
         await ViewModel.LoadAsync();
+        if (_requestedGroupId is not null)
+        {
+            ViewModel.SelectGroup(_requestedGroupId.Value);
+            _requestedGroupId = null;
+        }
     }
 
-    private void NavigateToAudit_Click(object sender, RoutedEventArgs e)
+    protected override void OnNavigatedTo(NavigationEventArgs e)
     {
-        ViewModel.OpenAudit();
+        _requestedGroupId = e.Parameter is long groupId ? groupId : null;
+        base.OnNavigatedTo(e);
+    }
+
+    private void GroupList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ListView listView && listView.SelectedItem is GroupSummaryRow row)
+        {
+            ViewModel.SelectedGroup = row;
+        }
+    }
+
+    private async void MemberScope_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ViewModel.IsMemberDraftActive)
+        {
+            await ViewModel.RefreshTargetOptionsAsync();
+        }
+    }
+
+    private void OpenInData_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.OpenSelectedInData();
     }
 
     private async void DeleteGroup_Click(object sender, RoutedEventArgs e)
     {
-        var group = ViewModel.SelectedGroup;
-        if (group?.GroupId is null ||
-            !await ConfirmDestructiveActionAsync(
-                "删除区域组",
-                $"将永久删除“{group.Name}”的规则、正式成员、长期例外和待确认记录。",
-                "删除区域组"))
+        if (!ViewModel.CanDeleteSelectedGroup || ViewModel.SelectedGroup is null)
         {
             return;
         }
 
-        await ViewModel.DeleteGroupAsync();
-    }
+        var group = ViewModel.SelectedGroup;
+        var result = await ConfirmDeleteAsync(
+            "删除区域组",
+            $"将删除“{group.Name}”以及已添加的楼层和设备。\n\n当前设备数据、设备备注和标签不会被删除。");
 
-    private async void DeleteRule_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is Button { DataContext: AreaGroupRuleRecord rule })
+        if (result == ContentDialogResult.Primary)
         {
-            if (!await ConfirmDestructiveActionAsync(
-                    "删除持续规则",
-                    $"删除“{rule.RuleTypeLabel} / {rule.ScopeLabel}”后，受影响的规则成员将在后续采集进入待确认移除。",
-                    "删除规则"))
-            {
-                return;
-            }
-
-            await ViewModel.DeleteRuleAsync(rule);
+            await ViewModel.DeleteGroupAsync();
         }
     }
 
-    private async void DeleteManualMember_Click(object sender, RoutedEventArgs e)
+    private async void DeleteItem_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is Button { DataContext: AreaGroupMemberRecord member })
+        var item = sender is Button { DataContext: AreaGroupItemRow row }
+            ? row
+            : ViewModel.SelectedItem;
+        if (item is null)
         {
-            var effect = member.MemberOrigin == "rule"
-                ? "该规则成员会被移除并加入长期屏蔽名单。"
-                : "该成员会从区域组中移除。";
-            if (!await ConfirmDestructiveActionAsync(
-                    "移除分组成员",
-                    $"{member.CardName} · {member.Building} {member.FloorLabel}\n\n{effect}",
-                    "确认移除"))
-            {
-                return;
-            }
+            return;
+        }
 
-            await ViewModel.DeleteManualMemberAsync(member);
+        var result = await ConfirmDeleteAsync(
+            "移除已添加内容",
+            $"将从当前区域组移除：{item.TargetTypeLabel} / {item.TargetLabel}。\n\n这只影响区域组筛选，不会删除设备数据。");
+
+        if (result == ContentDialogResult.Primary)
+        {
+            await ViewModel.DeleteItemAsync(item);
         }
     }
 
-    private async void DeleteException_Click(object sender, RoutedEventArgs e)
+    private async void EditItem_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is Button { DataContext: AreaGroupExceptionRecord exception })
+        if (sender is Button { DataContext: AreaGroupItemRow item })
         {
-            if (!await ConfirmDestructiveActionAsync(
-                    "撤销长期例外",
-                    $"撤销“{exception.CardName}”的{exception.ExceptionTypeLabel}后，后续采集会重新按持续规则判断。",
-                    "撤销例外"))
-            {
-                return;
-            }
-
-            await ViewModel.DeleteExceptionAsync(exception);
+            await ViewModel.BeginEditItemAsync(item);
         }
     }
 
-    private async Task<bool> ConfirmDestructiveActionAsync(
-        string title,
-        string content,
-        string primaryButtonText)
+    private async void DeleteFloor_Click(object sender, RoutedEventArgs e)
+    {
+        if (!ViewModel.CanDeleteSelectedFloor || ViewModel.SelectedFloorCatalog is null)
+        {
+            return;
+        }
+
+        var floor = ViewModel.SelectedFloorCatalog;
+        var result = await ConfirmDeleteAsync(
+            "停用楼层目录",
+            $"将停用可选楼层：{floor.DisplayLabel}。\n\n区域组里已经添加的内容不会被删除，但后续下拉选择不再显示该楼层。");
+
+        if (result == ContentDialogResult.Primary)
+        {
+            await ViewModel.DeleteFloorAsync();
+        }
+    }
+
+    private async Task<ContentDialogResult> ConfirmDeleteAsync(string title, string content)
     {
         var dialog = new ContentDialog
         {
             XamlRoot = XamlRoot,
             Title = title,
             Content = content,
-            PrimaryButtonText = primaryButtonText,
+            PrimaryButtonText = "删除",
             CloseButtonText = "取消",
             DefaultButton = ContentDialogButton.Close,
         };
 
-        return await dialog.ShowAsync() == ContentDialogResult.Primary;
+        return await dialog.ShowAsync();
     }
 }

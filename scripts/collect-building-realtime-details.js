@@ -458,10 +458,12 @@ async function waitForDevices(page, opts = {}) {
   for (let i = 0; i < maxRetries; i++) {
     const devices = await page.evaluate(() => window.__ems_rt ? window.__ems_rt.getDevices() : []).catch(() => []);
     const real = devices.filter(d => d.name && d.name !== '0-0001-KT');
+    const uniqueNames = new Set(real.map(d => d.name)).size;
+    const duplicateCollapse = real.length >= 3 && uniqueNames <= Math.max(1, Math.floor(real.length * 0.5));
     const sig = real.map(d => `${d.devId}:${d.name}`).join('|');
     if (real.length > 0 && sig === prevSig) stable++;
     else stable = 0;
-    if (real.length > 0 && stable >= 1) return real;
+    if (real.length > 0 && !duplicateCollapse && stable >= 1) return real;
     prevSig = sig;
     await pause(waitMs);
   }
@@ -919,6 +921,10 @@ async function captureDeviceDetail(page, dev) {
 
 async function collectCurrentPageDetails(page, pageMeta, rows, ndjsonStream, startedAt, targetNames = null) {
   let devices = await waitForDevices(page);
+  const uniqueNames = new Set(devices.map(d => d.name)).size;
+  if (devices.length >= 3 && uniqueNames <= Math.max(1, Math.floor(devices.length * 0.5))) {
+    throw new Error(`device name collapse: ${pageMeta.subAreaText} ${pageMeta.pageName} ${uniqueNames}/${devices.length}`);
+  }
   if (targetNames) devices = devices.filter(d => targetNames.has(d.name));
   if (MAX_DEVICES > 0) devices = devices.slice(0, Math.max(0, MAX_DEVICES - rows.length));
   if (INVENTORY_ONLY) {
@@ -1175,6 +1181,19 @@ async function main() {
     await waitForDevices(page);
 
     console.log(`[AREA] ${saIdx + 1}/${selectedSubAreas.length} ${target.text}`);
+    process.stdout.write('[PROGRESS]' + JSON.stringify({
+      phase: INVENTORY_ONLY ? 'inventory' : 'details',
+      status: 'running',
+      building: BUILDING,
+      floor: target.floor,
+      floorText: target.text,
+      floorIndex: saIdx + 1,
+      floorTotal: selectedSubAreas.length,
+      deviceDone: rows.length,
+      deviceTotal: rows.length,
+      elapsedMs: Date.now() - startedAt,
+      message: `${BUILDING} ${target.text} 设备清单 ${saIdx + 1}/${selectedSubAreas.length}`,
+    }) + '\n');
     const baseMeta = { subAreaIdx: saIdx, floor: target.floor, subAreaText: target.text, tab: '' };
     await collectPagesForCurrentArea(page, baseMeta, rows, ndjsonStream, startedAt, failedTargets && failedTargets.pages);
 
@@ -1204,7 +1223,6 @@ async function main() {
 
     const result = { summary: summarize(rows, startedAt), rows };
     fs.writeFileSync(jsonPath, JSON.stringify(result, null, 2), 'utf8');
-    if (!failedTargets && !IS_PARTIAL_RUN) fs.writeFileSync(latestPath, JSON.stringify(result, null, 2), 'utf8');
   }
 
   let result = { summary: summarize(rows, startedAt), rows };

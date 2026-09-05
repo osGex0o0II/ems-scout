@@ -33,7 +33,9 @@ public sealed record DeviceRecord(
     string? MatchOverrideAction = null,
     string? MatchOverrideNote = null,
     bool IsVirtual = false,
-    DeviceWatchState? Watch = null)
+    DeviceWatchState? Watch = null,
+    string? PageSection = null,
+    DateTimeOffset? CollectedAt = null)
 {
     public string Location => $"{Building} / {FloorLabel} / {SubArea}";
 
@@ -60,19 +62,15 @@ public sealed record DeviceRecord(
 
     public bool RealtimePointsComplete => Realtime?.PointsComplete == true;
 
-    public bool RealtimeLocked => Realtime?.LockState == "开启";
+    public bool RealtimeLocked => RealtimeLockText == "开启";
 
     public string CommunicationStatusText => string.IsNullOrWhiteSpace(CommunicationText)
         ? "未知"
         : CommunicationText;
 
-    public string OperatingStatusText => DeviceOperatingStatusResolver.ResolveText(CommunicationText, SwitchState);
-
-    public DeviceCommunicationState EffectiveCommunicationState => DeviceOperatingStatusResolver.ResolveState(CommunicationText, SwitchState);
-
     public string RealtimeLockText => Realtime is null
         ? "无实时数据"
-        : string.IsNullOrWhiteSpace(Realtime.LockState) ? "未知" : Realtime.LockState;
+        : IsRealtimeLockUsable() ? Realtime.LockState : "未知";
 
     public IReadOnlyList<string> TagList => Tags ?? [];
 
@@ -83,6 +81,16 @@ public sealed record DeviceRecord(
     public bool IsWatched => WatchState.IsWatched;
 
     public bool IsWatchAbnormal => WatchState.IsAbnormal;
+
+    private bool IsRealtimeLockUsable()
+    {
+        if (Realtime is null || !Realtime.LockStateValid)
+        {
+            return false;
+        }
+
+        return CollectedAt is null || Realtime.SourceUpdatedAt >= CollectedAt.Value;
+    }
 
     public string TemperatureText => string.IsNullOrWhiteSpace(IndoorTemperature)
         ? "--"

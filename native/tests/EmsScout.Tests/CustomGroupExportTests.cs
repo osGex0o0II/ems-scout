@@ -34,6 +34,68 @@ public sealed class CustomGroupExportTests
     }
 
     [Fact]
+    public async Task GroupFilterIncludesMatchingVirtualDevicesAndExcludesVirtualDevicesOutsideItsScope()
+    {
+        var databasePath = CreateDatabase();
+        var realtimeSource = CreateRealtimeSource();
+        var repository = new SqliteDeviceReadRepository(databasePath, realtimeSource);
+        var exportService = new SqliteDeviceExportService(repository);
+        var output = Path.Combine(Path.GetTempPath(), "ems-scout-custom-group-export-tests", Guid.NewGuid().ToString("N"));
+        var query = new DeviceQuery(MonitorGroupIds: "10");
+
+        var result = await repository.SearchAsync(query);
+        var export = await exportService.ExportAsync(query, output);
+
+        Assert.Equal(4, result.Total);
+        Assert.Equal(result.Total, result.Rows.Count);
+        Assert.Equal(result.Total, export.RowCount);
+        Assert.Contains(result.Rows, row => row.Name == "GQ-VIRTUAL-IN-KT" && row.IsVirtual);
+        Assert.Contains(result.Rows, row => row.Name == "GQ-VIRTUAL-OFFLINE-IN-KT" && row.IsVirtual);
+        Assert.DoesNotContain(result.Rows, row => row.Name == "GQ-VIRTUAL-OUT-KT");
+        Assert.DoesNotContain(result.Rows, row => row.Name == "GQ-VIRTUAL-OTHER-BUILDING-KT");
+        Assert.Equal(2, realtimeSource.RequestedBuildings.Count);
+        Assert.All(realtimeSource.RequestedBuildings, buildings => Assert.Equal(["1号"], buildings));
+
+        using var archive = ZipFile.OpenRead(export.Path);
+        var devices = ReadEntry(archive, "xl/worksheets/sheet1.xml");
+        Assert.Contains("GQ-VIRTUAL-IN-KT", devices);
+        Assert.Contains("GQ-VIRTUAL-OFFLINE-IN-KT", devices);
+        Assert.DoesNotContain("GQ-VIRTUAL-OUT-KT", devices);
+        Assert.DoesNotContain("GQ-VIRTUAL-OTHER-BUILDING-KT", devices);
+    }
+
+    [Fact]
+    public async Task GroupPublicAreaAndCommunicationFiltersKeepListAndExcelInSync()
+    {
+        var databasePath = CreateDatabase();
+        var realtimeSource = CreateRealtimeSource();
+        var repository = new SqliteDeviceReadRepository(databasePath, realtimeSource);
+        var exportService = new SqliteDeviceExportService(repository);
+        var output = Path.Combine(Path.GetTempPath(), "ems-scout-custom-group-export-tests", Guid.NewGuid().ToString("N"));
+        var query = new DeviceQuery(
+            CommunicationState: "离线",
+            AreaType: "公区",
+            MonitorGroupIds: "10");
+
+        var result = await repository.SearchAsync(query);
+        var export = await exportService.ExportAsync(query, output);
+
+        var row = Assert.Single(result.Rows);
+        Assert.Equal("GQ-VIRTUAL-OFFLINE-IN-KT", row.Name);
+        Assert.True(row.IsVirtual);
+        Assert.Equal("公区", row.AreaType);
+        Assert.Equal("离线", row.CommunicationStatusText);
+        Assert.Equal(result.Total, export.RowCount);
+        Assert.All(realtimeSource.RequestedBuildings, buildings => Assert.Equal(["1号"], buildings));
+
+        using var archive = ZipFile.OpenRead(export.Path);
+        var devices = ReadEntry(archive, "xl/worksheets/sheet1.xml");
+        Assert.Contains("GQ-VIRTUAL-OFFLINE-IN-KT", devices);
+        Assert.DoesNotContain("GQ-VIRTUAL-IN-KT", devices);
+        Assert.DoesNotContain("GQ-VIRTUAL-OUT-KT", devices);
+    }
+
+    [Fact]
     public async Task QueryAndExportUseSameMixedCustomGroupTargets()
     {
         var databasePath = CreateDatabase();
@@ -267,26 +329,26 @@ public sealed class CustomGroupExportTests
                 floor_value REAL,
                 sub_area_text TEXT,
                 card_name TEXT,
-                device_uid TEXT,
                 note TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
-            CREATE TABLE floor_catalog (
+            CREATE TABLE realtime_match_overrides (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 building TEXT NOT NULL,
-                floor_label TEXT NOT NULL,
-                floor_value REAL,
-                source TEXT NOT NULL DEFAULT 'manual',
-                enabled INTEGER NOT NULL DEFAULT 1,
+                dev_id TEXT NOT NULL DEFAULT '',
+                floor_label TEXT NOT NULL DEFAULT '',
+                sub_area TEXT NOT NULL DEFAULT '',
+                page_name TEXT NOT NULL DEFAULT 'default',
+                realtime_name TEXT NOT NULL DEFAULT '',
+                action TEXT NOT NULL DEFAULT 'classify_only',
+                target_card_id INTEGER,
+                zuo_override TEXT,
+                area_type_override TEXT,
                 note TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
-            CREATE UNIQUE INDEX idx_floor_catalog_key ON floor_catalog(building, floor_label);
-            CREATE INDEX idx_monitor_group_items_group ON monitor_group_items(group_id);
-            CREATE INDEX idx_monitor_group_items_target ON monitor_group_items(building, floor_value, sub_area_text, card_name);
-            PRAGMA user_version = 2;
 
             INSERT INTO sub_areas (id, building, floor, text, sub_idx, x, y) VALUES
                 (1, '1号', 1, '1F A', 1, 100, 100),
@@ -315,10 +377,88 @@ public sealed class CustomGroupExportTests
                 (group_id, target_type, building, floor_label, floor_value, sub_area_text, card_name, note)
             VALUES
                 (10, 'floor', '1号', '1F', 1, NULL, NULL, '一层');
+            INSERT INTO realtime_match_overrides
+                (id, building, dev_id, floor_label, sub_area, page_name, realtime_name,
+                 action, target_card_id, zuo_override, area_type_override, note)
+            VALUES
+                (101, '1号', 'virtual-in', '1F', '1F A', 'default', 'GQ-VIRTUAL-IN-KT',
+                 'create_virtual', NULL, NULL, '公区', '组内虚拟设备'),
+                (102, '1号', 'virtual-out', '2F', '2F B', 'default', 'GQ-VIRTUAL-OUT-KT',
+                 'create_virtual', NULL, NULL, '公区', '同楼栋组外虚拟设备'),
+                (103, '1号', 'virtual-offline-in', '1F', '1F A', 'default', 'GQ-VIRTUAL-OFFLINE-IN-KT',
+                 'create_virtual', NULL, NULL, '公区', '组内离线虚拟设备'),
+                (104, '2号', 'virtual-other-building', '1F', '1F A', 'default', 'GQ-VIRTUAL-OTHER-BUILDING-KT',
+                 'create_virtual', NULL, NULL, '公区', '其他楼栋虚拟设备');
             """;
         command.ExecuteNonQuery();
-        TestScheduleSchema.Apply(connection);
         return path;
+    }
+
+    private static RecordingRealtimeSource CreateRealtimeSource()
+    {
+        return new RecordingRealtimeSource(
+        [
+            Realtime("virtual-in", "1号", 1, "1F A", "GQ-VIRTUAL-IN-KT", "开机"),
+            Realtime("virtual-out", "1号", 2, "2F B", "GQ-VIRTUAL-OUT-KT", "开机"),
+            Realtime("virtual-offline-in", "1号", 1, "1F A", "GQ-VIRTUAL-OFFLINE-IN-KT", "离线"),
+            Realtime("virtual-other-building", "2号", 1, "1F A", "GQ-VIRTUAL-OTHER-BUILDING-KT", "开机"),
+        ]);
+    }
+
+    private static RealtimeDetailRecord Realtime(
+        string devId,
+        string building,
+        double floor,
+        string subArea,
+        string name,
+        string communication)
+    {
+        var power = communication is "开机" or "关机" ? communication : string.Empty;
+        var cardSwitch = power == "开机" ? "ON" : power == "关机" ? "OFF" : string.Empty;
+        return new RealtimeDetailRecord(
+            RowId: "row-" + devId,
+            SourceFile: "test",
+            SourceUpdatedAt: DateTimeOffset.Parse("2026-08-22T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture),
+            Building: building,
+            Floor: floor,
+            SubArea: subArea,
+            PageName: "default",
+            Name: name,
+            DevId: devId,
+            MeterId: string.Empty,
+            RtuId: string.Empty,
+            FieldCount: 5,
+            RealtimeTagCount: 5,
+            RealtimeValidTagCount: 5,
+            DefaultLike: false,
+            Error: string.Empty,
+            CardComm: communication,
+            CardSwitch: cardSwitch,
+            CardIndicator: string.Empty,
+            Fields: new Dictionary<string, string>
+            {
+                ["当前开关机状态"] = power,
+                ["室内温度"] = "26",
+                ["设定温度"] = "24",
+                ["设定风速"] = "中",
+                ["系统模式设置"] = "制冷",
+            },
+            ValidFields: new Dictionary<string, bool>());
+    }
+
+    private sealed class RecordingRealtimeSource(IReadOnlyList<RealtimeDetailRecord> rows) : IRealtimeDetailSource
+    {
+        public List<IReadOnlyList<string>> RequestedBuildings { get; } = [];
+
+        public Task<RealtimeDetailSet> LoadAsync(
+            IReadOnlyList<string> buildings,
+            CancellationToken cancellationToken = default)
+        {
+            RequestedBuildings.Add(buildings.ToArray());
+            var requested = buildings.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            return Task.FromResult(new RealtimeDetailSet(
+                rows.Where(row => requested.Contains(row.Building)).ToArray()));
+        }
     }
 
     private static string ReadEntry(ZipArchive archive, string name)

@@ -14,13 +14,13 @@ public sealed class DataManagementUiContractTests
         Assert.DoesNotContain("运行状态", xaml);
         Assert.DoesNotContain("打开上次导出", xaml);
         Assert.Contains("筛选和 Excel 导出使用同一组条件", xaml);
-        Assert.Contains("Header=\"子区\"", xaml);
-        Assert.Contains("ItemsSource=\"{x:Bind ViewModel.SubAreaOptions, Mode=OneWay}\"", xaml);
-        Assert.Contains("SelectedItem=\"{x:Bind ViewModel.SelectedSubArea, Mode=TwoWay}\"", xaml);
+        Assert.DoesNotContain("Header=\"子区\"", xaml);
         Assert.DoesNotContain("Header=\"环境温度(℃)\"", xaml);
         Assert.DoesNotContain("Header=\"设置温度条件\"", xaml);
         Assert.DoesNotContain("Header=\"环境温度条件\"", xaml);
+        Assert.Contains("Header=\"区域组\"", xaml);
         Assert.Contains("Header=\"开关机状态\"", xaml);
+        Assert.Contains("ViewModel.AreaGroupOptions", xaml);
         Assert.Contains("Header=\"设置温度(℃)\"", xaml);
         Assert.Contains("Header=\"页面\"", xaml);
         Assert.Contains("位置定位", xaml);
@@ -36,6 +36,11 @@ public sealed class DataManagementUiContractTests
         Assert.Contains("ToolTipService.ToolTip=\"{Binding Name}\"", xaml);
         Assert.Contains("ToolTipService.ToolTip=\"{Binding PageName}\"", xaml);
         Assert.Contains("MinWidth=\"1620\"", xaml);
+
+        var codeBehind = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml.cs"));
+        Assert.Contains("new FileSavePicker", codeBehind);
+        Assert.Contains("PickSaveFileAsync", codeBehind);
+        Assert.Contains("ViewModel.ExportAsync(file.Path)", codeBehind);
     }
 
     [Fact]
@@ -45,10 +50,10 @@ public sealed class DataManagementUiContractTests
         var xamlPath = Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml");
         var xaml = File.ReadAllText(xamlPath);
 
+        Assert.True(IndexOf(xaml, "Header=\"区域组\"") < IndexOf(xaml, "Header=\"楼栋\""));
         Assert.True(IndexOf(xaml, "Header=\"楼栋\"") < IndexOf(xaml, "Header=\"座号\""));
         Assert.True(IndexOf(xaml, "Header=\"座号\"") < IndexOf(xaml, "Header=\"楼层\""));
-        Assert.True(IndexOf(xaml, "Header=\"楼层\"") < IndexOf(xaml, "Header=\"子区\""));
-        Assert.True(IndexOf(xaml, "Header=\"子区\"") < IndexOf(xaml, "Header=\"页面\""));
+        Assert.True(IndexOf(xaml, "Header=\"楼层\"") < IndexOf(xaml, "Header=\"页面\""));
         Assert.True(IndexOf(xaml, "Header=\"页面\"") < IndexOf(xaml, "Header=\"设备名\""));
         Assert.True(IndexOf(xaml, "Header=\"设备名\"") < IndexOf(xaml, "Header=\"区域\""));
         Assert.True(IndexOf(xaml, "Header=\"区域\"") < IndexOf(xaml, "Header=\"开关机状态\""));
@@ -56,42 +61,6 @@ public sealed class DataManagementUiContractTests
         Assert.True(IndexOf(xaml, "Header=\"模式\"") < IndexOf(xaml, "Header=\"风速\""));
         Assert.True(IndexOf(xaml, "Header=\"风速\"") < IndexOf(xaml, "Header=\"设置温度(℃)\""));
         Assert.True(IndexOf(xaml, "Header=\"设置温度(℃)\"") < IndexOf(xaml, "Header=\"集控锁定状态\""));
-    }
-
-    [Fact]
-    public void DataPageProvidesQuickFiltersRetryableErrorsAndDeviceDetails()
-    {
-        var root = LocateRepositoryRoot();
-        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml"));
-        var codeBehind = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml.cs"));
-
-        Assert.Contains("ItemsSource=\"{x:Bind ViewModel.QuickFilters, Mode=OneWay}\"", xaml);
-        Assert.Contains("Click=\"QuickFilter_Click\"", xaml);
-        Assert.Contains("<ToggleButton", xaml);
-        Assert.Contains("IsChecked=\"{Binding IsActive, Mode=OneWay}\"", xaml);
-        Assert.Contains("Text=\"{x:Bind ViewModel.ActiveFilterSummary, Mode=OneWay}\"", xaml);
-        Assert.Contains("MaxLines=\"3\"", xaml);
-        Assert.Contains("TextWrapping=\"WrapWholeWords\"", xaml);
-        Assert.Contains("Text=\"{x:Bind ViewModel.ExportPreviewText, Mode=OneWay}\"", xaml);
-        Assert.Contains("Text=\"{x:Bind ViewModel.DataStateText, Mode=OneWay}\"", xaml);
-        Assert.Contains("Visibility=\"{x:Bind ViewModel.LoadErrorVisibility, Mode=OneWay}\"", xaml);
-        Assert.Contains("Visibility=\"{x:Bind ViewModel.ResultListVisibility, Mode=OneWay}\"", xaml);
-        Assert.Contains("Click=\"RetryLoad_Click\"", xaml);
-        Assert.Contains("<Expander", xaml);
-        Assert.Contains("Header=\"更多筛选\"", xaml);
-        Assert.Contains("IsExpanded=\"False\"", xaml);
-        Assert.Contains("Width=\"360\"", xaml);
-        Assert.Contains("Text=\"设备详情\"", xaml);
-        Assert.Contains("Text=\"基础信息\"", xaml);
-        Assert.Contains("Text=\"采集值\"", xaml);
-        Assert.Contains("Text=\"实时值\"", xaml);
-        Assert.Contains("Text=\"质量与审计\"", xaml);
-        Assert.Contains("ViewModel.SelectedDevice.IssueSummary", xaml);
-        Assert.DoesNotContain("ViewModel.SelectedDevice.WatchSummary", xaml);
-        Assert.DoesNotContain("关注设备", xaml);
-        Assert.Contains("ApplyQuickFilterAsync", codeBehind);
-        Assert.Contains("ViewModel.RefreshAsync", codeBehind);
-        Assert.Contains("public Visibility ResultListVisibility", File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs")));
     }
 
     [Fact]
@@ -111,6 +80,42 @@ public sealed class DataManagementUiContractTests
     }
 
     [Fact]
+    public void DataManagementExposesVisibleAreaGroupFilterAndNavigationScope()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml"));
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs"));
+        var navigation = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Services", "INavigationService.cs"));
+
+        Assert.Contains("Header=\"区域组\"", xaml);
+        Assert.Contains("ViewModel.AreaGroupOptions", xaml);
+        Assert.Contains("ViewModel.SelectedAreaGroup", xaml);
+        Assert.Contains("IAreaGroupRepository areaGroupRepository", viewModel);
+        Assert.Contains("DataFilterOption.All(\"全部区域组\")", viewModel);
+        Assert.Contains("SelectAreaGroupOption(request.AreaGroupId.Value", viewModel);
+        Assert.Contains("SelectedAreaGroup = AreaGroupOptions.FirstOrDefault()", viewModel);
+        Assert.Contains("long? AreaGroupId = null", navigation);
+    }
+
+    [Fact]
+    public void AreaGroupNavigationScopesFilterOptionsBeforeLoadingThem()
+    {
+        var root = LocateRepositoryRoot();
+        var viewModelPath = Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs");
+        var source = File.ReadAllText(viewModelPath);
+        var initialize = source[
+            source.IndexOf("public async Task InitializeAsync", StringComparison.Ordinal)..source.IndexOf("public async Task RefreshAsync", StringComparison.Ordinal)];
+        var replaceAreaGroups = source[
+            source.IndexOf("private static void ReplaceAreaGroupOptions", StringComparison.Ordinal)..];
+
+        Assert.True(
+            initialize.IndexOf("ApplyNavigationRequest(navigationRequest)", StringComparison.Ordinal) <
+            initialize.IndexOf("ReloadFilterOptionsAsync(cancellationToken)", StringComparison.Ordinal));
+        Assert.DoesNotContain("group.Total", replaceAreaGroups);
+        Assert.Contains("group.Name,\n                -1", replaceAreaGroups.Replace("\r\n", "\n", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void DataViewModelBuildQueryIncludesAllDataManagementFields()
     {
         var root = LocateRepositoryRoot();
@@ -120,11 +125,10 @@ public sealed class DataManagementUiContractTests
             source.IndexOf("private DeviceQuery BuildQuery", StringComparison.Ordinal)..];
 
         Assert.Contains("BuildQuery(limit: PageSize", source);
-        Assert.Contains("var exportQuery = _querySession.SuccessfulQuery! with", source);
+        Assert.Contains("BuildQuery(limit: ExportLimit", source);
         Assert.Contains("Building: EmptyToNull(SelectedBuilding?.Value)", buildQuery);
         Assert.Contains("CommunicationState: EmptyToNull(SelectedCommunication?.Value)", buildQuery);
         Assert.Contains("Floor: EmptyToNull(SelectedFloor?.Value)", buildQuery);
-        Assert.Contains("SubArea: EmptyToNull(SelectedSubArea?.Value)", buildQuery);
         Assert.Contains("DeviceName: EmptyToNull(DeviceNameText)", buildQuery);
         Assert.Contains("Zuo: CanFilterByZuo ? EmptyToNull(SelectedZuo?.Value) : null", buildQuery);
         Assert.Contains("PageName: EmptyToNull(SelectedPageName?.Value)", buildQuery);
@@ -132,11 +136,11 @@ public sealed class DataManagementUiContractTests
         Assert.Contains("Fan: EmptyToNull(SelectedFan?.Value)", buildQuery);
         Assert.Contains("SetTemperature: EmptyToNull(SelectedSetTemperature?.Value)", buildQuery);
         Assert.Contains("RealtimeLock: EmptyToNull(SelectedRealtimeLock?.Value)", buildQuery);
+        Assert.Contains("MonitorGroupIds: EmptyToNull(SelectedAreaGroup?.Value)", buildQuery);
         Assert.Contains("AreaType: EmptyToNull(SelectedArea?.Value)", buildQuery);
-        Assert.Contains("QuickFilter: EmptyToNull(_activeQuickFilter)", buildQuery);
         Assert.Contains("Limit: limit", buildQuery);
         Assert.Contains("Offset: offset", buildQuery);
-        Assert.Contains("RunId: DataContext.RunId", buildQuery);
+        Assert.Contains("RunId: null", buildQuery);
     }
 
     [Fact]
@@ -153,156 +157,26 @@ public sealed class DataManagementUiContractTests
     }
 
     [Fact]
-    public void DataViewModelKeepsLastSuccessfulRowsAndRejectsStaleResponses()
-    {
-        var root = LocateRepositoryRoot();
-        var viewModelPath = Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs");
-        var source = File.ReadAllText(viewModelPath);
-
-        Assert.Contains("DeviceDataQuerySession _querySession", source);
-        Assert.Contains("_querySession.Begin(query)", source);
-        Assert.Contains("_querySession.TryAccept(request, result)", source);
-        Assert.Contains("public bool HasLoadError", source);
-        Assert.Contains("public string LoadErrorText", source);
-        Assert.Contains("public bool HasStaleResults", source);
-        Assert.Contains("public string ActiveFilterSummary", source);
-        Assert.Contains("public async Task ApplyQuickFilterAsync", source);
-        Assert.Contains("QuickFilter: EmptyToNull(_activeQuickFilter)", source);
-
-        var refresh = source[
-            source.IndexOf("public async Task RefreshAsync", StringComparison.Ordinal)..source.IndexOf("private async Task ReloadFilterOptionsAsync", StringComparison.Ordinal)];
-        Assert.DoesNotContain("Devices.Clear()", refresh);
-
-        var loadPage = source[
-            source.IndexOf("private async Task LoadPageAsync", StringComparison.Ordinal)..source.IndexOf("private async Task LoadPageCoreAsync", StringComparison.Ordinal)];
-        Assert.DoesNotContain("Devices.Clear()", loadPage);
-    }
-
-    [Fact]
-    public void DataExportReusesTheSuccessfulQueryAndConfirmsThePreviewCount()
-    {
-        var root = LocateRepositoryRoot();
-        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs"));
-        var codeBehind = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml.cs"));
-        var exportMethod = viewModel[
-            viewModel.IndexOf("public async Task ExportAsync", StringComparison.Ordinal)..viewModel.IndexOf("public void OpenExportLocation", StringComparison.Ordinal)];
-
-        Assert.Contains("var exportQuery = _querySession.SuccessfulQuery! with", exportMethod);
-        Assert.Contains("Limit = ExportLimit", exportMethod);
-        Assert.Contains("Offset = 0", exportMethod);
-        Assert.DoesNotContain("BuildQuery(", exportMethod);
-        Assert.DoesNotContain("LoadPageCoreAsync", exportMethod);
-        Assert.Contains("result.RowCount != _querySession.SuccessfulTotal", exportMethod);
-        Assert.Contains("ContentDialog", codeBehind);
-        Assert.Contains("ViewModel.ExportPreviewText", codeBehind);
-    }
-
-    [Fact]
     public void DataPageCascadesBuildingAndFloorSelections()
     {
         var root = LocateRepositoryRoot();
         var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml"));
-        var codeBehind = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml.cs"));
         var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs"));
 
         Assert.Contains("SelectionChanged=\"BuildingFilter_SelectionChanged\"", xaml);
         Assert.Contains("SelectionChanged=\"FloorFilter_SelectionChanged\"", xaml);
-        Assert.Contains("SelectionChanged=\"SubAreaFilter_SelectionChanged\"", xaml);
-        Assert.Contains("await ViewModel.ApplySubAreaSelectionAsync()", codeBehind);
 
         var buildingSelection = viewModel[
             viewModel.IndexOf("public async Task ApplyBuildingSelectionAsync", StringComparison.Ordinal)..viewModel.IndexOf("public async Task ApplyFloorSelectionAsync", StringComparison.Ordinal)];
         Assert.Contains("SelectedZuo = ZuoOptions.FirstOrDefault()", buildingSelection);
         Assert.Contains("SelectedFloor = FloorOptions.FirstOrDefault()", buildingSelection);
-        Assert.Contains("SelectedSubArea = SubAreaOptions.FirstOrDefault()", buildingSelection);
         Assert.Contains("SelectedPageName = PageNameOptions.FirstOrDefault()", buildingSelection);
         Assert.Contains("ApplyFiltersAsync(cancellationToken)", buildingSelection);
 
         var floorSelection = viewModel[
             viewModel.IndexOf("public async Task ApplyFloorSelectionAsync", StringComparison.Ordinal)..viewModel.IndexOf("public async Task MovePreviousAsync", StringComparison.Ordinal)];
-        Assert.Contains("SelectedSubArea = SubAreaOptions.FirstOrDefault()", floorSelection);
         Assert.Contains("SelectedPageName = PageNameOptions.FirstOrDefault()", floorSelection);
         Assert.Contains("ApplyFiltersAsync(cancellationToken)", floorSelection);
-
-        var subAreaSelection = viewModel[
-            viewModel.IndexOf("public async Task ApplySubAreaSelectionAsync", StringComparison.Ordinal)..viewModel.IndexOf("public async Task MovePreviousAsync", StringComparison.Ordinal)];
-        Assert.Contains("DeviceNavigationFilterPolicy.ApplySubAreaSelection", subAreaSelection);
-        Assert.True(IndexOf(subAreaSelection, "SelectedPageName =") < IndexOf(subAreaSelection, "ApplyFiltersAsync(cancellationToken)"));
-    }
-
-    [Fact]
-    public void NavigationPolicyPreservesRequestedScopeWhenOnlyStaleOptionsExist()
-    {
-        var staleBuildings = new[] { new EmsScout.Application.Devices.DeviceFilterOption("1号", "1号", 1) };
-        var staleFloors = new[] { new EmsScout.Application.Devices.DeviceFilterOption("1F", "1F", 1) };
-        var staleSubAreas = new[] { new EmsScout.Application.Devices.DeviceFilterOption("1F A", "1F A", 1) };
-        var stalePages = new[] { new EmsScout.Application.Devices.DeviceFilterOption("一页", "一页", 1) };
-        var requested = new EmsScout.Application.Devices.DeviceQuery(
-            Building: "2号",
-            Floor: "2F",
-            SubArea: "2F B",
-            PageName: "二页",
-            DeviceName: "同名设备");
-        var policyType = typeof(EmsScout.Application.Devices.DeviceQuery).Assembly.GetType(
-            "EmsScout.Application.Devices.DeviceNavigationFilterPolicy");
-
-        Assert.NotNull(policyType);
-        var resolve = policyType.GetMethod("ResolveNavigation", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-        Assert.NotNull(resolve);
-        var resolved = Assert.IsType<EmsScout.Application.Devices.DeviceQuery>(resolve.Invoke(
-            null,
-            [requested, staleBuildings, staleFloors, staleSubAreas, stalePages]));
-
-        Assert.Equal("2号", resolved.Building);
-        Assert.Equal("2F", resolved.Floor);
-        Assert.Equal("2F B", resolved.SubArea);
-        Assert.Equal("二页", resolved.PageName);
-        Assert.Equal("同名设备", resolved.DeviceName);
-    }
-
-    [Fact]
-    public void SubAreaChangeClearsPageBeforeTheNextQuery()
-    {
-        var current = new EmsScout.Application.Devices.DeviceQuery(
-            Building: "1号",
-            Floor: "1F",
-            SubArea: "1F A",
-            PageName: "一页",
-            DeviceName: "同名设备");
-        var policyType = typeof(EmsScout.Application.Devices.DeviceQuery).Assembly.GetType(
-            "EmsScout.Application.Devices.DeviceNavigationFilterPolicy");
-
-        Assert.NotNull(policyType);
-        var apply = policyType.GetMethod("ApplySubAreaSelection", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-        Assert.NotNull(apply);
-        var nextQuery = Assert.IsType<EmsScout.Application.Devices.DeviceQuery>(apply.Invoke(null, [current, "2F B"]));
-
-        Assert.Equal("1号", nextQuery.Building);
-        Assert.Equal("1F", nextQuery.Floor);
-        Assert.Equal("2F B", nextQuery.SubArea);
-        Assert.Null(nextQuery.PageName);
-        Assert.Equal("同名设备", nextQuery.DeviceName);
-    }
-
-    [Fact]
-    public void DataViewModelRefreshesScopedOptionsAfterApplyingExactNavigation()
-    {
-        var root = LocateRepositoryRoot();
-        var source = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs"));
-        var initialize = source[
-            source.IndexOf("public async Task InitializeAsync", StringComparison.Ordinal)..source.IndexOf("public async Task RefreshAsync", StringComparison.Ordinal)];
-        var applyNavigation = IndexOf(initialize, "ApplyNavigationRequest(navigationRequest)");
-        var scopedReload = initialize.IndexOf("await ReloadFilterOptionsAsync(cancellationToken)", applyNavigation, StringComparison.Ordinal);
-        var restoreIdentity = initialize.IndexOf("ApplyNavigationIdentity(navigationRequest)", scopedReload, StringComparison.Ordinal);
-        var loadPage = initialize.IndexOf("await LoadPageAsync(cancellationToken)", applyNavigation, StringComparison.Ordinal);
-
-        Assert.Contains("DeviceNavigationFilterPolicy.ResolveNavigation", source);
-        Assert.Contains("AddNavigationOption", source);
-        Assert.Contains("DeviceUid: EmptyToNull(_navigationDeviceUid)", source);
-        Assert.Contains("CardId: _navigationCardId", source);
-        Assert.True(scopedReload > applyNavigation, "Navigation must refresh scoped options after exact values are selected.");
-        Assert.True(restoreIdentity > scopedReload, "Navigation identity must survive the scoped option refresh.");
-        Assert.True(loadPage > scopedReload, "Scoped options must refresh before loading navigation results.");
     }
 
     [Fact]
@@ -318,54 +192,11 @@ public sealed class DataManagementUiContractTests
         Assert.Contains("new DataFilterOption(selectedValue, selectedValue, 0)", replaceOptions);
         Assert.Contains("ReplaceOptions(BuildingOptions", source);
         Assert.Contains("selectedBuilding", source);
-        Assert.Contains("ReplaceOptions(SubAreaOptions", source);
-        Assert.Contains("selectedSubArea", source);
         Assert.Contains("RealtimeLockOptions", source);
         Assert.Contains("selectedRealtimeLock", source);
-    }
-
-    [Fact]
-    public void DataViewModelPopulatesResetsAndSummarizesExactSubAreaFilter()
-    {
-        var root = LocateRepositoryRoot();
-        var viewModelPath = Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs");
-        var source = File.ReadAllText(viewModelPath);
-
-        Assert.Contains("public ObservableCollection<DataFilterOption> SubAreaOptions", source);
-        Assert.Contains("public DataFilterOption? SelectedSubArea", source);
-        Assert.Contains("DataFilterOption.All(\"全部子区\"), options.SubAreas.Select(DataFilterOption.From), selectedSubArea", source);
-
-        var reset = source[
-            source.IndexOf("public async Task ResetFiltersAsync", StringComparison.Ordinal)..source.IndexOf("public async Task ExportAsync", StringComparison.Ordinal)];
-        Assert.Contains("SelectedSubArea = SubAreaOptions.FirstOrDefault()", reset);
-
-        var summary = source[
-            source.IndexOf("private static string FormatActiveFilters", StringComparison.Ordinal)..source.IndexOf("private static void AddFilter", StringComparison.Ordinal)];
-        Assert.Contains("AddFilter(filters, \"子区\", query.SubArea)", summary);
-
-        var addFilter = source[
-            source.IndexOf("private static void AddFilter", StringComparison.Ordinal)..source.IndexOf("private static bool QueryScopesEqual", StringComparison.Ordinal)];
-        Assert.Contains("NonBreakingLabel(label)", addFilter);
-        Assert.Contains("NonBreakingLabel(string label) => string.Join('\\u2060', label.ToCharArray())", addFilter);
-    }
-
-    [Fact]
-    public void QuerySpecificationFiltersSameNamedDevicesByExactSubAreaAndClearsToAll()
-    {
-        var first = DeviceWithRealtimeLock("") with { Id = 1, Name = "同名设备", SubArea = "1F A" };
-        var second = DeviceWithRealtimeLock("") with { Id = 2, Name = "同名设备", SubArea = "1F B" };
-        var rows = new[] { first, second };
-
-        var scoped = rows.Where(row => EmsScout.Application.Devices.DeviceQuerySpecification.MatchesResult(
-            row,
-            new EmsScout.Application.Devices.DeviceQuery(DeviceName: "同名设备", SubArea: "1F A"))).ToArray();
-        var cleared = rows.Where(row => EmsScout.Application.Devices.DeviceQuerySpecification.MatchesResult(
-            row,
-            new EmsScout.Application.Devices.DeviceQuery(DeviceName: "同名设备"))).ToArray();
-
-        Assert.Single(scoped);
-        Assert.Equal("1F A", scoped[0].SubArea);
-        Assert.Equal(2, cleared.Length);
+        Assert.Contains("ReplaceAreaGroupOptions", source);
+        Assert.Contains("区域组 {selectedValue}（不可用）", source);
+        Assert.Contains("SelectedAreaGroup = SelectAreaGroupOption(selectedAreaGroup)", source);
     }
 
     [Fact]
@@ -441,17 +272,28 @@ public sealed class DataManagementUiContractTests
     }
 
     [Fact]
-    public void DeviceRecordDerivesUnambiguousOperatingStatusFromCommunicationAndSwitch()
+    public void DeviceRecordRejectsInvalidOrOlderRealtimeLockValues()
     {
-        var record = DeviceWithRealtimeLock("");
+        var collectedAt = DateTimeOffset.Parse("2026-07-12T02:00:00Z");
+        var validCurrent = DeviceWithRealtimeLock("开启") with
+        {
+            CollectedAt = collectedAt,
+            Realtime = Realtime("开启", collectedAt.AddMinutes(1), valid: true),
+        };
+        var invalid = validCurrent with
+        {
+            Realtime = Realtime("关闭", collectedAt.AddMinutes(1), valid: false),
+        };
+        var stale = validCurrent with
+        {
+            Realtime = Realtime("关闭", collectedAt.AddDays(-1), valid: true),
+        };
 
-        Assert.Equal("开机", (record with { CommunicationText = "在线", SwitchState = "ON" }).OperatingStatusText);
-        Assert.Equal("关机", (record with { CommunicationText = "在线", SwitchState = "OFF" }).OperatingStatusText);
-        Assert.Equal("离线", (record with { CommunicationText = "离线", SwitchState = "ON" }).OperatingStatusText);
-        Assert.Equal("未知", (record with { CommunicationText = "在线", SwitchState = "-" }).OperatingStatusText);
-        Assert.True(EmsScout.Application.Devices.DeviceQuerySpecification.MatchesResult(
-            record with { CommunicationText = "在线", SwitchState = "ON" },
-            new EmsScout.Application.Devices.DeviceQuery(CommunicationState: "开机")));
+        Assert.Equal("开启", validCurrent.RealtimeLockText);
+        Assert.Equal("未知", invalid.RealtimeLockText);
+        Assert.Equal("未知", stale.RealtimeLockText);
+        Assert.False(invalid.RealtimeLocked);
+        Assert.False(stale.RealtimeLocked);
     }
 
     [Fact]
@@ -507,12 +349,15 @@ public sealed class DataManagementUiContractTests
             Realtime: realtimeLock is null ? null : Realtime(realtimeLock));
     }
 
-    private static EmsScout.Application.Devices.RealtimeDetailRecord Realtime(string lockState)
+    private static EmsScout.Application.Devices.RealtimeDetailRecord Realtime(
+        string lockState,
+        DateTimeOffset? sourceUpdatedAt = null,
+        bool valid = true)
     {
         return new EmsScout.Application.Devices.RealtimeDetailRecord(
             RowId: "rt-1",
             SourceFile: "test",
-            SourceUpdatedAt: DateTimeOffset.UnixEpoch,
+            SourceUpdatedAt: sourceUpdatedAt ?? DateTimeOffset.UnixEpoch,
             Building: "1号",
             Floor: 1,
             SubArea: "1F A",
@@ -535,7 +380,7 @@ public sealed class DataManagementUiContractTests
             },
             ValidFields: new Dictionary<string, bool>
             {
-                ["集控锁定"] = true,
+                ["集控锁定"] = valid,
             });
     }
 

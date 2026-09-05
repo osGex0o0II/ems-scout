@@ -1,4 +1,4 @@
-# AGENTS.md — EMS Scout 项目上下文
+# AGENTS.md — EMS 空调枚举项目上下文
 
 ## 项目目标
 遍历 6 栋楼全部空调卡片 → SQLite → 数据管理筛选 Excel 导出，区分 开机/关机/离线
@@ -8,13 +8,10 @@
 | 文件 | 用途 |
 |------|------|
 | `src/enumerate.js` | 主枚举器（Playwright + Edge CDP），2083 行 |
-| `src/collect.js` | 一键编排器 + TUI 菜单 |
 | `src/verify-live.js` | 实时浏览器状态验证工具 |
-| `scripts/report.js` | legacy 多格式报表脚本，默认禁用，当前不作为主流程入口 |
+| `src/data-history.js` | SQLite 历史批次读写，供导入和质量审计使用 |
 | `scripts/import.js` | JSON→SQLite 导入（Node.js + better-sqlite3） |
 | `scripts/field-e2e.ps1` | 真实 EMS 现场端到端验证脚本；只写 `out/field-e2e-*` 临时目录 |
-| `scripts/dump-aircons.js` | legacy Excel 明细脚本，默认禁用，当前不作为主流程入口 |
-| `scripts/dump-public.js` | legacy TXT 公区 ON 清单脚本，默认禁用，当前不作为主流程入口 |
 | `native/tools/EmsScout.ExportSmoke/` | 数据管理 Excel 导出烟测 CLI |
 | `scripts/schema.sql` | SQLite 建表语句 |
 | `out/ac.db` | SQLite 数据库 |
@@ -23,8 +20,6 @@
 | `data/2号楼/` | 2号楼当前数据归档 |
 | `CHANGELOG.md` | 修改记录 |
 | `.context-summary.md` | 上下文快照（每次会话更新） |
-| `docs/项目规范.md` | 命名、架构、数据安全、代码、测试和 Git 规范 |
-| `docs/Windows验证清单.md` | 新 Windows 设备的拉取、构建、打包和现场验收顺序 |
 
 ## 运行命令
 
@@ -53,14 +48,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/field-e2e.ps1 -Build
 ## 架构速记
 
 ```
-collect.js
-  └── enumerate.js → enum_full_v5.json → import.js → ac.db → 数据管理页 → Excel
-                      (2-10 min per bldg)            (5s)      筛选后手动导出
+Native 采集任务
+  └── enumerate.js → enum_full_v5.json → import.js → ac.db → Native 数据管理页 → Excel
+                      (2-10 min per bldg)            (5s)       筛选后导出
   └── quality-report.js → 质量审计
 ```
 
 当前唯一面向用户的导出方式：原生应用 `数据管理 -> 导出当前筛选 Excel`。
-旧 `report.js` / `dump-aircons.js` / `dump-public.js` 默认禁用，仅允许显式设置 `EMS_ENABLE_LEGACY_REPORTS=1` 的应急 legacy 运行。
+Excel 当前契约：`全部设备` + 按楼号子表，13 列；页面统一为 `第N页`，裙楼/塔楼写入座号列，无座号显示 `-`，末列为采集时间。
+旧 Web、Electron、TUI 和多格式报表入口已移除，不属于当前产品。
 
 现场 E2E 不变量：
 - `scripts/field-e2e.ps1` 必须使用唯一 `out/field-e2e-*` 目录。
@@ -165,6 +161,7 @@ switch=ON 设备 1529 台（公区 121 + 非公区 1408）
 
 > **2026-06-17 注**：5号 286 为旧基线恢复（6号 A座 BM 跳过写在 `bldg.building === '6号'` 条件内，不波及 5号）
 > **2026-06-17 18:10 注**：2号 110 旧口径包含 2.5F 同页重复的 3 张 GQ 卡；代码基准改为唯一卡数 **107**，旧 DB 未重导入前会保留 110 并由质量报告标记重复。
+> **2026-07-20 注**：采集器现保留同页重名但位置独立的卡片，并标记为 `原名#1/#2`；2号未来新口径为实际渲染卡数 **110**。当前旧 DB/JSON 仍为唯一卡数 107，须下一次枚举并导入后更新。
 
 ## 实测页面响应时间（2026-06-10 基准）
 
@@ -195,7 +192,7 @@ switch=ON 设备 1529 台（公区 121 + 非公区 1408）
 | D/E | 1120 | 1120 | 保持 |
 | E/F | **1400** | **1424** | 原值偏左 24px |
 
-修正文件：`enumerate.js`、`dump-aircons.js`、`dump-public.js`
+修正文件：`enumerate.js`
 
 ## 卡片数据质量修正（2026-06-08）
 问题：部分卡片 indoor/setTemp 值错误（indoor=小整数如1-4，与 setTemp 互换）

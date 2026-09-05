@@ -4,17 +4,7 @@ using EmsScout.Application.Devices;
 using EmsScout.Infrastructure.Sqlite;
 using EmsScout.Infrastructure.Realtime;
 
-ExportSmokeOptions options;
-try
-{
-    options = ExportSmokeOptions.Parse(args);
-}
-catch (ArgumentException ex)
-{
-    Console.Error.WriteLine("ERROR: " + ex.Message);
-    ExportSmokeOptions.PrintHelp();
-    return 2;
-}
+var options = ExportSmokeOptions.Parse(args);
 if (options.ShowHelp)
 {
     ExportSmokeOptions.PrintHelp();
@@ -33,39 +23,39 @@ if (string.IsNullOrWhiteSpace(options.OutputDirectory))
     return 2;
 }
 
+var dbPath = Path.GetFullPath(options.DatabasePath);
+var outputDirectory = Path.GetFullPath(options.OutputDirectory);
+var workspaceRoot = Path.GetFullPath(options.WorkspaceRoot ?? LocateWorkspaceRoot());
+var realtimeDirectory = Path.GetFullPath(options.RealtimeDirectory ?? Path.GetDirectoryName(dbPath) ?? workspaceRoot);
+
+if (!File.Exists(dbPath))
+{
+    Console.Error.WriteLine("ERROR: database not found: " + dbPath);
+    return 2;
+}
+
+Directory.CreateDirectory(outputDirectory);
+var realtime = new RealtimeLatestJsonSource(workspaceRoot, realtimeDirectory);
+var repository = new SqliteDeviceReadRepository(() => dbPath, realtime);
+var service = new SqliteDeviceExportService(repository);
+var query = new DeviceQuery(
+    Building: options.Building,
+    CommunicationState: options.CommunicationState,
+    Floor: options.Floor,
+    SubArea: options.SubArea,
+    DeviceName: options.DeviceName,
+    Zuo: options.Zuo,
+    RealtimeLock: options.RealtimeLock,
+    AreaType: options.AreaType,
+    Mode: options.Mode,
+    Fan: options.Fan,
+    SetTemperature: options.SetTemperature,
+    IndoorTemperature: options.IndoorTemperature);
+
 try
 {
-    var dbPath = Path.GetFullPath(options.DatabasePath);
-    var outputDirectory = Path.GetFullPath(options.OutputDirectory);
-    var workspaceRoot = Path.GetFullPath(options.WorkspaceRoot ?? LocateWorkspaceRoot());
-    var realtimeDirectory = Path.GetFullPath(options.RealtimeDirectory ?? Path.GetDirectoryName(dbPath) ?? workspaceRoot);
-
-    if (!File.Exists(dbPath))
-    {
-        Console.Error.WriteLine("ERROR: database not found: " + dbPath);
-        return 2;
-    }
-
-    Directory.CreateDirectory(outputDirectory);
-    var realtime = new RealtimeLatestJsonSource(workspaceRoot, realtimeDirectory);
-    var repository = new SqliteDeviceReadRepository(() => dbPath, realtime);
-    var service = new SqliteDeviceExportService(repository);
-    var query = new DeviceQuery(
-        Building: options.Building,
-        CommunicationState: options.CommunicationState,
-        Floor: options.Floor,
-        SubArea: options.SubArea,
-        DeviceName: options.DeviceName,
-        Zuo: options.Zuo,
-        RealtimeLock: options.RealtimeLock,
-        AreaType: options.AreaType,
-        Mode: options.Mode,
-        Fan: options.Fan,
-        SetTemperature: options.SetTemperature,
-        IndoorTemperature: options.IndoorTemperature);
-
     var result = await service.ExportAsync(query, outputDirectory);
-    ValidateWorkbook(result.Path, result.RowCount, options.AllowEmpty);
+    ValidateWorkbook(result.Path, result.RowCount, result.Sheets, options.AllowEmpty);
     Console.WriteLine("EXPORT_OK");
     Console.WriteLine("path=" + result.Path);
     Console.WriteLine("rows=" + result.RowCount);
@@ -80,7 +70,7 @@ catch (Exception ex)
     return 1;
 }
 
-static void ValidateWorkbook(string path, int rowCount, bool allowEmpty)
+static void ValidateWorkbook(string path, int rowCount, IReadOnlyList<string> sheetNames, bool allowEmpty)
 {
     string[] expectedHeader =
     [
@@ -96,6 +86,7 @@ static void ValidateWorkbook(string path, int rowCount, bool allowEmpty)
         "设置温度",
         "环境温度",
         "集控锁定状态",
+        "采集时间",
     ];
 
     if (!File.Exists(path))
@@ -111,12 +102,22 @@ static void ValidateWorkbook(string path, int rowCount, bool allowEmpty)
     using var archive = ZipFile.OpenRead(path);
     RequireEntry(archive, "[Content_Types].xml");
     RequireEntry(archive, "xl/workbook.xml");
-    RequireEntry(archive, "xl/worksheets/sheet1.xml");
-    RejectEntry(archive, "xl/worksheets/sheet2.xml");
-    var workbook = ReadEntry(archive, "xl/workbook.xml");
-    if (!workbook.Contains("name=\"devices\"", StringComparison.Ordinal))
+    for (var index = 0; index < sheetNames.Count; index++)
     {
-        throw new InvalidOperationException("Workbook is missing the expected devices sheet.");
+        RequireEntry(archive, $"xl/worksheets/sheet{index + 1}.xml");
+    }
+    RejectEntry(archive, $"xl/worksheets/sheet{sheetNames.Count + 1}.xml");
+    var workbook = ReadEntry(archive, "xl/workbook.xml");
+    if (sheetNames.Count == 0 || sheetNames[0] != "全部设备")
+    {
+        throw new InvalidOperationException("Workbook is missing the expected all-devices sheet.");
+    }
+    foreach (var sheetName in sheetNames)
+    {
+        if (!workbook.Contains($"name=\"{sheetName}\"", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Workbook is missing worksheet: " + sheetName);
+        }
     }
 
     if (workbook.Contains("name=\"summary\"", StringComparison.Ordinal) ||
@@ -133,12 +134,19 @@ static void ValidateWorkbook(string path, int rowCount, bool allowEmpty)
 
     if (!rows[0].SequenceEqual(expectedHeader, StringComparer.Ordinal))
     {
-        throw new InvalidOperationException("Workbook header does not match the Data Management 12-column export contract.");
+        throw new InvalidOperationException("Workbook header does not match the Data Management 13-column export contract.");
     }
 
     if (rows.Any(row => row.Count != expectedHeader.Length))
     {
-        throw new InvalidOperationException("Workbook contains rows that do not match the 12-column export contract.");
+        throw new InvalidOperationException("Workbook contains rows that do not match the 13-column export contract.");
+    }
+    var firstSheet = ReadEntry(archive, "xl/worksheets/sheet1.xml");
+    if (!firstSheet.Contains("state=\"frozen\"", StringComparison.Ordinal) ||
+        !firstSheet.Contains("<autoFilter", StringComparison.Ordinal) ||
+        !firstSheet.Contains("<cols>", StringComparison.Ordinal))
+    {
+        throw new InvalidOperationException("Workbook is missing frozen header, filter, or column widths.");
     }
 }
 

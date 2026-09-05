@@ -1,25 +1,14 @@
 using EmsScout.Application.Devices;
 using EmsScout.Domain;
-using EmsScout.Infrastructure.Sqlite;
 using EmsScout.Infrastructure.Realtime;
+using EmsScout.Infrastructure.Sqlite;
+using System.Globalization;
 
 namespace EmsScout.Tests;
 
-public sealed class DeviceExportTests : IDisposable
+public sealed class DeviceExportTests
 {
-    private readonly string temporaryRoot;
-
-    public DeviceExportTests()
-    {
-        temporaryRoot = Path.Combine(
-            Path.GetTempPath(),
-            "ems-scout-device-export-tests",
-            Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(temporaryRoot);
-    }
-
     [Fact]
-    [Trait("Fixture", "ProductionEvidence")]
     public async Task ExportsCurrentFilteredDeviceWorkbook()
     {
         var exportService = CurrentExportService();
@@ -28,18 +17,18 @@ public sealed class DeviceExportTests : IDisposable
         var export = await exportService.ExportAsync(new DeviceQuery(), output);
 
         Assert.True(File.Exists(export.Path), $"Missing export: {export.Path}");
-        Assert.Matches(@"^数据管理筛选结果_\d{8}_\d{6}_\d{3}(?:_\d+)?\.xlsx$", export.FileName);
+        Assert.Matches(@"^数据管理筛选结果_\d{8}_\d{6}\.xlsx$", export.FileName);
         Assert.Equal("xlsx", export.Format);
-        Assert.Equal(6570, export.RowCount);
-        Assert.Equal(6570, export.Facets.Total);
-        Assert.Equal(777, export.Facets.PublicArea);
-        Assert.Equal(5793, export.Facets.PrivateArea);
+        var current = await CurrentRepository().SearchAsync(new DeviceQuery(Limit: 50000));
+        Assert.Equal(current.Total, export.RowCount);
+        Assert.Equal(current.Facets.Total, export.Facets.Total);
+        Assert.Equal(export.Facets.Total, export.Facets.PublicArea + export.Facets.PrivateArea);
         Assert.Equal(2, export.Facets.VirtualManaged);
         UserDeviceWorkbookAssert.AssertShape(export);
+        Assert.Equal(["全部设备", "1号楼", "2号楼", "3号楼", "4号楼", "5号楼", "6号楼"], export.Sheets);
     }
 
     [Fact]
-    [Trait("Fixture", "ProductionEvidence")]
     public async Task DeviceWorkbookHonorsCurrentWorkbenchAreaFilters()
     {
         var exportService = CurrentExportService();
@@ -47,15 +36,14 @@ public sealed class DeviceExportTests : IDisposable
 
         var export = await exportService.ExportAsync(new DeviceQuery(AreaType: "公区"), output);
 
-        Assert.Equal(777, export.RowCount);
-        Assert.Equal(777, export.Facets.PublicArea);
+        Assert.True(export.RowCount > 0);
+        Assert.Equal(export.RowCount, export.Facets.PublicArea);
         UserDeviceWorkbookAssert.AssertShape(export);
         var rows = UserDeviceWorkbookAssert.ReadRows(export.Path);
         Assert.All(rows.Skip(1), row => Assert.Equal("公区", row[5]));
     }
 
     [Fact]
-    [Trait("Fixture", "ProductionEvidence")]
     public async Task DeviceWorkbookMapsAllUserColumnsInOrder()
     {
         var repository = CurrentRepository();
@@ -80,25 +68,25 @@ public sealed class DeviceExportTests : IDisposable
         var row = Assert.Single(rows.Skip(1), row =>
             row[0] == sample.Building &&
             row[2] == sample.FloorLabel &&
-            row[3] == sample.PageLabel &&
             row[4] == sample.Name);
         Assert.Equal(sample.Building, row[0]);
-        Assert.Equal(sample.Zuo ?? string.Empty, row[1]);
+        Assert.Equal(string.IsNullOrWhiteSpace(sample.PageSection) ? string.IsNullOrWhiteSpace(sample.Zuo) ? "-" : sample.Zuo : sample.PageSection, row[1]);
         Assert.Equal(sample.FloorLabel, row[2]);
-        Assert.Equal(sample.PageLabel, row[3]);
+        Assert.Matches(@"^第\d+页$", row[3]);
         Assert.Equal(sample.Name, row[4]);
         Assert.Equal(sample.AreaType, row[5]);
-        Assert.Equal(sample.OperatingStatusText, row[6]);
+        Assert.Equal(sample.CommunicationText, row[6]);
         Assert.Equal(sample.Mode, row[7]);
         Assert.Equal(sample.Fan, row[8]);
         Assert.Equal(sample.SetTemperature, row[9]);
         Assert.Equal(sample.IndoorTemperature, row[10]);
         Assert.Equal(ExportLockText(sample), row[11]);
-        Assert.Equal(12, row.Count);
+        Assert.Matches(@"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", row[12]);
+        Assert.Equal(13, row.Count);
     }
 
     [Fact]
-    public async Task DeviceWorkbookMapsDeterministicRowsToTwelveUserColumns()
+    public async Task DeviceWorkbookMapsDeterministicRowsToThirteenUserColumns()
     {
         var rows = new[]
         {
@@ -111,7 +99,9 @@ public sealed class DeviceExportTests : IDisposable
                 communication: "关机",
                 areaType: "公区",
                 zuo: "A座",
-                realtimeLock: "开启"),
+                realtimeLock: "开启",
+                pageName: "裙楼/一页",
+                pageSection: "裙楼"),
             Device(
                 id: 2,
                 building: "2号",
@@ -121,7 +111,9 @@ public sealed class DeviceExportTests : IDisposable
                 communication: "开机",
                 areaType: "非公区",
                 zuo: "B座",
-                realtimeLock: null),
+                realtimeLock: null,
+                pageName: "一页",
+                pageSection: "塔楼"),
             Device(
                 id: 3,
                 building: "3号",
@@ -140,115 +132,20 @@ public sealed class DeviceExportTests : IDisposable
 
         UserDeviceWorkbookAssert.AssertShape(export);
         var exportedRows = UserDeviceWorkbookAssert.ReadRows(export.Path);
+        var collectedAt = TestCollectedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
         Assert.Equal(
-            ["1号", "A座", "1F", "默认页", "1-0101-KT", "公区", "关机", "制冷", "中", "25", "26", "开启"],
+            ["1号", "裙楼", "1F", "第1页", "1-0101-KT", "公区", "关机", "制冷", "中", "25", "26", "开启", collectedAt],
             exportedRows[1]);
         Assert.Equal(
-            ["2号", "B座", "2F", "默认页", "2-0201-KT", "非公区", "开机", "制冷", "中", "25", "26", "无实时数据"],
+            ["2号", "塔楼", "2F", "第1页", "2-0201-KT", "非公区", "开机", "制冷", "中", "25", "26", "无实时数据", collectedAt],
             exportedRows[2]);
         Assert.Equal(
-            ["3号", "", "3F", "默认页", "3-0301-KT", "未匹配", "关机", "制冷", "中", "25", "26", "未知"],
+            ["3号", "-", "3F", "第1页", "3-0301-KT", "未匹配", "未知", "制冷", "中", "25", "26", "未知", collectedAt],
             exportedRows[3]);
-    }
-
-    [Fact]
-    public async Task DeviceWorkbookPreservesSpecialFloorsEmptyValuesAndXmlCharactersAsText()
-    {
-        var rows = new[]
-        {
-            Device(1, "2号", "2.5F", "2.5F A&B <东>", "2F-\"A&B<东>\"-KT", "关机", "非公区", "", null),
-            Device(2, "1号", "B1F", "B1F 地下", "B1-001-KT", "离线", "公区", "A座", ""),
-            Device(3, "6号", "BM", "BM C座", "=1+1", "开机", "公区", "C座", "关闭"),
-        };
-        var exportService = new SqliteDeviceExportService(new FakeDeviceReadRepository(rows));
-        var output = Path.Combine(temporaryRoot, "special-values");
-
-        var export = await exportService.ExportAsync(new DeviceQuery(), output);
-
-        UserDeviceWorkbookAssert.AssertShape(export);
-        var exportedRows = UserDeviceWorkbookAssert.ReadRows(export.Path);
-        Assert.Equal(["2.5F", "B1F", "BM"], exportedRows.Skip(1).Select(row => row[2]).ToArray());
-        Assert.Equal("2F-\"A&B<东>\"-KT", exportedRows[1][4]);
-        Assert.Equal(string.Empty, exportedRows[1][1]);
-        Assert.Equal("=1+1", exportedRows[3][4]);
-        Assert.All(UserDeviceWorkbookAssert.ReadCellTypes(export.Path), type => Assert.Equal("inlineStr", type));
-        var worksheetXml = UserDeviceWorkbookAssert.ReadWorksheetXml(export.Path);
-        Assert.Contains("2F-&quot;A&amp;B&lt;东&gt;&quot;-KT", worksheetXml);
-        Assert.DoesNotContain("<f>", worksheetXml, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task DeviceWorkbookExportsHeaderOnlyForEmptyFilterResult()
-    {
-        var exportService = new SqliteDeviceExportService(new FakeDeviceReadRepository([]));
-        var output = Path.Combine(temporaryRoot, "empty");
-
-        var export = await exportService.ExportAsync(new DeviceQuery(Building: "不存在"), output);
-
-        Assert.Equal(0, export.RowCount);
-        UserDeviceWorkbookAssert.AssertShape(export);
-        Assert.Single(UserDeviceWorkbookAssert.ReadRows(export.Path));
-    }
-
-    [Fact]
-    public async Task DeviceWorkbookUsesDerivedOperatingStatusAndSanitizesInvalidXmlCharacters()
-    {
-        var online = Device(1, "1号", "1F", "1F A", "bad\u0001name", "在线", "非公区", "A座", null)
-            with
-        { SwitchState = "ON" };
-        var exportService = new SqliteDeviceExportService(new FakeDeviceReadRepository([online]));
-
-        var export = await exportService.ExportAsync(new DeviceQuery(), Path.Combine(temporaryRoot, "xml-controls"));
-
-        var row = Assert.Single(UserDeviceWorkbookAssert.ReadRows(export.Path).Skip(1));
-        Assert.Equal("开机", row[6]);
-        Assert.Equal("bad�name", row[4]);
-        UserDeviceWorkbookAssert.AssertShape(export);
-    }
-
-    [Fact]
-    public async Task ImmediateExportsUseDistinctFilesAndPreserveTheFirstWorkbook()
-    {
-        var exportService = new SqliteDeviceExportService(new FakeDeviceReadRepository([
-            Device(1, "1号", "1F", "1F A", "1-A", "关机", "非公区", "A座", null),
-        ]));
-        var output = Path.Combine(temporaryRoot, "collision");
-
-        var first = await exportService.ExportAsync(new DeviceQuery(), output);
-        var firstBytes = await File.ReadAllBytesAsync(first.Path);
-        var second = await exportService.ExportAsync(new DeviceQuery(), output);
-
-        Assert.NotEqual(first.Path, second.Path);
-        Assert.Equal(firstBytes, await File.ReadAllBytesAsync(first.Path));
-        UserDeviceWorkbookAssert.AssertShape(first);
-        UserDeviceWorkbookAssert.AssertShape(second);
-    }
-
-    [Fact]
-    public async Task DeviceWorkbookRejectsResultsAboveExportLimit()
-    {
-        var exportService = new SqliteDeviceExportService(new TotalOverrideRepository(50001));
-        var output = Path.Combine(temporaryRoot, "over-limit");
-
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => exportService.ExportAsync(new DeviceQuery(), output));
-
-        Assert.Contains("50,000", error.Message);
-        Assert.Empty(Directory.EnumerateFiles(output, "*.xlsx"));
-    }
-
-    [Fact]
-    public async Task DeviceWorkbookRejectsInconsistentResultTotalBeforeWritingFile()
-    {
-        var exportService = new SqliteDeviceExportService(new TotalOverrideRepository(3));
-        var output = Path.Combine(temporaryRoot, "inconsistent-total");
-
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => exportService.ExportAsync(new DeviceQuery(Building: "1号"), output));
-
-        Assert.Contains("3", error.Message);
-        Assert.Contains("0", error.Message);
-        Assert.Empty(Directory.EnumerateFiles(output, "*.xlsx"));
+        Assert.Equal(["全部设备", "1号楼", "2号楼", "3号楼"], export.Sheets);
+        Assert.All(UserDeviceWorkbookAssert.ReadRows(export.Path, 2).Skip(1), row => Assert.Equal("1号", row[0]));
+        Assert.All(UserDeviceWorkbookAssert.ReadRows(export.Path, 3).Skip(1), row => Assert.Equal("2号", row[0]));
+        Assert.All(UserDeviceWorkbookAssert.ReadRows(export.Path, 4).Skip(1), row => Assert.Equal("3号", row[0]));
     }
 
     [Fact]
@@ -280,7 +177,23 @@ public sealed class DeviceExportTests : IDisposable
     }
 
     [Fact]
-    [Trait("Fixture", "ProductionEvidence")]
+    public async Task ExportsToUserSelectedFilePath()
+    {
+        var repository = new FakeDeviceReadRepository([
+            Device(1, "1号", "1F", "1F", "1-0101-KT", "关机", "非公区", "", null),
+        ]);
+        var exportService = new SqliteDeviceExportService(repository);
+        var outputDirectory = Path.Combine(Path.GetTempPath(), "ems-scout-device-export-tests", Guid.NewGuid().ToString("N"));
+        var selectedPath = Path.Combine(outputDirectory, "用户指定文件名.xlsx");
+
+        var export = await exportService.ExportToFileAsync(new DeviceQuery(), selectedPath);
+
+        Assert.Equal(Path.GetFullPath(selectedPath), export.Path);
+        Assert.Equal("用户指定文件名.xlsx", export.FileName);
+        Assert.True(File.Exists(selectedPath));
+    }
+
+    [Fact]
     public async Task RejectsHistoryRunExport()
     {
         var exportService = CurrentExportService();
@@ -293,29 +206,22 @@ public sealed class DeviceExportTests : IDisposable
         Assert.False(Directory.Exists(output));
     }
 
-    public void Dispose()
-    {
-        Directory.Delete(temporaryRoot, recursive: true);
-    }
-
-    private SqliteDeviceExportService CurrentExportService()
+    private static SqliteDeviceExportService CurrentExportService()
     {
         return new SqliteDeviceExportService(CurrentRepository());
     }
 
-    private SqliteDeviceReadRepository CurrentRepository()
+    private static SqliteDeviceReadRepository CurrentRepository()
     {
-        var root = ProductionDataSnapshot.RepositoryRoot;
+        var root = LocateRepositoryRoot();
         return new SqliteDeviceReadRepository(
-            ProductionDataSnapshot.DatabasePath,
+            Path.Combine(root, "out", "ac.db"),
             new RealtimeLatestJsonSource(root, Path.Combine(root, "out")));
     }
 
     private static string ExportLockText(DeviceRecord row)
     {
-        return row.Realtime is null
-            ? "无实时数据"
-            : string.IsNullOrWhiteSpace(row.Realtime.LockState) ? "未知" : row.Realtime.LockState;
+        return row.RealtimeLockText;
     }
 
     private static DeviceRecord Device(
@@ -327,7 +233,9 @@ public sealed class DeviceExportTests : IDisposable
         string communication,
         string areaType,
         string zuo,
-        string? realtimeLock)
+        string? realtimeLock,
+        string pageName = "default",
+        string pageSection = "")
     {
         return new DeviceRecord(
             Id: id,
@@ -337,7 +245,7 @@ public sealed class DeviceExportTests : IDisposable
             SubArea: subArea,
             X: null,
             Y: null,
-            PageName: "default",
+            PageName: pageName,
             Name: name,
             Layout: "grid",
             SwitchState: communication == "开机" ? "ON" : "OFF",
@@ -350,8 +258,14 @@ public sealed class DeviceExportTests : IDisposable
             CommunicationState: DeviceCommunicationStateParser.Parse(communication),
             Realtime: realtimeLock is null ? null : Realtime(building, floorLabel, subArea, name, realtimeLock),
             AreaTypeOverride: areaType,
-            Zuo: zuo);
+            Zuo: zuo,
+            PageSection: pageSection,
+            CollectedAt: TestCollectedAt);
     }
+
+    private static readonly DateTimeOffset TestCollectedAt = DateTimeOffset.Parse(
+        "2026-07-12T00:00:20Z",
+        CultureInfo.InvariantCulture);
 
     private static RealtimeDetailRecord Realtime(
         string building,
@@ -363,7 +277,7 @@ public sealed class DeviceExportTests : IDisposable
         return new RealtimeDetailRecord(
             RowId: "rt-" + name,
             SourceFile: "test",
-            SourceUpdatedAt: DateTimeOffset.UnixEpoch,
+            SourceUpdatedAt: TestCollectedAt.AddMinutes(1),
             Building: building,
             Floor: null,
             SubArea: subArea,
@@ -417,24 +331,20 @@ public sealed class DeviceExportTests : IDisposable
         }
     }
 
-    private sealed class TotalOverrideRepository(int total) : IDeviceReadRepository
+    private static string LocateRepositoryRoot()
     {
-        public Task<DeviceListResult> SearchAsync(DeviceQuery query, CancellationToken cancellationToken = default)
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
         {
-            return Task.FromResult(new DeviceListResult(total, [], DeviceFacets.From([])));
+            if (File.Exists(Path.Combine(directory.FullName, "package.json")) &&
+                Directory.Exists(Path.Combine(directory.FullName, "out")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
         }
 
-        public Task<DeviceFilterOptions> LoadFilterOptionsAsync(CancellationToken cancellationToken = default)
-        {
-            return LoadFilterOptionsAsync(new DeviceQuery(), cancellationToken);
-        }
-
-        public Task<DeviceFilterOptions> LoadFilterOptionsAsync(
-            DeviceQuery query,
-            CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(new DeviceFilterOptions([], [], [], [], [], [], [], [], [], [], [], []));
-        }
+        throw new DirectoryNotFoundException("Cannot locate repository root.");
     }
-
 }

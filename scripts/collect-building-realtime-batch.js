@@ -104,10 +104,20 @@ function timestamp() {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
+const EMS_OVERALL_TOTAL = Number(process.env.EMS_OVERALL_TOTAL || 0);
+const EMS_OVERALL_DONE_BASE = Number(process.env.EMS_OVERALL_DONE_BASE || 0);
+const EMS_RUN_STARTED_AT = Number(process.env.EMS_RUN_STARTED_AT || 0);
+const EMS_RUN_ELAPSED = EMS_RUN_STARTED_AT ? Date.now() - EMS_RUN_STARTED_AT : 0;
+
 function progress(event) {
   console.log(`[PROGRESS] ${JSON.stringify({
     ts: new Date().toISOString(),
     building: BUILDING,
+    elapsedMs: EMS_RUN_STARTED_AT ? Date.now() - EMS_RUN_STARTED_AT : undefined,
+    ...(EMS_OVERALL_TOTAL > 0 ? {
+      overallTotal: EMS_OVERALL_TOTAL,
+      overallDone: EMS_OVERALL_DONE_BASE + (event.deviceDone || 0),
+    } : {}),
     ...event,
   })}`);
 }
@@ -656,6 +666,8 @@ async function main() {
     }
     const batch = sourceRows.slice(i, i + BATCH_SIZE);
     process.stdout.write(`\r[BATCH] ${batchIndex + 1}/${Math.ceil(sourceRows.length / BATCH_SIZE)} ${SKIP_DEVICES + i + 1}-${SKIP_DEVICES + i + batch.length}`.padEnd(100));
+    const batchFloorText = batch.find(dev => dev.subAreaText)?.subAreaText || '';
+    const batchPageName = batch.find(dev => dev.pageName)?.pageName || '';
     progress({
       phase: 'realtime_batch',
       status: 'running',
@@ -663,6 +675,8 @@ async function main() {
       deviceTotal: sourceRows.length,
       batchIndex: batchIndex + 1,
       batchTotal,
+      floorText: batchFloorText,
+      pageName: batchPageName,
       percent: sourceRows.length ? Math.round((rows.length / sourceRows.length) * 100) : 0,
       message: `${BUILDING} 批次 ${batchIndex + 1}/${batchTotal}`,
     });

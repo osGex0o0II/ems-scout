@@ -2,22 +2,24 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
-using Microsoft.UI.Xaml.Input;
-using Windows.System;
 using EmsScout.Desktop.Services;
 using EmsScout.Desktop.ViewModels;
+using Windows.Storage.Pickers;
+using WinRT.Interop;
 
 namespace EmsScout.Desktop.Pages;
 
 public sealed partial class DataPage : Page
 {
     private DataNavigationRequest? _navigationRequest;
+    private readonly WindowHandleProvider _windowHandleProvider;
 
     public DataViewModel ViewModel { get; }
 
     public DataPage()
     {
         ViewModel = App.Services.GetRequiredService<DataViewModel>();
+        _windowHandleProvider = App.Services.GetRequiredService<WindowHandleProvider>();
         InitializeComponent();
     }
 
@@ -38,13 +40,6 @@ public sealed partial class DataPage : Page
         await ViewModel.ApplyFiltersAsync();
     }
 
-    private async void DeviceName_KeyDown(object sender, KeyRoutedEventArgs e)
-    {
-        if (e.Key != VirtualKey.Enter) return;
-        e.Handled = true;
-        await ViewModel.ApplyFiltersAsync();
-    }
-
     private async void BuildingFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         await ViewModel.ApplyBuildingSelectionAsync();
@@ -55,11 +50,6 @@ public sealed partial class DataPage : Page
         await ViewModel.ApplyFloorSelectionAsync();
     }
 
-    private async void SubAreaFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        await ViewModel.ApplySubAreaSelectionAsync();
-    }
-
     private async void ResetFilters_Click(object sender, RoutedEventArgs e)
     {
         await ViewModel.ResetFiltersAsync();
@@ -68,27 +58,6 @@ public sealed partial class DataPage : Page
     private async void Refresh_Click(object sender, RoutedEventArgs e)
     {
         await ViewModel.RefreshAsync();
-    }
-
-    private async void RetryLoad_Click(object sender, RoutedEventArgs e)
-    {
-        await ViewModel.RefreshAsync();
-    }
-
-    private async void QuickFilter_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is FrameworkElement { Tag: string quickFilter })
-        {
-            await ViewModel.ApplyQuickFilterAsync(quickFilter);
-        }
-    }
-
-    private void DataContext_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (sender is ComboBox comboBox && comboBox.SelectedItem is DataContextOption option)
-        {
-            ViewModel.DataContext.Select(option);
-        }
     }
 
     private async void PreviousPage_Click(object sender, RoutedEventArgs e)
@@ -103,24 +72,21 @@ public sealed partial class DataPage : Page
 
     private async void Export_Click(object sender, RoutedEventArgs e)
     {
-        if (!ViewModel.CanExport)
+        var picker = new FileSavePicker
         {
+            SuggestedStartLocation = PickerLocationId.DocumentsLibrary,
+            SuggestedFileName = $"数据管理筛选结果_{DateTime.Now:yyyyMMdd_HHmmss}",
+        };
+        picker.FileTypeChoices.Add("Excel 工作簿", [".xlsx"]);
+        InitializeWithWindow.Initialize(picker, _windowHandleProvider.GetWindowHandle());
+        var file = await picker.PickSaveFileAsync();
+        if (file is null)
+        {
+            ViewModel.ReportExportCanceled();
             return;
         }
 
-        var dialog = new ContentDialog
-        {
-            XamlRoot = XamlRoot,
-            Title = "确认导出当前筛选",
-            Content = ViewModel.ExportPreviewText,
-            PrimaryButtonText = "导出 Excel",
-            CloseButtonText = "取消",
-            DefaultButton = ContentDialogButton.Primary,
-        };
-        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
-        {
-            await ViewModel.ExportAsync();
-        }
+        await ViewModel.ExportAsync(file.Path);
     }
 
     private void OpenExportLocation_Click(object sender, RoutedEventArgs e)

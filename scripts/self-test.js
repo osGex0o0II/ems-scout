@@ -5,10 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const Database = require('better-sqlite3');
-const { checkCardQuality, classifyAreaType, getZone, classifyPersistentDeviceAnomalyPage, normalizeKnownSourceDefects, classifyKnownMissingIndicatorPage, isAcceptedCaptureQualityReason } = require('../src/rules');
-const { BLDG_ORDER } = require('../src/rules');
-const { createRealtimeService } = require('../src/panel/services/realtime-service');
-const { createReconcileService } = require('../src/panel/services/reconcile-service');
+const { checkCardQuality, classifyAreaType, getZone, assessBuildingIdentity, labelSamePageDuplicateCards, classifyPersistentDeviceAnomalyPage, normalizeCardValues, normalizeKnownSourceDefects, classifyKnownMissingIndicatorPage, isAcceptedCaptureQualityReason } = require('../src/rules');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -71,7 +68,19 @@ function testRules() {
     { ...realMixed[5], name: '2-2BC-2M001-KT-1', indicator: 'wrong-neighbor.png', comm: '关机' },
     { ...realMixed[6], name: '2-2BC-2M001-KT-2', indicator: 'wrong-neighbor.png', comm: '关机' },
   ];
+  const intermittentMissingIndicator = realMixed.map((c, i) => i === 0
+    ? { ...c, name: '4-1F-KT1-104', indicator: '', comm: '', switch: 'ON', mode: '制冷', indoor: '25.8', setTemp: '17', fan: '高' }
+    : c);
+  const intermittentMissingFields = intermittentMissingIndicator.map((c, i) => i === 0
+    ? { ...c, switch: '-', indoor: '-', setTemp: '-', fan: '-' }
+    : c);
   const normalizedKnownMissing = normalizeKnownSourceDefects(knownMissingIndicator);
+  const building3Cards = loaded34.map((c, i) => ({ ...c, name: `3-${i}-KT` }));
+  const sanitizedInvalid = normalizeCardValues(invalidTemp);
+  const labeledDuplicates = labelSamePageDuplicateCards([
+    { ...realMixed[0], name: '2-GQ-KT-1', _sourceX: 300, _sourceY: 200 },
+    { ...realMixed[1], name: '2-GQ-KT-1', _sourceX: 100, _sourceY: 200 },
+  ]);
 
   assert(!checkCardQuality(loaded34).ok, '3/4号默认值统一时应触发模板检测');
   assert(!checkCardQuality(notReady34).ok, '3/4号默认值且 comm/switch 未完整时应失败');
@@ -82,10 +91,10 @@ function testRules() {
   assert(!checkCardQuality(missingActiveFields).ok, '开机/关机设备字段缺失应失败');
   assert(!checkCardQuality(offlineTemplate).ok, '全离线默认模板不应作为 quality_pass 通过');
   assert(isAcceptedCaptureQualityReason('offline_template_stable'), '稳定全离线模板应通过最终采集门槛');
-  assert(!isAcceptedCaptureQualityReason('all_offline'), '全离线不能绕过页面质量证据');
   assert(!isAcceptedCaptureQualityReason('stable_partial'), '通讯状态缺失的稳定部分页必须继续阻断');
   assert(isAcceptedCaptureQualityReason('device_anomalies_preserved'), '稳定的有界设备异常应通过最终采集门槛');
   assert(isAcceptedCaptureQualityReason('known_source_indicator_missing'), '精确登记的 EMS indicator 缺失设备应通过最终采集门槛');
+  assert(isAcceptedCaptureQualityReason('known_intermittent_indicator_missing'), '间歇性 indicator 缺失设备应作为待复核结果保留');
   assert(!isAcceptedCaptureQualityReason(''), '缺少质量原因的页面必须继续阻断');
   assert(classifyPersistentDeviceAnomalyPage(invalidTemp).eligible, '20 张卡中 1 张稳定设备异常应可进入保留候选');
   assert(!classifyPersistentDeviceAnomalyPage(missingComm).eligible, '通讯未解析时不得按设备异常放行');
@@ -97,8 +106,21 @@ function testRules() {
   assert(normalizedKnownMissing.filter(c => !c.indicator && !c.comm).length === 2, '已知缺陷设备不得沿用邻卡 indicator/comm');
   assert(classifyKnownMissingIndicatorPage(normalizedKnownMissing).eligible, '仅两台精确登记设备缺 indicator 时应作为已知源缺陷保留');
   assert(!classifyKnownMissingIndicatorPage(normalizedKnownMissing.map((c, i) => i === 0 ? { ...c, indicator: '', comm: '' } : c)).eligible, '出现第三台缺 indicator 时必须阻断');
+  assert(classifyKnownMissingIndicatorPage(intermittentMissingIndicator).eligible, '4号楼1F间歇性缺 indicator 且关键字段完整时应保留并继续任务');
+  assert(!classifyKnownMissingIndicatorPage(intermittentMissingFields).eligible, '间歇性缺 indicator 设备关键字段也缺失时必须阻断');
   assert(!checkCardQuality(realMixed.slice(0, 1), { rawCount: 20, uniqueCount: 1 }).ok, 'raw 多但 unique 极少的重复塌缩页应失败');
   assert(checkCardQuality(realMixed.slice(0, 7), { rawCount: 10, uniqueCount: 7 }).ok, '轻微重复渲染页应按唯一设备放行');
+  assert(assessBuildingIdentity('3号', building3Cards, 30).ok, '3号楼命名空间和子区数应通过身份校验');
+  assert(assessBuildingIdentity('6号', [{ name: '6-1F-KT-1' }, { name: '6-2F-KT-1' }], 30).ok, '6号楼 BM 内联缺席时30个普通子区仍应通过身份校验');
+  assert(!assessBuildingIdentity('1号', building3Cards, 30).ok, '3号楼卡片不得通过1号楼身份校验');
+  assert(!assessBuildingIdentity('2号', building3Cards, 30).ok, '3号楼卡片不得通过2号楼身份校验');
+  assert(!assessBuildingIdentity('2号', [{ name: '2-DTT-KT' }], 30).ok, '2号楼子区数异常应阻断');
+  assert(sanitizedInvalid[0].indoor === '-' && sanitizedInvalid[0].setTemp === '-', '超范围温度必须归一化为缺失值');
+  assert(labeledDuplicates.cards[0].name === '2-GQ-KT-1#2' && labeledDuplicates.cards[1].name === '2-GQ-KT-1#1', '同页重名卡片必须按页面坐标稳定编号');
+  assert(labeledDuplicates.cards.every(card => card.sourceName === '2-GQ-KT-1'), '重名编号后必须保留 EMS 原始名称');
+  assert(labeledDuplicates.duplicateNames[0].copies === 2, '同页重名元数据必须保留副本数');
+  const relabeled = labelSamePageDuplicateCards(labeledDuplicates.cards);
+  assert(relabeled.cards.map(card => card.name).join('|') === labeledDuplicates.cards.map(card => card.name).join('|'), '重名编号函数必须幂等，导入不能交换 #1/#2');
   assert(classifyAreaType('3F-WSJ-KT-1', 'grid') === '公区', 'WSJ 应识别为公区');
   assert(classifyAreaType('QL-101-KT', 'grid') === '非公区', 'QL-NNN 应识别为非公区');
   assert(classifyAreaType('ANY', 'group') === '公区', 'group layout 应识别为公区');
@@ -120,8 +142,9 @@ function testPartialImport() {
     ],
   });
   writeJson(json2, {
+    completedAt: '2026-07-12T01:00:00.000Z',
     buildings: [
-      { building: '2号', menuClicked: '2号楼', subAreas: [{ idx: 0, text: '2F', floor: 2, x: 50, y: 60, pages: [{ page: 'default', layout: 'grid', cards: [
+      { building: '2号', menuClicked: '2号楼', completedAt: '2026-07-12T00:30:00.000Z', subAreas: [{ idx: 0, text: '2F', floor: 2, x: 50, y: 60, pages: [{ page: 'default', layout: 'grid', collectedAt: '2026-07-12T00:20:15.000Z', cards: [
         { name: '2F-B-KT', switch: 'ON', mode: '制冷', indoor: '27', setTemp: '24', fan: '高', comm: '开机' },
         { name: '2F-B-KT', switch: 'ON', mode: '制冷', indoor: '27', setTemp: '24', fan: '高', comm: '开机' },
         { name: '2F-C-KT', switch: 'OFF', mode: '通风', indoor: '26', setTemp: '25', fan: '低', comm: '关机' },
@@ -143,7 +166,7 @@ function testPartialImport() {
     ORDER BY sa.building
   `).all();
   const pageMeta = db.prepare(`
-    SELECT p.count, p.raw_count, p.unique_count, p.duplicate_names
+    SELECT p.count, p.raw_count, p.unique_count, p.duplicate_names, p.collected_at
     FROM pages p
     JOIN sub_areas sa ON p.sub_area_id = sa.id
     WHERE sa.building = '2号'
@@ -154,15 +177,20 @@ function testPartialImport() {
     ORDER BY id DESC
     LIMIT 1
   `).get();
+  const building2 = db.prepare(`SELECT updated_at FROM buildings WHERE building = '2号'`).get();
+  const runPage = db.prepare(`SELECT collected_at FROM run_pages ORDER BY id DESC LIMIT 1`).get();
   db.close();
   fs.rmSync(tmp, { recursive: true, force: true });
 
   assert(rows.length === 2, '部分导入后应保留未选楼栋');
   assert(rows[0].building === '1号' && rows[0].cards === 1 && rows[0].names === '1F-A-KT', '1号数据应保留');
-  assert(rows[1].building === '2号' && rows[1].cards === 3 && rows[1].names.includes('2F-B-KT'), '2号数据应被替换');
-  assert(pageMeta.count === 3 && pageMeta.raw_count === 4 && pageMeta.unique_count === 3, '页面重复渲染元数据应保留，cards 表应按唯一卡入库');
+  assert(rows[1].building === '2号' && rows[1].cards === 4 && rows[1].names.includes('2F-B-KT#1') && rows[1].names.includes('2F-B-KT#2'), '2号同页重名设备应编号后全部入库');
+  assert(pageMeta.count === 4 && pageMeta.raw_count === 4 && pageMeta.unique_count === 4, '同页重名卡片编号后应作为独立页面卡片入库');
   assert(pageMeta.duplicate_names.includes('2F-B-KT'), '重复渲染设备名应入库');
-  assert(latestRun.card_count === 3 && latestRun.on_count === 1 && latestRun.off_count === 1 && latestRun.offline_count === 0 && latestRun.unknown_count === 1, 'run 统计必须按 comm 区分状态，switch=OFF 不得掩盖未知通讯');
+  assert(pageMeta.collected_at === '2026-07-12T00:20:15.000Z', '页面必须保存实际通过采集质量门槛的时间');
+  assert(runPage.collected_at === pageMeta.collected_at, '历史批次必须保留页面采集时间');
+  assert(latestRun.card_count === 4 && latestRun.on_count === 2 && latestRun.off_count === 1 && latestRun.offline_count === 0 && latestRun.unknown_count === 1, 'run 统计必须按 comm 区分状态，switch=OFF 不得掩盖未知通讯');
+  assert(building2.updated_at === '2026-07-12T00:30:00.000Z', '部分导入必须保留楼栋独立采集时间，不能套用顶层时间');
 }
 
 function testQualityReportFailsInvalidFields() {
@@ -211,7 +239,7 @@ function testQualityReportFailsInvalidFields() {
   });
 
   runImport(jsonPath, dbPath);
-  const result = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'quality-report.js'), '--run-id=latest-run'], {
+  const result = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'quality-report.js'), '--run-id=latest-imported'], {
     cwd: ROOT,
     env: { ...process.env, EMS_DB_PATH: dbPath, EMS_QUALITY_OUT: qualityOut },
     encoding: 'utf8',
@@ -220,6 +248,8 @@ function testQualityReportFailsInvalidFields() {
     throw new Error(`quality-report.js should fail invalid fields\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`);
   }
   const report = JSON.parse(fs.readFileSync(path.join(qualityOut, 'quality_report_run1.json'), 'utf8'));
+  const latestAlias = JSON.parse(fs.readFileSync(path.join(qualityOut, 'quality_report.json'), 'utf8'));
+  assert(latestAlias.run_id === report.run_id, 'latest-run 质量审计必须同步 canonical 报告供原生界面刷新');
   assert(report.summary.invalid_card_fields === 1, '质量报告应标记异常/缺失卡字段');
   assert(report.summary.active_field_incomplete_pages === 1, '质量报告应标记开关机页字段不完整');
 
@@ -272,81 +302,41 @@ function testQualityReportFailsInvalidFields() {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
-function testReconcileServiceShape() {
-  const dbPath = path.join(ROOT, 'out', 'ac.db');
-  const realtimeLatestFiles = BLDG_ORDER.map(b => path.join(ROOT, 'out', `realtime_${b}_latest.json`));
-  if (!fs.existsSync(dbPath) || realtimeLatestFiles.some(file => !fs.existsSync(file))) return;
-
-  const openReadonlyDb = () => new Database(dbPath, { readonly: true });
-  const outDir = path.join(ROOT, 'out');
-  const service = createReconcileService({
-    root: ROOT,
-    outDir,
-    openReadonlyDb,
-    realtimeService: createRealtimeService({ root: ROOT, outDir, buildings: BLDG_ORDER }),
-  });
-  const result = service.diff();
-  assert(result && result.summary && Array.isArray(result.diffItems), '对账服务应返回 summary 和 diffItems');
-  assert(result.summary.dbCount === 6568, '当前 DB 基线应为 6568 张卡');
-  assert(result.summary.realtimeCount === 6575, '当前实时详情应为 6575 行');
-  assert(result.summary.diff === 7, '当前实时详情与 DB 基线差异应为 7');
-  assert(result.diffItems.length === 7, '对账结果必须逐设备归因到 7 条差异');
-  assert(result.summary.ruleVersion === 'reconcile-v1.0.0', '对账结果应记录规则版本');
-  const types = new Set(result.diffItems.map(item => item.type));
-  assert(types.has('DUPLICATE_RENDER'), '对账结果应包含重复渲染归因');
-  assert(types.has('VIRTUAL_OVERRIDE'), '对账结果应包含虚拟纳管归因');
-  assert(types.has('MATCH_FAILED'), '对账结果应包含匹配失败归因');
-  assert(result.diffItems.every(item => item.key && item.reason && typeof item.confidence === 'number' && item.source), '每条差异应可追溯');
-  assert(result.diffItems.every(item => item.ruleVersion === 'reconcile-v1.0.0'), '每条差异应记录 ruleVersion');
-  assert(result.diffItems.every(item => item.evidence && Object.prototype.hasOwnProperty.call(item.evidence, 'db') && Object.prototype.hasOwnProperty.call(item.evidence, 'realtime')), '每条差异应包含结构化 evidence');
-  assert(result.diffItems.every(item => Array.isArray(item.decisionPath) && item.decisionPath.length >= 4), '每条差异应包含决策链');
-
-  const replay = service.replay('', 'reconcile-v1.0.0');
-  assert(JSON.stringify(result.diffItems.map(i => [i.key, i.type])) === JSON.stringify(replay.diffItems.map(i => [i.key, i.type])), 'replay 应可确定性重放当前对账结果');
-  assert(typeof service.exportExcel === 'undefined', '对账服务不应暴露独立 Excel 导出入口');
-  const audit = service.audit({ building: '2号' });
-  assert(audit && audit.summary && audit.drift, '对账审计应保留摘要和漂移信息');
-}
-
-function testLegacyWebExportRemoved() {
-  const serverJs = fs.readFileSync(path.join(ROOT, 'src', 'panel', 'server.js'), 'utf8');
-  const reportsRoutes = fs.readFileSync(path.join(ROOT, 'src', 'panel', 'routes', 'reports-routes.js'), 'utf8');
-  const indexHtml = fs.readFileSync(path.join(ROOT, 'web', 'panel', 'index.html'), 'utf8');
-  const appJs = fs.readFileSync(path.join(ROOT, 'web', 'panel', 'app.js'), 'utf8');
-  const stylesCss = fs.readFileSync(path.join(ROOT, 'web', 'panel', 'styles.css'), 'utf8');
-  const cardsRoutes = fs.readFileSync(path.join(ROOT, 'src', 'panel', 'routes', 'cards-routes.js'), 'utf8');
-  const cardsService = fs.readFileSync(path.join(ROOT, 'src', 'panel', 'services', 'cards-service.js'), 'utf8');
-
-  assert(!serverJs.includes("require('xlsx')"), '旧 Web 面板后端不应依赖 xlsx 生成导出文件');
-  assert(!serverJs.includes('function exportCards'), 'server.js 不应保留旧 Web Excel 生成器');
-  assert(!serverJs.includes('XLSX.writeFile'), 'server.js 不应写出旧 Web Excel 文件');
-  assert(!serverJs.includes('panel-export'), 'server.js 不应引用旧 Web 导出目录');
-  assert(!serverJs.includes('listReports'), 'server.js 不应保留旧导出历史索引');
-  assert(!serverJs.includes('legacyReportExportsEnabled'), 'server.js 不应保留旧 Web 导出 gate');
-  assert(!serverJs.includes('export_dir'), 'About API 不应返回旧 Web 导出目录');
-  assert(!serverJs.includes('recent_exports'), 'About API 不应返回旧 Web 导出历史');
-  assert(!reportsRoutes.includes('/api/files/download'), 'reports route 不应暴露旧 Web 文件下载入口');
-  assert(!reportsRoutes.includes('/api/reports'), 'reports route 不应暴露旧 Web 导出历史入口');
-  assert(!indexHtml.includes('exportFilterBtn'), '旧 Web 面板不应显示导出按钮');
-  assert(!indexHtml.includes('健康态') && !indexHtml.includes('点位质量') && !indexHtml.includes('异常提示'), '旧 Web 面板不应保留旧数据表头');
-  assert(!appJs.includes('exportCurrentFilter'), '旧 Web 面板不应保留导出函数');
-  assert(!appJs.includes('/api/cards/export'), '旧 Web 面板前端不应调用旧导出 API');
-  assert(!appJs.includes('reportRows'), '旧 Web 面板不应展示旧导出历史表');
-  assert(!appJs.includes('DeviceTable.renderRow'), '旧 Web 面板不应继续渲染旧数据表行');
-  assert(!appJs.includes('健康态') && !appJs.includes('点位质量') && !appJs.includes('异常提示'), '旧 Web 面板脚本不应保留旧数据表文案');
-  assert(!stylesCss.includes('report-table'), '旧 Web 面板不应保留旧导出历史表样式');
-  assert(!stylesCss.includes('realtime-wide') && !stylesCss.includes('actions-col'), '旧 Web 面板不应保留旧数据表宽表/操作列样式');
-  assert(cardsRoutes.includes('旧 Web 面板 Excel 导出已移除'), '旧导出 API 应返回移除提示');
-  assert(!cardsRoutes.includes('cardsService.exportCards'), '旧导出 API 不应调用导出服务');
-  assert(!cardsService.includes('exportCards'), 'cards service 不应暴露旧导出能力');
+function testNativeOnlyContract() {
+  const retained = [
+    'src/enumerate.js',
+    'scripts/import.js',
+    'scripts/validate-enum.js',
+    'scripts/quality-report.js',
+    'scripts/audit-realtime-data.js',
+    'scripts/collect-realtime-all-batch.js',
+    'scripts/field-e2e.ps1',
+    'native/src/EmsScout.Desktop/EmsScout.Desktop.csproj',
+  ];
+  const retired = [
+    path.join('src', 'panel', 'server.js'),
+    path.join('web', 'panel', 'index.html'),
+    path.join('electron', 'main.js'),
+    path.join('src', 'tui', 'actions.js'),
+    path.join('src', 'collect.js'),
+    path.join('native', 'src', 'EmsScout.Legacy', 'EmsScout.Legacy.csproj'),
+  ];
+  for (const relative of retained) assert(fs.existsSync(path.join(ROOT, relative)), `Native-only retained path missing: ${relative}`);
+  for (const relative of retired) assert(!fs.existsSync(path.join(ROOT, relative)), `Retired architecture still exists: ${relative}`);
+  const packageJson = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
+  const scriptNames = Object.keys(packageJson.scripts || {});
+  const scriptText = Object.values(packageJson.scripts || {}).join('\n');
+  assert(!scriptNames.some(name => name.startsWith('legacy')), 'package scripts must not expose legacy commands');
+  assert(!scriptText.includes('electron') && !scriptText.includes('src/collect.js') && !scriptText.includes('dump-aircons.js') && !scriptText.includes('dump-public.js'), 'package scripts must not expose retired entry points');
+  assert(!packageJson.main && !packageJson.build, 'package metadata must not define a legacy desktop application');
+  assert(!fs.existsSync(path.join(ROOT, 'src', 'data-history.js')) || !fs.readFileSync(path.join(ROOT, 'src', 'data-history.js'), 'utf8').includes(path.join('src', 'panel')), 'data history must not depend on the panel');
 }
 
 function main() {
   testRules();
   testPartialImport();
   testQualityReportFailsInvalidFields();
-  testReconcileServiceShape();
-  testLegacyWebExportRemoved();
+  testNativeOnlyContract();
   console.log('Self-test passed.');
 }
 

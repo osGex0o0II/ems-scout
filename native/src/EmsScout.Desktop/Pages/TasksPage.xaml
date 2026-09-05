@@ -6,9 +6,16 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    xmlns:local="using:EmsScout.Desktop.Pages"
     Loaded="Page_Loaded"
+    Unloaded="Page_Unloaded"
     SizeChanged="Page_SizeChanged"
+    NavigationCacheMode="Required"
     mc:Ignorable="d">
+    <Page.Resources>
+        <local:LogSeverityBrushConverter x:Key="LogSeverityBrushConverter" />
+        <local:LogSeverityGlyphConverter x:Key="LogSeverityGlyphConverter" />
+    </Page.Resources>
     <Grid Padding="{StaticResource PagePadding}" RowSpacing="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -22,15 +29,15 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel Spacing="3">
-                <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="采集" />
+                <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="采集任务" />
                 <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="采集 EMS 空调数据并更新数据管理" />
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
                 <Button
                     Click="StartTask_Click"
                     IsEnabled="{x:Bind ViewModel.CanStartTask, Mode=OneWay}"
-                    Style="{StaticResource PrimaryToolbarButtonStyle}"
-                    Visibility="{x:Bind ViewModel.StartPrimaryButtonVisibility, Mode=OneWay}">
+                    Visibility="{x:Bind local:TasksPage.BoolToVisibility(ViewModel.IsStartHighlighted), Mode=OneWay}"
+                    Style="{StaticResource PrimaryToolbarButtonStyle}">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon FontSize="14" Glyph="&#xE768;" />
                         <TextBlock Text="{x:Bind ViewModel.StartButtonText, Mode=OneWay}" />
@@ -39,17 +46,18 @@
                 <Button
                     Click="StartTask_Click"
                     IsEnabled="{x:Bind ViewModel.CanStartTask, Mode=OneWay}"
-                    Style="{StaticResource ToolbarButtonStyle}"
-                    Visibility="{x:Bind ViewModel.StartSecondaryButtonVisibility, Mode=OneWay}">
+                    Visibility="{x:Bind local:TasksPage.InverseBoolToVisibility(ViewModel.IsStartHighlighted), Mode=OneWay}"
+                    Style="{StaticResource ToolbarButtonStyle}">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon FontSize="14" Glyph="&#xE768;" />
                         <TextBlock Text="{x:Bind ViewModel.StartButtonText, Mode=OneWay}" />
                     </StackPanel>
                 </Button>
                 <Button
+                    x:Name="StopButton"
                     Click="StopTask_Click"
                     IsEnabled="{x:Bind ViewModel.IsRunning, Mode=OneWay}"
-                    Style="{StaticResource ToolbarButtonStyle}">
+                    Style="{StaticResource PrimaryToolbarButtonStyle}">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon FontSize="14" Glyph="&#xE71A;" />
                         <TextBlock Text="停止" />
@@ -81,32 +89,30 @@
                     FontSize="18"
                     Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
                     Glyph="{x:Bind ViewModel.ReadinessGlyph, Mode=OneWay}" />
-                <StackPanel Grid.Column="1" Spacing="2">
-                    <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.ReadinessTitle, Mode=OneWay}" />
+                <StackPanel Grid.Column="1" HorizontalAlignment="Left" Spacing="2">
                     <TextBlock
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Text="{x:Bind ViewModel.ReadinessDetail, Mode=OneWay}"
-                        TextWrapping="WrapWholeWords" />
+                        HorizontalAlignment="Left"
+                        TextAlignment="Left"
+                        FontWeight="SemiBold"
+                        Text="{x:Bind ViewModel.ReadinessTitle, Mode=OneWay}" />
                 </StackPanel>
                 <Button
                     Grid.Column="2"
-                    Command="{x:Bind ViewModel.ToggleCollectionBrowserCommand}"
-                    Style="{StaticResource PrimaryToolbarButtonStyle}"
-                    ToolTipService.ToolTip="{x:Bind ViewModel.CollectionBrowserActionToolTip, Mode=OneWay}"
-                    Visibility="{x:Bind ViewModel.CollectionBrowserPrimaryButtonVisibility, Mode=OneWay}">
+                    Command="{x:Bind ViewModel.OpenEmsCommand}"
+                    Visibility="{x:Bind local:TasksPage.BoolToVisibility(ViewModel.IsOpenBrowserHighlighted), Mode=OneWay}"
+                    Style="{StaticResource PrimaryToolbarButtonStyle}">
                     <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon FontSize="14" Glyph="{x:Bind ViewModel.CollectionBrowserActionGlyph, Mode=OneWay}" />
+                        <FontIcon FontSize="14" Glyph="&#xE774;" />
                         <TextBlock Text="{x:Bind ViewModel.CollectionBrowserActionText, Mode=OneWay}" />
                     </StackPanel>
                 </Button>
                 <Button
                     Grid.Column="2"
-                    Command="{x:Bind ViewModel.ToggleCollectionBrowserCommand}"
-                    Style="{StaticResource ToolbarButtonStyle}"
-                    ToolTipService.ToolTip="{x:Bind ViewModel.CollectionBrowserActionToolTip, Mode=OneWay}"
-                    Visibility="{x:Bind ViewModel.CollectionBrowserSecondaryButtonVisibility, Mode=OneWay}">
+                    Command="{x:Bind ViewModel.OpenEmsCommand}"
+                    Visibility="{x:Bind local:TasksPage.InverseBoolToVisibility(ViewModel.IsOpenBrowserHighlighted), Mode=OneWay}"
+                    Style="{StaticResource ToolbarButtonStyle}">
                     <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon FontSize="14" Glyph="{x:Bind ViewModel.CollectionBrowserActionGlyph, Mode=OneWay}" />
+                        <FontIcon FontSize="14" Glyph="&#xE774;" />
                         <TextBlock Text="{x:Bind ViewModel.CollectionBrowserActionText, Mode=OneWay}" />
                     </StackPanel>
                 </Button>
@@ -114,26 +120,23 @@
                     Grid.Column="3"
                     Command="{x:Bind ViewModel.CheckEnvironmentCommand}"
                     Style="{StaticResource ToolbarButtonStyle}"
-                    Content="重新检查"
-                    ToolTipService.ToolTip="重新检查采集环境" />
+                    ToolTipService.ToolTip="重新检查采集环境">
+                    <FontIcon FontSize="14" Glyph="&#xE72C;" />
+                </Button>
             </Grid>
         </Border>
 
         <Grid x:Name="WorkflowGrid" Grid.Row="2" ColumnSpacing="14" RowSpacing="0">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="SetupColumn" MinWidth="0" Width="0.9*" />
-                <ColumnDefinition x:Name="ExecutionColumn" MinWidth="0" Width="1.35*" />
+                <ColumnDefinition x:Name="SetupColumn" Width="0.9*" />
+                <ColumnDefinition x:Name="ExecutionColumn" Width="1.35*" />
             </Grid.ColumnDefinitions>
             <Grid.RowDefinitions>
                 <RowDefinition x:Name="SetupRow" Height="*" />
                 <RowDefinition x:Name="ExecutionRow" Height="0" />
             </Grid.RowDefinitions>
 
-            <ScrollViewer
-                x:Name="SetupPanel"
-                HorizontalScrollBarVisibility="Disabled"
-                HorizontalScrollMode="Disabled"
-                VerticalScrollBarVisibility="Auto">
+            <ScrollViewer x:Name="SetupPanel" VerticalScrollBarVisibility="Auto">
                 <StackPanel Spacing="12">
                     <Border Style="{StaticResource WorkbenchCardStyle}">
                         <StackPanel Spacing="10">
@@ -162,156 +165,53 @@
                                             MinWidth="118"
                                             Margin="0,0,8,5"
                                             Content="{Binding Label}"
-                                            IsEnabled="{Binding ViewModel.CanEditBuildingSelectionOptions, ElementName=TaskRoot}"
+                                            IsEnabled="{Binding ViewModel.CanEditTaskOptions, ElementName=TaskRoot}"
                                             IsChecked="{Binding IsSelected, Mode=TwoWay}" />
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
-                            <TextBlock
-                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                Text="{x:Bind ViewModel.CurrentDataImpactText, Mode=OneWay}"
-                                Visibility="{x:Bind ViewModel.CurrentDataImpactVisibility, Mode=OneWay}"
-                                TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
 
-                    <Border x:Name="PreflightStatusPanel" Style="{StaticResource WorkbenchCardStyle}">
+                    <Border Style="{StaticResource WorkbenchCardStyle}">
                         <StackPanel Spacing="10">
-                            <Grid ColumnSpacing="12">
+                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="高级设置" />
+                            <Grid ColumnSpacing="8" RowSpacing="8">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
-                                <StackPanel Spacing="2">
-                                    <TextBlock Style="{StaticResource SectionTitleStyle}" Text="运行前检查" />
-                                    <TextBlock
-                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                        Text="以下项目会随环境检查自动更新" />
-                                </StackPanel>
-                                <TextBlock
+                                <ComboBox
+                                    Header="日志级别"
+                                    IsEnabled="{x:Bind ViewModel.CanEditTaskOptions, Mode=OneWay}"
+                                    ItemsSource="{x:Bind ViewModel.LogSeverityOptions, Mode=OneWay}"
+                                    SelectedItem="{x:Bind ViewModel.SelectedLogSeverity, Mode=TwoWay}" />
+                                <ComboBox
                                     Grid.Column="1"
-                                    VerticalAlignment="Bottom"
-                                    FontWeight="SemiBold"
-                                    Text="{x:Bind ViewModel.PreflightDetailsHeader, Mode=OneWay}" />
+                                    Header="实时批量设备数"
+                                    IsEnabled="{x:Bind ViewModel.CanEditTaskOptions, Mode=OneWay}"
+                                    ItemsSource="{x:Bind ViewModel.RealtimeBatchSizeOptions, Mode=OneWay}"
+                                    SelectedItem="{x:Bind ViewModel.RealtimeBatchSize, Mode=TwoWay}" />
                             </Grid>
-                            <ProgressBar
-                                Height="4"
-                                Maximum="100"
-                                Value="{x:Bind ViewModel.PreflightProgressValue, Mode=OneWay}" />
-                            <ItemsControl ItemsSource="{x:Bind ViewModel.PreflightChecks, Mode=OneWay}">
-                                <ItemsControl.ItemContainerTransitions>
-                                    <TransitionCollection>
-                                        <EntranceThemeTransition FromHorizontalOffset="24" IsStaggeringEnabled="True" />
-                                        <RepositionThemeTransition />
-                                    </TransitionCollection>
-                                </ItemsControl.ItemContainerTransitions>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Grid MinHeight="38" Padding="0,4" ColumnSpacing="10">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="28" />
-                                                <ColumnDefinition Width="94" />
-                                                <ColumnDefinition Width="54" />
-                                                <ColumnDefinition Width="*" />
-                                            </Grid.ColumnDefinitions>
-                                            <Border
-                                                x:Name="StatusBadge"
-                                                Width="26"
-                                                Height="26"
-                                                VerticalAlignment="Center"
-                                                Background="{ThemeResource SubtleFillColorSecondaryBrush}"
-                                                CornerRadius="13">
-                                                <FontIcon
-                                                    x:Name="StatusIcon"
-                                                    FontSize="13"
-                                                    Foreground="{Binding IconForeground}"
-                                                    Glyph="{Binding Glyph}" />
-                                            </Border>
-                                            <TextBlock
-                                                Grid.Column="1"
-                                                VerticalAlignment="Center"
-                                                FontWeight="SemiBold"
-                                                Text="{Binding Title}" />
-                                            <TextBlock
-                                                x:Name="StatusText"
-                                                Grid.Column="2"
-                                                VerticalAlignment="Center"
-                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                                Text="{Binding State}" />
-                                            <TextBlock
-                                                Grid.Column="3"
-                                                VerticalAlignment="Center"
-                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                                Text="{Binding Detail}"
-                                                TextTrimming="CharacterEllipsis" />
-                                        </Grid>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
+                            <Grid ColumnSpacing="8" RowSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <ComboBox
+                                    Header="单批超时（毫秒）"
+                                    IsEnabled="{x:Bind ViewModel.CanEditTaskOptions, Mode=OneWay}"
+                                    ItemsSource="{x:Bind ViewModel.RealtimeTimeoutOptions, Mode=OneWay}"
+                                    SelectedItem="{x:Bind ViewModel.RealtimeTimeoutMs, Mode=TwoWay}" />
+                                <ComboBox
+                                    Grid.Column="1"
+                                    Header="设备批次重开间隔"
+                                    IsEnabled="{x:Bind ViewModel.CanEditTaskOptions, Mode=OneWay}"
+                                    ItemsSource="{x:Bind ViewModel.RealtimeReopenEveryOptions, Mode=OneWay}"
+                                    SelectedItem="{x:Bind ViewModel.RealtimeReopenEvery, Mode=TwoWay}" />
+                            </Grid>
                         </StackPanel>
                     </Border>
-
-                    <Expander HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
-                        <Expander.Header>
-                            <StackPanel Spacing="2">
-                                <TextBlock FontWeight="SemiBold" Text="高级设置" />
-                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="采集方式、补采和诊断选项" />
-                            </StackPanel>
-                        </Expander.Header>
-                        <StackPanel Spacing="10">
-                            <ComboBox
-                                Header="采集方式"
-                                DisplayMemberPath="Label"
-                                IsEnabled="{x:Bind ViewModel.CanEditTaskOptions, Mode=OneWay}"
-                                ItemsSource="{x:Bind ViewModel.TaskModes, Mode=OneWay}"
-                                SelectedItem="{x:Bind ViewModel.SelectedTaskMode, Mode=TwoWay}" />
-                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.TaskModeDescription, Mode=OneWay}" TextWrapping="WrapWholeWords" />
-                            <StackPanel
-                                x:Name="RecaptureLocationPanel"
-                                x:Load="{x:Bind ViewModel.IsRecaptureMode, Mode=OneWay}"
-                                Spacing="6">
-                                <TextBlock FontWeight="SemiBold" Text="补采定位" />
-                                <Grid ColumnSpacing="8">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <ComboBox
-                                        x:Name="RecaptureBuildingSelector"
-                                        Header="楼栋"
-                                        DisplayMemberPath="Label"
-                                        IsEnabled="{x:Bind ViewModel.CanEditTaskOptions, Mode=OneWay}"
-                                        ItemsSource="{x:Bind ViewModel.RecaptureBuildingOptions, Mode=OneWay}"
-                                        SelectedItem="{x:Bind ViewModel.SelectedRecaptureBuilding, Mode=TwoWay}" />
-                                    <ComboBox
-                                        x:Name="RecaptureSeatSelector"
-                                        Grid.Column="1"
-                                        Header="座号"
-                                        DisplayMemberPath="Label"
-                                        IsEnabled="{x:Bind ViewModel.CanSelectRecaptureSeat, Mode=OneWay}"
-                                        ItemsSource="{x:Bind ViewModel.RecaptureSeatOptions, Mode=OneWay}"
-                                        SelectedItem="{x:Bind ViewModel.SelectedRecaptureSeat, Mode=TwoWay}" />
-                                    <ComboBox
-                                        x:Name="RecaptureFloorSelector"
-                                        Grid.Column="2"
-                                        Header="楼层"
-                                        DisplayMemberPath="Label"
-                                        IsEnabled="{x:Bind ViewModel.CanSelectRecaptureFloor, Mode=OneWay}"
-                                        ItemsSource="{x:Bind ViewModel.RecaptureFloorOptions, Mode=OneWay}"
-                                        SelectedItem="{x:Bind ViewModel.SelectedRecaptureFloor, Mode=TwoWay}" />
-                                </Grid>
-                                <TextBlock
-                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                    Text="{x:Bind ViewModel.RecaptureLocationStatus, Mode=OneWay}"
-                                    TextWrapping="WrapWholeWords" />
-                            </StackPanel>
-                            <ToggleSwitch
-                                Header="保存诊断日志"
-                                IsEnabled="{x:Bind ViewModel.CanEditTaskOptions, Mode=OneWay}"
-                                IsOn="{x:Bind ViewModel.EnableLogFile, Mode=TwoWay}" />
-                        </StackPanel>
-                    </Expander>
                 </StackPanel>
             </ScrollViewer>
 
@@ -320,74 +220,117 @@
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
-                <Border
-                    Style="{StaticResource WorkbenchCardStyle}"
-                    Visibility="{x:Bind ViewModel.TaskProgressVisibility, Mode=OneWay}">
+                <Border Style="{StaticResource WorkbenchCardStyle}">
                     <StackPanel Spacing="10">
-                        <Grid ColumnSpacing="12">
+                        <Grid ColumnSpacing="8">
                             <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
-                            <StackPanel Spacing="2">
+                            <ProgressRing
+                                Width="16"
+                                Height="16"
+                                IsActive="{x:Bind ViewModel.IsRunning, Mode=OneWay}"
+                                VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1" Spacing="2">
                                 <TextBlock Style="{StaticResource SectionTitleStyle}" Text="任务进度" />
                                 <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
                             </StackPanel>
-                            <TextBlock Grid.Column="1" VerticalAlignment="Bottom" FontWeight="SemiBold" Text="{x:Bind ViewModel.ProgressText, Mode=OneWay}" />
+                            <TextBlock Grid.Column="2" VerticalAlignment="Bottom" FontWeight="SemiBold" Text="{x:Bind ViewModel.ProgressText, Mode=OneWay}" />
                         </Grid>
-                        <ProgressBar IsIndeterminate="{x:Bind ViewModel.IsProgressIndeterminate, Mode=OneWay}" Value="{x:Bind ViewModel.ProgressValue, Mode=OneWay}" />
-                        <Grid ColumnSpacing="12" RowSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Spacing="2">
-                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="当前活动" />
-                                <TextBlock Text="{x:Bind ViewModel.CurrentActivityText, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Spacing="2">
-                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="当前楼栋" />
-                                <TextBlock Text="{x:Bind ViewModel.CurrentBuildingText, Mode=OneWay}" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="2" Spacing="2">
-                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="采集计数" />
-                                <TextBlock Text="{x:Bind ViewModel.CollectedCountText, Mode=OneWay}" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="3" Spacing="2">
-                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="数据状态" />
-                                <TextBlock Text="{x:Bind ViewModel.DataUpdateText, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="4" Spacing="2">
-                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="运行时长" />
-                                <TextBlock Text="{x:Bind ViewModel.RunDurationText, Mode=OneWay}" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="5" Spacing="2">
-                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="最近心跳" />
-                                <TextBlock Text="{x:Bind ViewModel.LastHeartbeatText, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
-                            </StackPanel>
-                        </Grid>
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button Command="{x:Bind ViewModel.OpenDataCommand}" Style="{StaticResource ToolbarButtonStyle}" Content="打开数据管理" />
-                            <Button Command="{x:Bind ViewModel.OpenAuditCommand}" Style="{StaticResource ToolbarButtonStyle}" Content="查看审计结果" />
+                        <Border
+                            x:Name="CompletionBanner"
+                            Padding="12,10"
+                            Background="{ThemeResource SystemFillColorSuccessBackgroundBrush}"
+                            CornerRadius="6"
+                            Visibility="{x:Bind local:TasksPage.BoolToVisibility(ViewModel.ShowCompletionCelebration), Mode=OneWay}">
+                            <Border.Transitions>
+                                <TransitionCollection>
+                                    <EntranceThemeTransition FromVerticalOffset="-18" />
+                                </TransitionCollection>
+                            </Border.Transitions>
+                            <Grid ColumnSpacing="10">
+                                <Grid Width="30" Height="30" VerticalAlignment="Center">
+                                    <FontIcon
+                                        FontSize="24"
+                                        Glyph="&#xE73E;"
+                                        Foreground="{ThemeResource SystemFillColorSuccessBrush}" />
+                                </Grid>
+                                <StackPanel Grid.Column="1" Spacing="2">
+                                    <TextBlock
+                                        FontSize="15"
+                                        FontWeight="SemiBold"
+                                        Foreground="{ThemeResource SystemFillColorSuccessBrush}"
+                                        Text="{x:Bind ViewModel.CollectionCompletionText, Mode=OneWay}" />
+                                    <StackPanel Orientation="Horizontal" Spacing="14">
+                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.CollectionCompletedAtText, Mode=OneWay}" />
+                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.CollectionDurationText, Mode=OneWay}" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                        <StackPanel Spacing="6">
+                            <ProgressBar IsIndeterminate="{x:Bind ViewModel.IsRunning, Mode=OneWay}" />
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="楼栋采集状态" />
+                                <TextBlock Grid.Column="1" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.ProgressElapsedText, Mode=OneWay}" />
+                            </Grid>
+                            <ItemsControl ItemsSource="{x:Bind ViewModel.ProgressBuildings, Mode=OneWay}">
+                                <ItemsControl.Transitions>
+                                    <TransitionCollection>
+                                        <EntranceThemeTransition FromHorizontalOffset="14" />
+                                    </TransitionCollection>
+                                </ItemsControl.Transitions>
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <ItemsWrapGrid Orientation="Horizontal" MaximumRowsOrColumns="6" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Border Padding="8,5" Margin="0,0,6,4" Background="{ThemeResource SubtleFillColorSecondaryBrush}" CornerRadius="4">
+                                            <StackPanel Orientation="Horizontal" Spacing="5">
+                                                <Grid Width="18" Height="18">
+                                                    <FontIcon FontSize="13" Glyph="{Binding StateGlyph}" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" />
+                                                    <ProgressRing Width="18" Height="18" IsActive="{Binding IsCurrent}" IsIndeterminate="True" />
+                                                </Grid>
+                                                <TextBlock VerticalAlignment="Center" FontWeight="SemiBold" Text="{Binding Building}" />
+                                            </StackPanel>
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.ProgressLocationText, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
+                                <TextBlock Grid.Column="1" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.ProgressSpeedText, Mode=OneWay}" />
+                            </Grid>
                         </StackPanel>
-                        <ItemsControl ItemsSource="{x:Bind ViewModel.Stages, Mode=OneWay}">
+                        <ItemsControl
+                            x:Name="StagesList"
+                            ItemsSource="{x:Bind ViewModel.Stages, Mode=OneWay}"
+                            Visibility="Collapsed">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
-                                    <Grid Padding="0,7" ColumnSpacing="10">
+                                    <Grid Padding="0,6" ColumnSpacing="8">
                                         <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="24" />
-                                            <ColumnDefinition Width="150" />
-                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="20" />
+                                            <ColumnDefinition Width="140" />
+                                            <ColumnDefinition Width="60" />
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
-                                        <FontIcon FontSize="13" Glyph="&#xE915;" />
+                                        <FontIcon FontSize="12" Glyph="&#xE915;" />
                                         <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="{Binding Label}" />
                                         <TextBlock Grid.Column="2" Text="{Binding State}" />
-                                        <TextBlock Grid.Column="3" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding Detail}" TextWrapping="WrapWholeWords" />
+                                        <TextBlock Grid.Column="3" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding Detail}" TextTrimming="CharacterEllipsis" />
                                     </Grid>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
@@ -395,12 +338,10 @@
                     </StackPanel>
                 </Border>
 
-                <Border
-                    Grid.Row="{x:Bind ViewModel.LogsGridRow, Mode=OneWay}"
-                    Grid.RowSpan="{x:Bind ViewModel.LogsGridRowSpan, Mode=OneWay}"
-                    Style="{StaticResource WorkbenchCardStyle}">
+                <Border Grid.Row="1" VerticalAlignment="Top" Style="{StaticResource WorkbenchCardStyle}">
                     <Grid RowSpacing="8">
                         <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" />
                         </Grid.RowDefinitions>
@@ -411,58 +352,35 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
                                 <TextBlock Style="{StaticResource SectionTitleStyle}" Text="运行记录" />
-                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="失败时保留最后 300 条记录用于排查" />
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="失败时自动展开用于排查" />
                             </StackPanel>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
-                                <Button
-                                    AutomationProperties.Name="清空运行记录"
-                                    Command="{x:Bind ViewModel.ClearLogsCommand}"
-                                    IsEnabled="{x:Bind ViewModel.CanClearLogs, Mode=OneWay}"
-                                    Style="{StaticResource ToolbarButtonStyle}"
-                                    ToolTipService.ToolTip="清空运行记录"
-                                    Width="32"
-                                    Height="32"
-                                    Padding="0">
-                                    <FontIcon FontSize="14" Glyph="&#xE74D;" />
+                                <Button Click="CopyLogs_Click" Style="{StaticResource ToolbarButtonStyle}" ToolTipService.ToolTip="复制日志">
+                                    <FontIcon FontSize="13" Glyph="&#xE8C8;" />
                                 </Button>
-                                <Button
-                                    AutomationProperties.Name="展开运行记录"
-                                    Command="{x:Bind ViewModel.ToggleLogsExpandedCommand}"
-                                    Style="{StaticResource ToolbarButtonStyle}"
-                                    ToolTipService.ToolTip="展开运行记录"
-                                    Visibility="{x:Bind ViewModel.LogsExpandButtonVisibility, Mode=OneWay}"
-                                    Width="32"
-                                    Height="32"
-                                    Padding="0">
-                                    <FontIcon FontSize="14" Glyph="&#xE740;" />
-                                </Button>
-                                <Button
-                                    AutomationProperties.Name="还原任务进度布局"
-                                    Command="{x:Bind ViewModel.ToggleLogsExpandedCommand}"
-                                    Style="{StaticResource ToolbarButtonStyle}"
-                                    ToolTipService.ToolTip="还原任务进度布局"
-                                    Visibility="{x:Bind ViewModel.LogsRestoreButtonVisibility, Mode=OneWay}"
-                                    Width="32"
-                                    Height="32"
-                                    Padding="0">
-                                    <FontIcon FontSize="14" Glyph="&#xE73F;" />
+                                <Button Click="ClearLogs_Click" Style="{StaticResource ToolbarButtonStyle}" ToolTipService.ToolTip="清空日志">
+                                    <FontIcon FontSize="13" Glyph="&#xE74D;" />
                                 </Button>
                             </StackPanel>
                         </Grid>
                         <ListView
                             x:Name="LogsList"
-                            Grid.Row="1"
-                            ItemsSource="{x:Bind ViewModel.Logs, Mode=OneWay}"
-                            SelectionMode="None">
+                            Grid.Row="2"
+                            ItemsSource="{x:Bind ViewModel.FilteredLogs, Mode=OneWay}"
+                            MaxHeight="260"
+                            SelectionMode="None"
+                            ScrollViewer.VerticalScrollBarVisibility="Auto">
                             <ListView.ItemTemplate>
                                 <DataTemplate>
-                                    <Grid Padding="0,3" ColumnSpacing="10">
+                                    <Grid Padding="0,2" ColumnSpacing="6">
                                         <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="70" />
+                                            <ColumnDefinition Width="58" />
+                                            <ColumnDefinition Width="18" />
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
                                         <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{Binding Time}" />
-                                        <TextBlock Grid.Column="1" Text="{Binding Message}" TextWrapping="WrapWholeWords" />
+                                        <FontIcon Grid.Column="1" FontSize="12" Glyph="{Binding Severity, Converter={StaticResource LogSeverityGlyphConverter}}" Foreground="{Binding Severity, Converter={StaticResource LogSeverityBrushConverter}}" />
+                                        <TextBlock Grid.Column="2" Text="{Binding Message}" ToolTipService.ToolTip="{Binding Message}" TextWrapping="WrapWholeWords" Foreground="{Binding Severity, Converter={StaticResource LogSeverityBrushConverter}}" />
                                     </Grid>
                                 </DataTemplate>
                             </ListView.ItemTemplate>

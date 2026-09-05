@@ -14,6 +14,8 @@ public sealed class AreaGroupItemRow(AreaGroupItemRecord record)
     {
         "device" => "设备",
         "sub_area" => "子区",
+        "name_contains" => "名称包含",
+        "name_excludes" => "名称不包含",
         _ => "楼层",
     };
 
@@ -25,8 +27,6 @@ public sealed class AreaGroupItemRow(AreaGroupItemRecord record)
 
     public string CardName { get; } = record.CardName;
 
-    public string DeviceUid { get; } = record.DeviceUid;
-
     public string RawNote { get; } = record.Note;
 
     public string Note { get; } = string.IsNullOrWhiteSpace(record.Note) ? "--" : record.Note;
@@ -35,6 +35,8 @@ public sealed class AreaGroupItemRow(AreaGroupItemRecord record)
     {
         "device" => string.Join(" / ", new[] { Building, FloorLabel, SubAreaText, CardName }.Where(item => !string.IsNullOrWhiteSpace(item))),
         "sub_area" => string.Join(" / ", new[] { Building, FloorLabel, SubAreaText }.Where(item => !string.IsNullOrWhiteSpace(item))),
+        "name_contains" => $"{Building} / 名称包含：{CardName}",
+        "name_excludes" => $"{Building} / 名称不包含：{CardName}",
         _ => string.Join(" / ", new[] { Building, FloorLabel }.Where(item => !string.IsNullOrWhiteSpace(item))),
     };
 }

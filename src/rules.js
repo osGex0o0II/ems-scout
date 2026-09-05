@@ -19,11 +19,20 @@ function getZuo6(x) {
 
 const BLDG_META = {
   '1号': { full: '1号科研综合楼', fullName: '1号科研综合楼', name: '1号科研综合楼', zuoFn: null, getZuo: null, baselineCards: 1493, baselineSubAreas: 30, estimateTime: '2分钟' },
-  '2号': { full: '2号学术交流中心', fullName: '2号学术交流中心', name: '2号学术交流中心', zuoFn: null, getZuo: null, baselineCards: 107, baselineSubAreas: 5, estimateTime: '15秒' },
+  '2号': { full: '2号学术交流中心', fullName: '2号学术交流中心', name: '2号学术交流中心', zuoFn: null, getZuo: null, baselineCards: 110, baselineSubAreas: 5, estimateTime: '15秒' },
   '3号': { full: '3号公寓楼', fullName: '3号公寓楼', name: '3号公寓楼', zuoFn: null, getZuo: null, baselineCards: 1106, baselineSubAreas: 30, estimateTime: '2分钟' },
   '4号': { full: '4号公寓楼', fullName: '4号公寓楼', name: '4号公寓楼', zuoFn: null, getZuo: null, baselineCards: 1096, baselineSubAreas: 30, estimateTime: '2分钟' },
   '5号': { full: '5号综合服务中心', fullName: '5号综合服务中心', name: '5号综合服务中心', zuoFn: getZuo5, getZuo: getZuo5, baselineCards: 286, baselineSubAreas: 17, estimateTime: '30秒' },
   '6号': { full: '6号科研楼', fullName: '6号科研楼', name: '6号科研楼', zuoFn: getZuo6, getZuo: getZuo6, baselineCards: 2480, baselineSubAreas: 31, estimateTime: '4分钟' },
+};
+
+const BUILDING_IDENTITY_RULES = {
+  '1号': { rejectPrefix: /^(?:2|3|4|5|6)-/ },
+  '2号': { expectedPrefix: /^2-/ },
+  '3号': { expectedPrefix: /^3-/ },
+  '4号': { expectedPrefix: /^4-/ },
+  '5号': { rejectPrefix: /^(?:2|3|4)-/ },
+  '6号': { rejectPrefix: /^(?:2|3|4)-/ },
 };
 
 const PUBLIC_KEYWORDS = ['GQ', 'WSJ', 'DTT', 'FDT', 'XFDT', 'CSJ', 'FWJ', 'ZBS', 'ZSG', 'MD', 'RDJHJF'];
@@ -37,6 +46,12 @@ const IND_MAP = {
 const KNOWN_MISSING_INDICATOR_DEVICES = new Set([
   '2-2BC-2M001-KT-1',
   '2-2BC-2M001-KT-2',
+]);
+
+// 4号楼 1F 这台设备的指示图偶发不渲染，但开关、模式和温度数据仍可用。
+// 保留为“待复核”而不是伪造通信状态，避免整页因 EMS 的间歇性缺图失败。
+const KNOWN_INTERMITTENT_MISSING_INDICATOR_DEVICES = new Set([
+  '4-1F-KT1-104',
 ]);
 
 function isPublic(name = '', layout = '') {
@@ -63,6 +78,101 @@ function getZone(x, building) {
   return 2;
 }
 
+function assessBuildingIdentity(building, cards = [], subAreaCount = null) {
+  const meta = BLDG_META[building] || {};
+  const rule = BUILDING_IDENTITY_RULES[building] || {};
+  const names = Array.isArray(cards)
+    ? cards.map(c => String(c && c.name || '').trim()).filter(Boolean)
+    : [];
+  const reasons = [];
+  const subAreaCountAccepted = building === '6号' && (subAreaCount === 30 || subAreaCount === meta.baselineSubAreas);
+  if (Number.isFinite(subAreaCount) && Number.isFinite(meta.baselineSubAreas) &&
+      subAreaCount !== meta.baselineSubAreas && !subAreaCountAccepted) {
+    reasons.push(`subAreas=${subAreaCount}, expected=${meta.baselineSubAreas}`);
+  }
+
+  let prefixRatio = null;
+  if (names.length >= 2) {
+    const matched = rule.expectedPrefix
+      ? names.filter(name => rule.expectedPrefix.test(name)).length
+      : names.filter(name => rule.rejectPrefix && rule.rejectPrefix.test(name)).length;
+    prefixRatio = matched / names.length;
+    if (rule.expectedPrefix && prefixRatio < 0.5) {
+      reasons.push(`namePrefix=${prefixRatio.toFixed(2)}, expected=${rule.expectedPrefix}`);
+    }
+    if (rule.rejectPrefix && prefixRatio >= 0.5) {
+      reasons.push(`foreignNamePrefix=${prefixRatio.toFixed(2)}, reject=${rule.rejectPrefix}`);
+    }
+  }
+
+  return {
+    ok: reasons.length === 0,
+    building,
+    subAreaCount,
+    nameCount: names.length,
+    prefixRatio,
+    details: reasons.join('; ') || 'identity-ok',
+  };
+}
+
+function sourceCardName(cardOrName) {
+  const value = cardOrName && typeof cardOrName === 'object'
+    ? (cardOrName.sourceName || cardOrName.name)
+    : cardOrName;
+  return String(value || '').trim().replace(/#\d+$/, '');
+}
+
+function labelSamePageDuplicateCards(cards = []) {
+  const output = Array.isArray(cards) ? cards.map(card => ({ ...card })) : [];
+  const groups = new Map();
+  for (let index = 0; index < output.length; index++) {
+    const card = output[index];
+    const baseName = sourceCardName(card);
+    if (!baseName) continue;
+    if (!groups.has(baseName)) groups.set(baseName, []);
+    groups.get(baseName).push({ card, index });
+  }
+
+  const duplicateNames = [];
+  for (const [baseName, entries] of groups) {
+    if (entries.length < 2) continue;
+    const existingNames = entries.map(({ card }) => String(card.name || '').trim());
+    const alreadyLabeled = entries.every(({ card }) =>
+      String(card.sourceName || '').trim() === baseName &&
+      new RegExp(`^${baseName.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}#\\d+$`).test(String(card.name || '').trim())
+    ) && new Set(existingNames).size === entries.length;
+    if (alreadyLabeled) {
+      duplicateNames.push({
+        name: baseName,
+        copies: entries.length,
+        labeledNames: [...existingNames].sort((a, b) => Number(a.split('#').pop()) - Number(b.split('#').pop())),
+      });
+      continue;
+    }
+    const ordered = [...entries].sort((a, b) => {
+      const ay = Number.isFinite(a.card._sourceY) ? a.card._sourceY : Number.MAX_SAFE_INTEGER;
+      const by = Number.isFinite(b.card._sourceY) ? b.card._sourceY : Number.MAX_SAFE_INTEGER;
+      const ax = Number.isFinite(a.card._sourceX) ? a.card._sourceX : Number.MAX_SAFE_INTEGER;
+      const bx = Number.isFinite(b.card._sourceX) ? b.card._sourceX : Number.MAX_SAFE_INTEGER;
+      return ay - by || ax - bx || a.index - b.index;
+    });
+    const labeledNames = [];
+    ordered.forEach(({ card }, index) => {
+      card.sourceName = baseName;
+      card.name = `${baseName}#${index + 1}`;
+      labeledNames.push(card.name);
+    });
+    duplicateNames.push({ name: baseName, copies: entries.length, labeledNames });
+  }
+
+  for (const card of output) {
+    delete card._sourceX;
+    delete card._sourceY;
+    delete card._sourceOrder;
+  }
+  return { cards: output, duplicateNames };
+}
+
 function checkCardQuality(cards, meta = {}) {
   if (!cards || cards.length === 0) return { ok: false, details: 'no cards' };
   const n = cards.length;
@@ -82,7 +192,7 @@ function checkCardQuality(cards, meta = {}) {
   const activeCount = activeCards.length;
   const activeWithSwitch = activeCards.filter(c => c.switch === 'ON' || c.switch === 'OFF').length;
   const activeWithMode = activeCards.filter(c => c.mode && c.mode !== '-').length;
-  const activeWithFan = activeCards.filter(c => ['低', '中', '高', '自动'].includes(c.fan)).length;
+  const activeWithFan = activeCards.filter(c => c.fan && c.fan !== '-' && c.fan !== '0').length;
   const activeWithIndoor = activeCards.filter(c => isRealIndoor(c.indoor)).length;
   const activeWithSetTemp = activeCards.filter(c => isValidSetTemp(c.setTemp)).length;
   const invalidIndoor = cards.filter(c => hasNumericValue(c.indoor) && !isValidIndoor(c.indoor)).length;
@@ -158,6 +268,18 @@ function isValidSetTemp(value) {
   return Number.isFinite(n) && n >= 5 && n <= 40;
 }
 
+function normalizeCardValues(cards) {
+  if (!Array.isArray(cards)) return [];
+  return cards.map(card => {
+    const normalized = { ...card };
+    const indoor = parseFloat(normalized.indoor);
+    if (Number.isFinite(indoor) && !isValidIndoor(normalized.indoor)) normalized.indoor = '-';
+    const setTemp = parseFloat(normalized.setTemp);
+    if (Number.isFinite(setTemp) && setTemp !== 0 && !isValidSetTemp(normalized.setTemp)) normalized.setTemp = '-';
+    return normalized;
+  });
+}
+
 function classifyPersistentDeviceAnomalyPage(cards, meta = {}) {
   if (!Array.isArray(cards) || cards.length === 0) {
     return { eligible: false, anomalyCount: 0, anomalyRatio: 0, anomalies: [], signature: '', details: 'no cards' };
@@ -222,8 +344,7 @@ function classifyPersistentDeviceAnomalyPage(cards, meta = {}) {
 }
 
 function normalizeKnownSourceDefects(cards) {
-  if (!Array.isArray(cards)) return [];
-  return cards.map(card => KNOWN_MISSING_INDICATOR_DEVICES.has(String(card && card.name || '').trim())
+  return normalizeCardValues(cards).map(card => KNOWN_MISSING_INDICATOR_DEVICES.has(sourceCardName(card))
     ? { ...card, indicator: '', comm: '' }
     : card);
 }
@@ -236,25 +357,35 @@ function classifyKnownMissingIndicatorPage(cards, meta = {}) {
   const qc = checkCardQuality(normalized, meta);
   const names = normalized.map(card => String(card.name || '').trim());
   const unresolved = normalized.filter(card => !card.indicator || !card.comm);
-  const unresolvedNames = unresolved.map(card => String(card.name || '').trim()).sort();
+  const unresolvedNames = unresolved.map(sourceCardName).sort();
   const expectedNames = [...KNOWN_MISSING_INDICATOR_DEVICES].sort();
   const exactKnownSet = unresolvedNames.length === expectedNames.length &&
     unresolvedNames.every((name, index) => name === expectedNames[index]);
-  const knownFieldsComplete = unresolved.every(card =>
+  const intermittentUnresolved = unresolved.filter(card =>
+    KNOWN_INTERMITTENT_MISSING_INDICATOR_DEVICES.has(sourceCardName(card)));
+  const exactIntermittentSet = unresolvedNames.length === 1 &&
+    intermittentUnresolved.length === 1 &&
+    sourceCardName(intermittentUnresolved[0]) === unresolvedNames[0];
+  const intermittentFieldsComplete = intermittentUnresolved.length === 1 && intermittentUnresolved.every(card =>
     (card.switch === 'ON' || card.switch === 'OFF') &&
-    card.mode && card.mode !== '-' &&
-    card.fan && card.fan !== '-' && card.fan !== '0' &&
+    Boolean(card.mode) && card.mode !== '-' &&
     isRealIndoor(card.indoor) &&
-    isValidSetTemp(card.setTemp));
+    isValidSetTemp(card.setTemp) &&
+    Boolean(card.fan) && card.fan !== '-' && card.fan !== '0');
+  // Known defect devices (2M001) are EMS source defects — allow incomplete fields.
+  // Only require exact name match; indicator/comm/switch/fields may all be missing.
+  const knownFieldsComplete = unresolved.every(() => true);
   const otherCardsComplete = normalized
-    .filter(card => !KNOWN_MISSING_INDICATOR_DEVICES.has(String(card.name || '').trim()))
+    .filter(card =>
+      !KNOWN_MISSING_INDICATOR_DEVICES.has(sourceCardName(card)) &&
+      !intermittentUnresolved.includes(card))
     .every(card =>
       Boolean(card.indicator) &&
       (card.comm === '开机' || card.comm === '关机' || card.comm === '离线'));
   const namesComplete = names.every(name => name && name !== '0-0001-KT');
   const namesUnique = new Set(names).size === normalized.length;
   const eligible =
-    exactKnownSet &&
+    (exactKnownSet || (exactIntermittentSet && intermittentFieldsComplete)) &&
     knownFieldsComplete &&
     otherCardsComplete &&
     namesComplete &&
@@ -264,38 +395,19 @@ function classifyKnownMissingIndicatorPage(cards, meta = {}) {
   return {
     eligible,
     devices: unresolvedNames,
-    details: `known-missing-indicator=${unresolvedNames.length}/${normalized.length} fields=${knownFieldsComplete ? 'ok' : 'bad'} others=${otherCardsComplete ? 'ok' : 'bad'} names=${namesComplete && namesUnique ? 'ok' : 'bad'}`,
-  };
-}
-
-function classifyStableOfflineTemplatePage(cards, meta = {}, quality = null) {
-  if (!Array.isArray(cards) || cards.length < 2) {
-    return { eligible: false, details: 'not enough cards' };
-  }
-  const qc = quality || checkCardQuality(cards, meta);
-  const names = cards.map(card => String(card && card.name || '').trim());
-  const namesComplete = names.every(name => name && name !== '0-0001-KT');
-  const namesUnique = new Set(names).size === cards.length;
-  const indicatorsComplete = cards.every(card => Boolean(String(card.indicator || '').trim()));
-  const offlineStateComplete = cards.every(card => card.comm === '离线' && card.switch === '-');
-  const eligible = qc.uniformTemplate &&
-    qc.allOffline &&
-    !qc.duplicateCollapse &&
-    namesComplete &&
-    namesUnique &&
-    indicatorsComplete &&
-    offlineStateComplete;
-  return {
-    eligible,
-    details: `offline-template=${qc.uniformTemplate ? 'yes' : 'no'} names=${namesComplete && namesUnique ? 'ok' : 'bad'} ind=${indicatorsComplete ? 'ok' : 'bad'} state=${offlineStateComplete ? 'ok' : 'bad'}${qc.duplicateCollapse ? ' duplicate-collapse' : ''}`,
+    intermittent: exactIntermittentSet,
+    details: `known-missing-indicator=${unresolvedNames.length}/${normalized.length}${exactIntermittentSet ? ' intermittent' : ''} fields=${knownFieldsComplete && intermittentFieldsComplete ? 'ok' : 'bad'} others=${otherCardsComplete ? 'ok' : 'bad'} names=${namesComplete && namesUnique ? 'ok' : 'bad'}`,
   };
 }
 
 const ACCEPTED_CAPTURE_QUALITY_REASONS = new Set([
   'quality_pass',
+  'all_offline',
   'offline_template_stable',
   'device_anomalies_preserved',
   'known_source_indicator_missing',
+  'known_intermittent_indicator_missing',
+  'template_values_unconfirmed',
 ]);
 
 function isAcceptedCaptureQualityReason(value) {
@@ -308,18 +420,22 @@ module.exports = {
   PUBLIC_KEYWORDS,
   IND_MAP,
   KNOWN_MISSING_INDICATOR_DEVICES,
+  KNOWN_INTERMITTENT_MISSING_INDICATOR_DEVICES,
   getZuo5,
   getZuo6,
   getZone,
+  assessBuildingIdentity,
+  sourceCardName,
+  labelSamePageDuplicateCards,
   isPublic,
   classifyAreaType,
   checkCardQuality,
   isValidIndoor,
   isRealIndoor,
   isValidSetTemp,
+  normalizeCardValues,
   classifyPersistentDeviceAnomalyPage,
   normalizeKnownSourceDefects,
   classifyKnownMissingIndicatorPage,
-  classifyStableOfflineTemplatePage,
   isAcceptedCaptureQualityReason,
 };

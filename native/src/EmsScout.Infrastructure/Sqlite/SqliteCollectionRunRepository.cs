@@ -10,17 +10,23 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         int limit = 50,
         CancellationToken cancellationToken = default)
     {
-        await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadOnly);
-        if (!await SqliteSchemaGuard.TableExistsAsync(connection, "collection_runs", cancellationToken).ConfigureAwait(false))
+        EnsureDatabaseExists();
+        await using var connection = OpenConnection(readOnly: true);
+        if (!await TableExistsAsync(connection, "collection_runs", cancellationToken).ConfigureAwait(false))
         {
             return [];
         }
 
+        var snapshotCardCount = await TableExistsAsync(connection, "run_cards", cancellationToken).ConfigureAwait(false)
+            ? "(SELECT COUNT(*) FROM run_cards snapshot WHERE snapshot.run_id = collection_runs.id)"
+            : "0";
+
         await using var command = connection.CreateCommand();
-        command.CommandText = """
+        command.CommandText = $"""
             SELECT id, run_key, started_at, completed_at, imported_at, status, scope,
                    buildings, json_path, db_snapshot_path, card_count, on_count,
-                   off_count, offline_count, unknown_count, quality_summary, is_anomaly, note
+                   off_count, offline_count, unknown_count, quality_summary, is_anomaly, note,
+                   {snapshotCardCount} AS snapshot_card_count
             FROM collection_runs
             ORDER BY datetime(completed_at) DESC, id DESC
             LIMIT $limit
@@ -43,15 +49,14 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         string note,
         CancellationToken cancellationToken = default)
     {
-        await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadWrite);
-        await using var transaction = connection.BeginTransaction(deferred: false);
-        var current = await LoadRunAsync(connection, transaction, runId, cancellationToken).ConfigureAwait(false)
+        EnsureDatabaseExists();
+        await using var connection = OpenConnection(readOnly: false);
+        var current = await LoadRunAsync(connection, runId, cancellationToken).ConfigureAwait(false)
                       ?? throw new InvalidOperationException($"Run not found: {runId}");
         var nextNote = NextAnomalyNote(current.Note, isAnomaly, note);
 
         await using (var command = connection.CreateCommand())
         {
-            command.Transaction = transaction;
             command.CommandText = "UPDATE collection_runs SET is_anomaly = $is_anomaly, note = $note WHERE id = $id";
             command.Parameters.AddWithValue("$is_anomaly", isAnomaly ? 1 : 0);
             command.Parameters.AddWithValue("$note", nextNote);
@@ -59,27 +64,25 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        var updated = await LoadRunAsync(connection, transaction, runId, cancellationToken).ConfigureAwait(false)
-                      ?? throw new InvalidOperationException($"Run not found after update: {runId}");
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return updated;
+        return await LoadRunAsync(connection, runId, cancellationToken).ConfigureAwait(false)
+               ?? throw new InvalidOperationException($"Run not found after update: {runId}");
     }
 
     public async Task<CollectionRunRestoreResult> RestoreCurrentAsync(
         long runId,
         CancellationToken cancellationToken = default)
     {
-        await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadWrite);
+        EnsureDatabaseExists();
+        await using var connection = OpenConnection(readOnly: false);
         await EnsureQualityReasonColumnsAsync(connection, cancellationToken).ConfigureAwait(false);
-        await using var transaction = connection.BeginTransaction(deferred: false);
-        var run = await LoadRunAsync(connection, transaction, runId, cancellationToken).ConfigureAwait(false)
+        var run = await LoadRunAsync(connection, runId, cancellationToken).ConfigureAwait(false)
                   ?? throw new InvalidOperationException($"Run not found: {runId}");
         if (run.IsAnomaly)
         {
             throw new InvalidOperationException("异常隔离批次不能恢复，请先取消异常标记并复核数据。");
         }
 
-        if (!await HasRunSnapshotAsync(connection, transaction, runId, cancellationToken).ConfigureAwait(false))
+        if (!await HasRunSnapshotAsync(connection, runId, cancellationToken).ConfigureAwait(false))
         {
             throw new InvalidOperationException($"Run {runId} does not contain a restorable snapshot.");
         }
@@ -90,6 +93,9 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             throw new InvalidOperationException("部分批次没有楼栋范围，无法安全恢复。");
         }
 
+        await using var transaction = (SqliteTransaction)await connection
+            .BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
         var backupRunId = await CreatePreRestoreBackupAsync(connection, transaction, run, cancellationToken).ConfigureAwait(false);
         if (isPartial)
         {
@@ -123,21 +129,14 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         long runId,
         CancellationToken cancellationToken = default)
     {
-        await using var connection = SqliteDatabase.OpenExisting(databasePathResolver, SqliteOpenMode.ReadWrite);
-        await using var transaction = connection.BeginTransaction(deferred: false);
-        var run = await LoadRunAsync(connection, transaction, runId, cancellationToken).ConfigureAwait(false)
+        EnsureDatabaseExists();
+        await using var connection = OpenConnection(readOnly: false);
+        var run = await LoadRunAsync(connection, runId, cancellationToken).ConfigureAwait(false)
                   ?? throw new InvalidOperationException($"Run not found: {runId}");
 
-        if (await SqliteSchemaGuard.TableExistsAsync(connection, "area_group_change_requests", cancellationToken).ConfigureAwait(false))
-        {
-            await ExecuteCountAsync(
-                    connection,
-                    transaction,
-                    "UPDATE area_group_change_requests SET run_id = NULL WHERE run_id = $run_id",
-                    runId,
-                    cancellationToken)
-                .ConfigureAwait(false);
-        }
+        await using var transaction = (SqliteTransaction)await connection
+            .BeginTransactionAsync(cancellationToken)
+            .ConfigureAwait(false);
         var deletedCards = await ExecuteCountAsync(connection, transaction, "DELETE FROM run_cards WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
         var deletedPages = await ExecuteCountAsync(connection, transaction, "DELETE FROM run_pages WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
         var deletedSubAreas = await ExecuteCountAsync(connection, transaction, "DELETE FROM run_sub_areas WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
@@ -155,18 +154,38 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             deletedBuildings);
     }
 
+    private SqliteConnection OpenConnection(bool readOnly)
+    {
+        var mode = readOnly ? "ReadOnly" : "ReadWrite";
+        var connection = new SqliteConnection($"Data Source={databasePathResolver()};Mode={mode}");
+        connection.Open();
+        return connection;
+    }
+
+    private void EnsureDatabaseExists()
+    {
+        var databasePath = databasePathResolver();
+        if (!File.Exists(databasePath))
+        {
+            throw new FileNotFoundException("Cannot find EMS SQLite database.", databasePath);
+        }
+    }
+
     private static async Task<CollectionRunRecord?> LoadRunAsync(
         SqliteConnection connection,
-        SqliteTransaction? transaction,
         long runId,
         CancellationToken cancellationToken)
     {
+        var snapshotCardCount = await TableExistsAsync(connection, "run_cards", cancellationToken).ConfigureAwait(false)
+            ? "(SELECT COUNT(*) FROM run_cards snapshot WHERE snapshot.run_id = collection_runs.id)"
+            : "0";
+
         await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
+        command.CommandText = $"""
             SELECT id, run_key, started_at, completed_at, imported_at, status, scope,
                    buildings, json_path, db_snapshot_path, card_count, on_count,
-                   off_count, offline_count, unknown_count, quality_summary, is_anomaly, note
+                   off_count, offline_count, unknown_count, quality_summary, is_anomaly, note,
+                   {snapshotCardCount} AS snapshot_card_count
             FROM collection_runs
             WHERE id = $id
             """;
@@ -182,33 +201,32 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
     {
         return new CollectionRunRecord(
             Id: reader.GetInt64(reader.GetOrdinal("id")),
-            RunKey: SqliteValueReader.ReadString(reader, "run_key"),
-            StartedAt: SqliteValueReader.ReadString(reader, "started_at"),
-            CompletedAt: SqliteValueReader.ReadString(reader, "completed_at"),
-            ImportedAt: SqliteValueReader.ReadString(reader, "imported_at"),
-            Status: SqliteValueReader.ReadString(reader, "status"),
-            Scope: SqliteValueReader.ReadString(reader, "scope"),
-            Buildings: ParseStringArray(SqliteValueReader.ReadString(reader, "buildings")),
-            JsonPath: SqliteValueReader.ReadString(reader, "json_path"),
-            DbSnapshotPath: SqliteValueReader.ReadString(reader, "db_snapshot_path"),
-            CardCount: SqliteValueReader.ReadInt32(reader, "card_count"),
-            OnCount: SqliteValueReader.ReadInt32(reader, "on_count"),
-            OffCount: SqliteValueReader.ReadInt32(reader, "off_count"),
-            OfflineCount: SqliteValueReader.ReadInt32(reader, "offline_count"),
-            UnknownCount: SqliteValueReader.ReadInt32(reader, "unknown_count"),
-            QualitySummary: SqliteValueReader.ReadString(reader, "quality_summary"),
-            IsAnomaly: SqliteValueReader.ReadInt32(reader, "is_anomaly") != 0,
-            Note: SqliteValueReader.ReadString(reader, "note"));
+            RunKey: ReadString(reader, "run_key"),
+            StartedAt: ReadString(reader, "started_at"),
+            CompletedAt: ReadString(reader, "completed_at"),
+            ImportedAt: ReadString(reader, "imported_at"),
+            Status: ReadString(reader, "status"),
+            Scope: ReadString(reader, "scope"),
+            Buildings: ParseStringArray(ReadString(reader, "buildings")),
+            JsonPath: ReadString(reader, "json_path"),
+            DbSnapshotPath: ReadString(reader, "db_snapshot_path"),
+            CardCount: ReadInt32(reader, "card_count"),
+            OnCount: ReadInt32(reader, "on_count"),
+            OffCount: ReadInt32(reader, "off_count"),
+            OfflineCount: ReadInt32(reader, "offline_count"),
+            UnknownCount: ReadInt32(reader, "unknown_count"),
+            QualitySummary: ReadString(reader, "quality_summary"),
+            IsAnomaly: ReadInt32(reader, "is_anomaly") != 0,
+            Note: ReadString(reader, "note"),
+            SnapshotCardCount: ReadInt32(reader, "snapshot_card_count"));
     }
 
     private static async Task<bool> HasRunSnapshotAsync(
         SqliteConnection connection,
-        SqliteTransaction transaction,
         long runId,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
         command.CommandText = "SELECT COUNT(*) FROM run_cards WHERE run_id = $run_id";
         command.Parameters.AddWithValue("$run_id", runId);
         var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
@@ -392,10 +410,10 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         await using var reader = await select.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            building.Value = SqliteValueReader.ReadString(reader, "building");
-            subAreaCount.Value = DbValue(SqliteValueReader.ReadNullableInt64(reader, "sub_area_count"));
-            menuClicked.Value = DbValue(SqliteValueReader.ReadString(reader, "menu_clicked"));
-            updatedAt.Value = DbValue(SqliteValueReader.ReadString(reader, "updated_at"));
+            building.Value = ReadString(reader, "building");
+            subAreaCount.Value = DbValue(ReadNullableInt64(reader, "sub_area_count"));
+            menuClicked.Value = DbValue(ReadString(reader, "menu_clicked"));
+            updatedAt.Value = DbValue(ReadString(reader, "updated_at"));
             await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
     }
@@ -434,12 +452,12 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         await using var reader = await select.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            building.Value = SqliteValueReader.ReadString(reader, "building");
-            subIdx.Value = DbValue(SqliteValueReader.ReadNullableInt64(reader, "sub_idx"));
-            floor.Value = DbValue(SqliteValueReader.ReadNullableDouble(reader, "floor"));
-            text.Value = DbValue(SqliteValueReader.ReadString(reader, "text"));
-            x.Value = DbValue(SqliteValueReader.ReadNullableInt64(reader, "x"));
-            y.Value = DbValue(SqliteValueReader.ReadNullableInt64(reader, "y"));
+            building.Value = ReadString(reader, "building");
+            subIdx.Value = DbValue(ReadNullableInt64(reader, "sub_idx"));
+            floor.Value = DbValue(ReadNullableDouble(reader, "floor"));
+            text.Value = DbValue(ReadString(reader, "text"));
+            x.Value = DbValue(ReadNullableInt64(reader, "x"));
+            y.Value = DbValue(ReadNullableInt64(reader, "y"));
             var newId = await insert.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
             map[reader.GetInt64(reader.GetOrdinal("id"))] =
                 Convert.ToInt64(newId, System.Globalization.CultureInfo.InvariantCulture);
@@ -496,16 +514,16 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             }
 
             subAreaId.Value = newSubAreaId;
-            pageName.Value = DbValue(SqliteValueReader.ReadString(reader, "page_name"));
-            count.Value = DbValue(SqliteValueReader.ReadNullableInt64(reader, "count"));
-            rawCount.Value = DbValue(SqliteValueReader.ReadNullableInt64(reader, "raw_count"));
-            uniqueCount.Value = DbValue(SqliteValueReader.ReadNullableInt64(reader, "unique_count"));
-            duplicateNames.Value = DbValue(SqliteValueReader.ReadString(reader, "duplicate_names"));
-            onHref.Value = DbValue(SqliteValueReader.ReadString(reader, "on_href"));
-            offHref.Value = DbValue(SqliteValueReader.ReadString(reader, "off_href"));
-            layout.Value = DbValue(SqliteValueReader.ReadString(reader, "layout"));
-            qualityReason.Value = DbValue(SqliteValueReader.ReadString(reader, "quality_reason"));
-            err.Value = DbValue(SqliteValueReader.ReadString(reader, "err"));
+            pageName.Value = DbValue(ReadString(reader, "page_name"));
+            count.Value = DbValue(ReadNullableInt64(reader, "count"));
+            rawCount.Value = DbValue(ReadNullableInt64(reader, "raw_count"));
+            uniqueCount.Value = DbValue(ReadNullableInt64(reader, "unique_count"));
+            duplicateNames.Value = DbValue(ReadString(reader, "duplicate_names"));
+            onHref.Value = DbValue(ReadString(reader, "on_href"));
+            offHref.Value = DbValue(ReadString(reader, "off_href"));
+            layout.Value = DbValue(ReadString(reader, "layout"));
+            qualityReason.Value = DbValue(ReadString(reader, "quality_reason"));
+            err.Value = DbValue(ReadString(reader, "err"));
             var newId = await insert.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
             map[reader.GetInt64(reader.GetOrdinal("id"))] =
                 Convert.ToInt64(newId, System.Globalization.CultureInfo.InvariantCulture);
@@ -558,14 +576,14 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             }
 
             pageId.Value = newPageId;
-            name.Value = DbValue(SqliteValueReader.ReadString(reader, "name"));
-            switchState.Value = DbValue(SqliteValueReader.ReadString(reader, "switch"));
-            mode.Value = DbValue(SqliteValueReader.ReadString(reader, "mode"));
-            indoor.Value = DbValue(SqliteValueReader.ReadString(reader, "indoor"));
-            setTemp.Value = DbValue(SqliteValueReader.ReadString(reader, "set_temp"));
-            fan.Value = DbValue(SqliteValueReader.ReadString(reader, "fan"));
-            indicator.Value = DbValue(SqliteValueReader.ReadString(reader, "indicator"));
-            comm.Value = DbValue(SqliteValueReader.ReadString(reader, "comm"));
+            name.Value = DbValue(ReadString(reader, "name"));
+            switchState.Value = DbValue(ReadString(reader, "switch"));
+            mode.Value = DbValue(ReadString(reader, "mode"));
+            indoor.Value = DbValue(ReadString(reader, "indoor"));
+            setTemp.Value = DbValue(ReadString(reader, "set_temp"));
+            fan.Value = DbValue(ReadString(reader, "fan"));
+            indicator.Value = DbValue(ReadString(reader, "indicator"));
+            comm.Value = DbValue(ReadString(reader, "comm"));
             restored += await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
@@ -598,19 +616,54 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    private static async Task<bool> TableExistsAsync(
+        SqliteConnection connection,
+        string tableName,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $name LIMIT 1";
+        command.Parameters.AddWithValue("$name", tableName);
+        var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return result is not null;
+    }
+
     private static async Task EnsureQualityReasonColumnsAsync(
         SqliteConnection connection,
         CancellationToken cancellationToken)
     {
-        await SqliteSchemaGuard.RequireCurrentAsync(
-            connection,
-            new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        await AddColumnIfMissingAsync(connection, "pages", "quality_reason", "TEXT", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(connection, "run_pages", "quality_reason", "TEXT", cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task AddColumnIfMissingAsync(
+        SqliteConnection connection,
+        string tableName,
+        string columnName,
+        string columnType,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, tableName, cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        await using (var probe = connection.CreateCommand())
+        {
+            probe.CommandText = $"PRAGMA table_info({tableName})";
+            await using var reader = await probe.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
-                ["pages"] = ["id", "sub_area_id", "quality_reason"],
-                ["run_pages"] = ["id", "run_id", "run_sub_area_id", "quality_reason"],
-            },
-            ["idx_pg_sa", "idx_run_pages_sa"],
-            cancellationToken).ConfigureAwait(false);
+                if (string.Equals(ReadString(reader, "name"), columnName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+        }
+
+        await using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {columnType}";
+        await alter.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static string NextAnomalyNote(string existingNote, bool isAnomaly, string note)
@@ -651,4 +704,27 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
 
     private static object DbValue(double? value) => value.HasValue ? value.Value : DBNull.Value;
 
+    private static string ReadString(SqliteDataReader reader, string column)
+    {
+        var ordinal = reader.GetOrdinal(column);
+        return reader.IsDBNull(ordinal) ? string.Empty : reader.GetString(ordinal);
+    }
+
+    private static int ReadInt32(SqliteDataReader reader, string column)
+    {
+        var ordinal = reader.GetOrdinal(column);
+        return reader.IsDBNull(ordinal) ? 0 : reader.GetInt32(ordinal);
+    }
+
+    private static long? ReadNullableInt64(SqliteDataReader reader, string column)
+    {
+        var ordinal = reader.GetOrdinal(column);
+        return reader.IsDBNull(ordinal) ? null : reader.GetInt64(ordinal);
+    }
+
+    private static double? ReadNullableDouble(SqliteDataReader reader, string column)
+    {
+        var ordinal = reader.GetOrdinal(column);
+        return reader.IsDBNull(ordinal) ? null : reader.GetDouble(ordinal);
+    }
 }

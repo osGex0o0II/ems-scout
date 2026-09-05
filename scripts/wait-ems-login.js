@@ -2,7 +2,7 @@
 'use strict';
 
 const { chromium } = require('playwright');
-const { sanitizeErrorForDisplay, sanitizeUrlForDisplay } = require('../src/url-sanitizer');
+const { isAllowedEmsUrl, isAllowedCdpUrl, sanitizeUrlForDisplay } = require('../src/connection-policy');
 
 function argValue(name, fallback = '') {
   const hit = process.argv.find(a => a.startsWith(name + '='));
@@ -10,18 +10,17 @@ function argValue(name, fallback = '') {
 }
 
 const cdpUrl = argValue('--cdp-url', process.env.CDP_URL || 'http://127.0.0.1:9222');
-const emsUrl = process.env.EMS_URL || 'http://172.29.248.4:8000/ui';
+const emsUrl = argValue('--ems-url', process.env.EMS_URL || 'http://172.29.248.4:8000/ui');
 const timeoutSeconds = Math.max(1, Number(argValue('--timeout-seconds', '120')) || 120);
+if (!isAllowedEmsUrl(emsUrl, emsUrl)) throw new Error(`Invalid EMS URL: ${sanitizeUrlForDisplay(emsUrl)}`);
+if (!isAllowedCdpUrl(cdpUrl, process.env.EMS_ALLOW_REMOTE_CDP === '1')) throw new Error(`Unsafe CDP URL: ${sanitizeUrlForDisplay(cdpUrl)}`);
 
 function isEmsPageUrl(url) {
   if (!url || url === 'about:blank') return false;
   try {
-    const expected = new URL(emsUrl);
-    const current = new URL(url);
-    return current.host === expected.host &&
-      (current.pathname.includes('/ui') || expected.pathname.includes(current.pathname));
+    return isAllowedEmsUrl(url, emsUrl);
   } catch {
-    return url.includes('/ui');
+    return false;
   }
 }
 
@@ -79,6 +78,6 @@ async function main() {
 }
 
 main().catch(err => {
-  console.error('EMS_LOGIN_ERROR ' + sanitizeErrorForDisplay(err, [emsUrl]));
+  console.error('EMS_LOGIN_ERROR ' + (err && err.message ? err.message : String(err)));
   process.exit(1);
 });

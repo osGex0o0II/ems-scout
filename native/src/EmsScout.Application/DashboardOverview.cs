@@ -1,20 +1,61 @@
 using EmsScout.Domain;
-using EmsScout.Application.Attention;
 
 namespace EmsScout.Application;
 
 public sealed record DashboardOverview(
     string SourcePath,
-    DateTimeOffset SourceUpdatedAt,
+    DateTimeOffset? SourceUpdatedAt,
     FleetSummary Summary,
     IReadOnlyList<OverviewMetric> Metrics,
-    IReadOnlyList<DashboardRiskItem> Risks);
+    IReadOnlyList<DashboardRiskItem> Risks,
+    IReadOnlyList<DashboardAreaGroupSummary> AreaGroups,
+    string AreaGroupsError);
 
 public sealed record OverviewMetric(
     string Label,
     string Value,
     string Detail,
-    OverviewMetricKind Kind);
+    OverviewMetricKind Kind,
+    string CommunicationState = "",
+    string AreaType = "");
+
+public sealed record DashboardAreaGroupSummary(
+    long Id,
+    string Name,
+    string AreaLabel,
+    string Description,
+    string Priority,
+    int MemberCount,
+    int Total,
+    int Online,
+    int Offline,
+    int Unknown,
+    int Running,
+    int Stopped,
+    int CoveredAreas,
+    int PublicTotal,
+    int PublicRunning,
+    int PublicStopped,
+    int PublicOffline,
+    int PublicUnknown,
+    int PublicCoveredAreas)
+{
+    public int Attention => Offline + Unknown;
+
+    public int PublicAttention => PublicOffline + PublicUnknown;
+
+    public double PublicRunningRate => PublicTotal == 0 ? 0 : PublicRunning / (double)PublicTotal;
+
+    public int PrivateTotal => Math.Max(0, Total - PublicTotal);
+
+    public int PrivateRunning => Math.Max(0, Running - PublicRunning);
+
+    public int PrivateStopped => Math.Max(0, Stopped - PublicStopped);
+
+    public int PrivateOffline => Math.Max(0, Offline - PublicOffline);
+
+    public int PrivateUnknown => Math.Max(0, Unknown - PublicUnknown);
+}
 
 public enum OverviewMetricKind
 {
@@ -36,18 +77,8 @@ public sealed record DashboardRiskItem(
     string RealtimeMatch = "",
     string RealtimePoints = "",
     string QuickFilter = "",
-    string WatchState = "",
-    string IssueId = "",
-    string SourceKey = "",
-    string IssueType = "",
-    string Scope = "全部楼栋",
-    long? RunId = null,
-    string Status = AttentionIssueStatuses.Unprocessed,
-    string IgnoreReason = "",
-    DateTimeOffset? LastSeenAt = null)
+    string WatchState = "")
 {
-    public bool IsActionable => !string.IsNullOrWhiteSpace(IssueId);
-
     public bool CanNavigate =>
         !string.IsNullOrWhiteSpace(CommunicationState) ||
         !string.IsNullOrWhiteSpace(RealtimeMatch) ||

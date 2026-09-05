@@ -7,8 +7,8 @@ public sealed class DataSourceOption
     public DataSourceOption()
     {
         Value = string.Empty;
-        Label = "当前数据";
-        Detail = "SQLite 当前表";
+        Label = "最新采集数据";
+        Detail = "当前 SQLite 数据";
         RunId = null;
     }
 
@@ -30,7 +30,7 @@ public sealed class DataSourceOption
 
     public bool IsCurrent => RunId is null;
 
-    public string DisplayLabel => IsCurrent ? Label : $"{Label}  {Detail}";
+    public string DisplayLabel => IsCurrent ? Label : $"{Label} · {Detail}";
 
     private static string FormatDateTime(string value)
     {

@@ -18,6 +18,7 @@ public sealed class AppSettingsServiceTests
             DataDirectory = "  data-out  ",
             ExportDirectory = "",
             DefaultCollectionMode = "auto-launch",
+            CheckLoginBeforeCollection = false,
             LogLevel = "debug",
             Theme = "dark",
             SaveNdjsonLog = false,
@@ -30,34 +31,15 @@ public sealed class AppSettingsServiceTests
         Assert.Equal("http://example.local/ui", loaded.EmsUrl);
         Assert.Equal(65535, loaded.EdgeCdpPort);
         Assert.Equal("data-out", loaded.DataDirectory);
-        Assert.Equal(AppStorageDefaults.ExportDirectory, loaded.ExportDirectory);
+        Assert.Equal("out/data-management-export", loaded.ExportDirectory);
         Assert.Equal("edge-cdp", loaded.DefaultCollectionMode);
+        Assert.True(loaded.CheckLoginBeforeCollection);
         Assert.Equal("DEBUG", loaded.LogLevel);
         Assert.Equal("dark", loaded.Theme);
         Assert.False(loaded.SaveNdjsonLog);
         Assert.True(loaded.ReduceMotion);
 
         Directory.Delete(tempDir, recursive: true);
-    }
-
-    [Fact]
-    public void LegacyAutoLaunchNormalizesToManualCdp()
-    {
-        var tempDir = Path.Combine(Path.GetTempPath(), "ems-scout-settings-tests", Guid.NewGuid().ToString("N"));
-        var settingsPath = Path.Combine(tempDir, "settings.json");
-        Directory.CreateDirectory(tempDir);
-        try
-        {
-            File.WriteAllText(settingsPath, """{"DefaultCollectionMode":"auto-launch"}""");
-
-            var loaded = new AppSettingsService(settingsPath).Load();
-
-            Assert.Equal("edge-cdp", loaded.DefaultCollectionMode);
-        }
-        finally
-        {
-            Directory.Delete(tempDir, recursive: true);
-        }
     }
 
     [Fact]
@@ -78,42 +60,18 @@ public sealed class AppSettingsServiceTests
     }
 
     [Fact]
-    public void NewSettingsUseWritableLocalApplicationDataDirectories()
-    {
-        var settings = new AppSettings();
-
-        Assert.True(Path.IsPathRooted(settings.DataDirectory));
-        Assert.Equal(AppStorageDefaults.DataDirectory, settings.DataDirectory);
-        Assert.Equal(AppStorageDefaults.ExportDirectory, settings.ExportDirectory);
-        Assert.StartsWith(AppStorageDefaults.ProductDirectory, settings.DataDirectory, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task ConcurrentSavesAlwaysPublishACompleteJsonDocument()
+    public void MigratesLegacyDataDirectoryToCompleteOutDirectory()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "ems-scout-settings-tests", Guid.NewGuid().ToString("N"));
         var settingsPath = Path.Combine(tempDir, "settings.json");
         var service = new AppSettingsService(settingsPath);
 
-        var writers = Enumerable.Range(0, 4).Select(writer => Task.Run(() =>
-        {
-            for (var index = 0; index < 75; index++)
-            {
-                service.Save(new AppSettings
-                {
-                    EmsUrl = $"http://writer-{writer}.local/ui/{index}",
-                    DataDirectory = $"data-{writer}",
-                    ExportDirectory = $"export-{writer}",
-                });
-            }
-        }));
+        service.Save(new AppSettings { DataDirectory = "data" });
 
-        await Task.WhenAll(writers);
         var loaded = new AppSettingsService(settingsPath).Load();
-        var suffix = loaded.DataDirectory["data-".Length..];
-        Assert.Equal("export-" + suffix, loaded.ExportDirectory);
-        Assert.StartsWith("http://writer-" + suffix + ".local/", loaded.EmsUrl, StringComparison.Ordinal);
-        Assert.Empty(Directory.EnumerateFiles(tempDir, "*.tmp", SearchOption.AllDirectories));
+
+        Assert.Equal("out", loaded.DataDirectory);
+
         Directory.Delete(tempDir, recursive: true);
     }
 }

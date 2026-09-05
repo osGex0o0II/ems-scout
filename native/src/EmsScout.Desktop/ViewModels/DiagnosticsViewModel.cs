@@ -4,20 +4,16 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using EmsScout.Application.Logging;
 using EmsScout.Application.Settings;
-using EmsScout.Infrastructure.Logging;
 
 namespace EmsScout.Desktop.ViewModels;
 
 public sealed partial class DiagnosticsViewModel(
-    AppDataPathService pathService,
-    AppSettingsService settingsService,
-    IApplicationLogger applicationLogger) : ObservableObject
+    AppDataPathService pathService) : ObservableObject
 {
     private const int PreviewMaxLines = 160;
     private static readonly Regex NativeExportFileNamePattern =
-        new(@"^数据管理筛选结果_\d{8}_\d{6}_\d{3}(?:_\d+)?\.xlsx$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        new(@"^数据管理筛选结果_\d{8}_\d{6}\.xlsx$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     [ObservableProperty]
     public partial string StatusText { get; private set; } = "诊断信息尚未加载";
@@ -62,41 +58,31 @@ public sealed partial class DiagnosticsViewModel(
         LogFiles.Clear();
         RecentExports.Clear();
 
-        var settings = settingsService.Load();
-        var appVersion = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";
+        var assembly = Assembly.GetExecutingAssembly();
+        var appVersion = assembly.GetName().Version?.ToString() ?? "unknown";
+        var buildTime = TryGetBuildTime(assembly);
 
-        AppRows.Add(new DiagnosticInfoRow("应用", "EMS Scout", "WinUI 3 / Windows App SDK 原生程序"));
-        AppRows.Add(new DiagnosticInfoRow("版本", appVersion, "程序集版本"));
-        AppRows.Add(new DiagnosticInfoRow("运行时", Environment.Version.ToString(), ".NET runtime"));
-        AppRows.Add(new DiagnosticInfoRow("进程", Environment.ProcessId.ToString("N0"), Process.GetCurrentProcess().ProcessName));
+        AppRows.Add(new DiagnosticInfoRow("软件", "EMS 空调控制台", "空调设备采集与数据管理"));
+        AppRows.Add(new DiagnosticInfoRow("版本", appVersion, "当前程序集版本"));
+        AppRows.Add(new DiagnosticInfoRow("作者", "EMS Scout Team", "项目维护团队"));
+        AppRows.Add(new DiagnosticInfoRow("构建时间", buildTime, "当前运行文件时间"));
+        AppRows.Add(new DiagnosticInfoRow("运行环境", $".NET {Environment.Version}", "WinUI 3 / Windows App SDK"));
 
-        AddPathRow("工作区", pathService.WorkspaceRoot, Directory.Exists(pathService.WorkspaceRoot));
-        AddPathRow("数据目录", DataDirectory, Directory.Exists(DataDirectory));
-        AddPathRow("SQLite", pathService.DatabasePath, File.Exists(pathService.DatabasePath));
-        AddPathRow("采集快照", pathService.CollectionSnapshotPath, File.Exists(pathService.CollectionSnapshotPath));
-        AddPathRow("导出目录", ExportDirectory, Directory.Exists(ExportDirectory));
-        AddPathRow("设置文件", settingsService.SettingsPath, File.Exists(settingsService.SettingsPath));
+        StatusText = "软件信息已加载";
+    }
 
-        WorkflowRows.Add(new DiagnosticInfoRow("主流程", "采集任务 -> 数据管理 -> 导出当前筛选 Excel", "原生 UI 唯一用户导出路径"));
-        WorkflowRows.Add(new DiagnosticInfoRow("旧 Web 面板", "legacy", "legacy:panel / EMS-Panel.bat 仅作兼容诊断，不作为当前 UI 主入口"));
-        WorkflowRows.Add(new DiagnosticInfoRow("旧多格式报表", "legacy", "scripts/report.js、dump-aircons.js、dump-public.js 默认禁用，不接入原生 UI"));
-        WorkflowRows.Add(new DiagnosticInfoRow("采集浏览器", "由采集页手动管理", $"日志级别 {settings.LogLevel}"));
-
-        foreach (var row in EnumerateLogs())
+    private static string TryGetBuildTime(Assembly assembly)
+    {
+        try
         {
-            LogFiles.Add(row);
+            var location = assembly.Location;
+            return !string.IsNullOrWhiteSpace(location) && File.Exists(location)
+                ? File.GetLastWriteTime(location).ToString("yyyy-MM-dd HH:mm:ss")
+                : "随发布包提供";
         }
-
-        foreach (var row in EnumerateRecentExports())
+        catch
         {
-            RecentExports.Add(row);
-        }
-
-        StatusText = $"已刷新诊断信息；日志 {LogFiles.Count:N0} 个，最近 Excel {RecentExports.Count:N0} 个";
-        if (SelectedLog is null && LogFiles.Count > 0)
-        {
-            SelectedLog = LogFiles[0];
-            LoadSelectedLogPreview();
+            return "随发布包提供";
         }
     }
 
@@ -158,11 +144,6 @@ public sealed partial class DiagnosticsViewModel(
         AddLogFiles(rows, DataDirectory, "panel_task_*.log", "任务日志");
         AddLogFiles(rows, pathService.WorkspaceRoot, "out\\native-*.log", "原生运行日志");
         AddLogFiles(rows, pathService.WorkspaceRoot, "logs\\*.log", "桌面日志");
-        AddLogFiles(
-            rows,
-            Path.Combine(AppStorageDefaults.ProductDirectory, "logs"),
-            "*.ndjson",
-            "原生结构化日志");
 
         return rows
             .GroupBy(row => row.FullPath, StringComparer.OrdinalIgnoreCase)
@@ -230,11 +211,11 @@ public sealed partial class DiagnosticsViewModel(
         }
         catch (IOException ex)
         {
-            PreviewText = "无法读取日志：" + applicationLogger.WriteFailure(ex, "diagnostics").DisplayText;
+            PreviewText = "无法读取日志：" + ex.Message;
         }
         catch (UnauthorizedAccessException ex)
         {
-            PreviewText = "没有权限读取日志：" + applicationLogger.WriteFailure(ex, "diagnostics").DisplayText;
+            PreviewText = "没有权限读取日志：" + ex.Message;
         }
     }
 
