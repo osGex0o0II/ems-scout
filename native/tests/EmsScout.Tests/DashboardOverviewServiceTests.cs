@@ -125,6 +125,9 @@ public sealed class DashboardOverviewServiceTests
         public Task<IReadOnlyList<CollectionRunRecord>> ListAsync(int limit = 50, CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<CollectionRunRecord>>([]);
 
+        public Task<CollectionRunComparison> CompareCurrentAsync(long runId, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
         public Task<CollectionRunRecord> SetAnomalyAsync(long runId, bool isAnomaly, string note, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
