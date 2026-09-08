@@ -6,6 +6,28 @@ namespace EmsScout.Tests;
 public sealed class CollectionRunRepositoryTests
 {
     [Fact]
+    public async Task MigratesLegacyRunMetadataAndComparesSnapshotToCurrentData()
+    {
+        var databasePath = CreateDatabase();
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+
+        var runs = await repository.ListAsync();
+        var comparison = await repository.CompareCurrentAsync(1);
+
+        Assert.Equal("采集导入", runs[0].Source);
+        Assert.Equal("v1.0.0", runs[0].DataVersion);
+        Assert.Equal("本机", runs[0].Operator);
+        Assert.Equal(1, comparison.SnapshotCardCount);
+        Assert.Equal(1, comparison.CurrentCardCount);
+        Assert.Equal(0, comparison.AddedCount);
+        Assert.Equal(0, comparison.MissingCount);
+        Assert.True(comparison.IsRestorable);
+        Assert.Contains("source", await ReadColumnsAsync(databasePath, "collection_runs"));
+        Assert.Contains("data_version", await ReadColumnsAsync(databasePath, "collection_runs"));
+        Assert.Contains("operator_name", await ReadColumnsAsync(databasePath, "collection_runs"));
+    }
+
+    [Fact]
     public async Task ListsAndMarksCollectionRuns()
     {
         var databasePath = CreateDatabase();
@@ -184,6 +206,22 @@ public sealed class CollectionRunRepositoryTests
         command.CommandText = sql;
         var value = await command.ExecuteScalarAsync();
         return Convert.ToInt64(value);
+    }
+
+    private static async Task<IReadOnlyList<string>> ReadColumnsAsync(string databasePath, string tableName)
+    {
+        await using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({tableName})";
+        await using var reader = await command.ExecuteReaderAsync();
+        var columns = new List<string>();
+        while (await reader.ReadAsync())
+        {
+            columns.Add(reader.GetString(1));
+        }
+
+        return columns;
     }
 
     private static async Task ExecuteAsync(string databasePath, string sql)

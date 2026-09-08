@@ -11,11 +11,13 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         CancellationToken cancellationToken = default)
     {
         EnsureDatabaseExists();
-        await using var connection = OpenConnection(readOnly: true);
+        await using var connection = OpenConnection(readOnly: false);
         if (!await TableExistsAsync(connection, "collection_runs", cancellationToken).ConfigureAwait(false))
         {
             return [];
         }
+
+        await EnsureCollectionRunMetadataColumnsAsync(connection, cancellationToken).ConfigureAwait(false);
 
         var snapshotCardCount = await TableExistsAsync(connection, "run_cards", cancellationToken).ConfigureAwait(false)
             ? "(SELECT COUNT(*) FROM run_cards snapshot WHERE snapshot.run_id = collection_runs.id)"
@@ -26,6 +28,7 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             SELECT id, run_key, started_at, completed_at, imported_at, status, scope,
                    buildings, json_path, db_snapshot_path, card_count, on_count,
                    off_count, offline_count, unknown_count, quality_summary, is_anomaly, note,
+                   source, data_version, operator_name, restored_from_run_id,
                    {snapshotCardCount} AS snapshot_card_count
             FROM collection_runs
             ORDER BY datetime(completed_at) DESC, id DESC
@@ -43,6 +46,30 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         return rows;
     }
 
+    public async Task<CollectionRunComparison> CompareCurrentAsync(
+        long runId,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureDatabaseExists();
+        await using var connection = OpenConnection(readOnly: false);
+        await EnsureCollectionRunMetadataColumnsAsync(connection, cancellationToken).ConfigureAwait(false);
+        var run = await LoadRunAsync(connection, runId, cancellationToken).ConfigureAwait(false)
+                  ?? throw new InvalidOperationException($"Run not found: {runId}");
+
+        var snapshotByBuilding = await LoadBuildingCardCountsAsync(connection, runId, snapshot: true, cancellationToken).ConfigureAwait(false);
+        var currentByBuilding = await LoadBuildingCardCountsAsync(connection, runId, snapshot: false, cancellationToken).ConfigureAwait(false);
+        var changedCount = await CountChangedCardsAsync(connection, runId, cancellationToken).ConfigureAwait(false);
+        var blockingReason = await GetRestoreBlockingReasonAsync(connection, run, cancellationToken).ConfigureAwait(false);
+
+        return CollectionRunComparison.Create(
+            run,
+            snapshotByBuilding,
+            currentByBuilding,
+            changedCount,
+            isRestorable: blockingReason is null,
+            blockingReason);
+    }
+
     public async Task<CollectionRunRecord> SetAnomalyAsync(
         long runId,
         bool isAnomaly,
@@ -51,6 +78,7 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
     {
         EnsureDatabaseExists();
         await using var connection = OpenConnection(readOnly: false);
+        await EnsureCollectionRunMetadataColumnsAsync(connection, cancellationToken).ConfigureAwait(false);
         var current = await LoadRunAsync(connection, runId, cancellationToken).ConfigureAwait(false)
                       ?? throw new InvalidOperationException($"Run not found: {runId}");
         var nextNote = NextAnomalyNote(current.Note, isAnomaly, note);
@@ -74,6 +102,7 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
     {
         EnsureDatabaseExists();
         await using var connection = OpenConnection(readOnly: false);
+        await EnsureCollectionRunMetadataColumnsAsync(connection, cancellationToken).ConfigureAwait(false);
         await EnsureQualityReasonColumnsAsync(connection, cancellationToken).ConfigureAwait(false);
         var run = await LoadRunAsync(connection, runId, cancellationToken).ConfigureAwait(false)
                   ?? throw new InvalidOperationException($"Run not found: {runId}");
@@ -146,6 +175,7 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
     {
         EnsureDatabaseExists();
         await using var connection = OpenConnection(readOnly: false);
+        await EnsureCollectionRunMetadataColumnsAsync(connection, cancellationToken).ConfigureAwait(false);
         var run = await LoadRunAsync(connection, runId, cancellationToken).ConfigureAwait(false)
                   ?? throw new InvalidOperationException($"Run not found: {runId}");
 
@@ -204,6 +234,7 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             SELECT id, run_key, started_at, completed_at, imported_at, status, scope,
                    buildings, json_path, db_snapshot_path, card_count, on_count,
                    off_count, offline_count, unknown_count, quality_summary, is_anomaly, note,
+                   source, data_version, operator_name, restored_from_run_id,
                    {snapshotCardCount} AS snapshot_card_count
             FROM collection_runs
             WHERE id = $id
@@ -237,7 +268,139 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             QualitySummary: ReadString(reader, "quality_summary"),
             IsAnomaly: ReadInt32(reader, "is_anomaly") != 0,
             Note: ReadString(reader, "note"),
-            SnapshotCardCount: ReadInt32(reader, "snapshot_card_count"));
+            SnapshotCardCount: ReadInt32(reader, "snapshot_card_count"),
+            Source: ReadString(reader, "source"),
+            DataVersion: ReadString(reader, "data_version"),
+            Operator: ReadString(reader, "operator_name"),
+            RestoredFromRunId: ReadNullableInt64(reader, "restored_from_run_id"));
+    }
+
+    private static async Task<Dictionary<string, int>> LoadBuildingCardCountsAsync(
+        SqliteConnection connection,
+        long runId,
+        bool snapshot,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = snapshot
+            ? """
+              SELECT sa.building, COUNT(*)
+              FROM run_cards c
+              JOIN run_pages p ON p.id = c.run_page_id AND p.run_id = c.run_id
+              JOIN run_sub_areas sa ON sa.id = p.run_sub_area_id AND sa.run_id = c.run_id
+              WHERE c.run_id = $run_id
+              GROUP BY sa.building
+              """
+            : """
+              SELECT sa.building, COUNT(*)
+              FROM cards c
+              JOIN pages p ON p.id = c.page_id
+              JOIN sub_areas sa ON sa.id = p.sub_area_id
+              GROUP BY sa.building
+              """;
+        command.Parameters.AddWithValue("$run_id", runId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            result[reader.GetString(0)] = reader.GetInt32(1);
+        }
+
+        return result;
+    }
+
+    private static async Task<int> CountChangedCardsAsync(
+        SqliteConnection connection,
+        long runId,
+        CancellationToken cancellationToken)
+    {
+        var snapshot = await LoadCardSignaturesAsync(connection, runId, snapshot: true, cancellationToken).ConfigureAwait(false);
+        var current = await LoadCardSignaturesAsync(connection, runId, snapshot: false, cancellationToken).ConfigureAwait(false);
+        return snapshot
+            .Keys
+            .Intersect(current.Keys, StringComparer.OrdinalIgnoreCase)
+            .Count(key => !string.Equals(snapshot[key], current[key], StringComparison.Ordinal));
+    }
+
+    private static async Task<Dictionary<string, string>> LoadCardSignaturesAsync(
+        SqliteConnection connection,
+        long runId,
+        bool snapshot,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = snapshot
+            ? """
+              SELECT sa.building, c.name, c.switch, c.mode, c.indoor, c.set_temp, c.fan, c.indicator, c.comm
+              FROM run_cards c
+              JOIN run_pages p ON p.id = c.run_page_id AND p.run_id = c.run_id
+              JOIN run_sub_areas sa ON sa.id = p.run_sub_area_id AND sa.run_id = c.run_id
+              WHERE c.run_id = $run_id
+              """
+            : """
+              SELECT sa.building, c.name, c.switch, c.mode, c.indoor, c.set_temp, c.fan, c.indicator, c.comm
+              FROM cards c
+              JOIN pages p ON p.id = c.page_id
+              JOIN sub_areas sa ON sa.id = p.sub_area_id
+              """;
+        command.Parameters.AddWithValue("$run_id", runId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var building = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
+            var name = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
+            var key = $"{building}\u001F{name}";
+            var values = Enumerable.Range(2, 7)
+                .Select(index => reader.IsDBNull(index) ? string.Empty : reader.GetString(index));
+            result[key] = string.Join("\u001F", values);
+        }
+
+        return result;
+    }
+
+    private static async Task<string?> GetRestoreBlockingReasonAsync(
+        SqliteConnection connection,
+        CollectionRunRecord run,
+        CancellationToken cancellationToken)
+    {
+        if (run.IsAnomaly)
+        {
+            return "异常隔离批次不能恢复，请先取消异常标记并复核数据。";
+        }
+
+        if (!run.Status.Equals("completed", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"状态为“{run.Status}”的批次不能恢复，仅允许恢复已完成批次。";
+        }
+
+        if (!run.Scope.Equals("full", StringComparison.OrdinalIgnoreCase) &&
+            !run.Scope.Equals("partial", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"批次范围“{run.Scope}”无效，无法安全恢复。";
+        }
+
+        if (run.Scope.Equals("full", StringComparison.OrdinalIgnoreCase) &&
+            !run.Buildings.ToHashSet(StringComparer.OrdinalIgnoreCase)
+                .SetEquals(CollectionRunCompleteness.RequiredBuildings))
+        {
+            return "全量批次未覆盖 1-6 号楼，无法安全恢复。";
+        }
+
+        try
+        {
+            await ValidateSnapshotAsync(connection, run, cancellationToken).ConfigureAwait(false);
+            if (run.Scope.Equals("partial", StringComparison.OrdinalIgnoreCase) && run.Buildings.Count == 0)
+            {
+                return "部分批次没有楼栋范围，无法安全恢复。";
+            }
+
+            return null;
+        }
+        catch (InvalidOperationException ex)
+        {
+            return ex.Message;
+        }
     }
 
     private static async Task ValidateSnapshotAsync(
@@ -694,6 +857,41 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         await AddColumnIfMissingAsync(connection, "run_pages", "quality_reason", "TEXT", cancellationToken).ConfigureAwait(false);
         await AddColumnIfMissingAsync(connection, "pages", "collected_at", "TEXT", cancellationToken).ConfigureAwait(false);
         await AddColumnIfMissingAsync(connection, "run_pages", "collected_at", "TEXT", cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task EnsureCollectionRunMetadataColumnsAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, "collection_runs", cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        await AddColumnIfMissingAsync(
+            connection,
+            "collection_runs",
+            "source",
+            "TEXT NOT NULL DEFAULT '采集导入'",
+            cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(
+            connection,
+            "collection_runs",
+            "data_version",
+            "TEXT NOT NULL DEFAULT 'v1.0.0'",
+            cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(
+            connection,
+            "collection_runs",
+            "operator_name",
+            "TEXT NOT NULL DEFAULT '本机'",
+            cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(
+            connection,
+            "collection_runs",
+            "restored_from_run_id",
+            "INTEGER",
+            cancellationToken).ConfigureAwait(false);
     }
 
     private void DeleteAssociatedArtifacts(CollectionRunRecord run)

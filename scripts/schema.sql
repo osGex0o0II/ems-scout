@@ -109,7 +109,11 @@ CREATE TABLE IF NOT EXISTS collection_runs (
     unknown_count INTEGER NOT NULL DEFAULT 0,
     quality_summary TEXT NOT NULL DEFAULT '{}',
     is_anomaly INTEGER NOT NULL DEFAULT 0,
-    note TEXT NOT NULL DEFAULT ''
+    note TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '采集导入',
+    data_version TEXT NOT NULL DEFAULT 'v1.0.0',
+    operator_name TEXT NOT NULL DEFAULT '本机',
+    restored_from_run_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_collection_runs_completed
     ON collection_runs(completed_at DESC);

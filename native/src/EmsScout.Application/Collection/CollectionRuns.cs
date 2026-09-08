@@ -6,6 +6,10 @@ public interface ICollectionRunRepository
         int limit = 50,
         CancellationToken cancellationToken = default);
 
+    Task<CollectionRunComparison> CompareCurrentAsync(
+        long runId,
+        CancellationToken cancellationToken = default);
+
     Task<CollectionRunRecord> SetAnomalyAsync(
         long runId,
         bool isAnomaly,
@@ -40,7 +44,11 @@ public sealed record CollectionRunRecord(
     string QualitySummary,
     bool IsAnomaly,
     string Note,
-    int SnapshotCardCount = 0)
+    int SnapshotCardCount = 0,
+    string Source = "采集导入",
+    string DataVersion = "v1.0.0",
+    string Operator = "本机",
+    long? RestoredFromRunId = null)
 {
     public string ScopeLabel => Scope.Equals("partial", StringComparison.OrdinalIgnoreCase)
         ? string.Join("、", Buildings)
