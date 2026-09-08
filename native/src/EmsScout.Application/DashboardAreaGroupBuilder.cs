@@ -15,8 +15,10 @@ public static class DashboardAreaGroupBuilder
             .ToDictionary(group => group.Key, group => (IReadOnlyList<AreaGroupItemRecord>)group.ToArray());
 
         return groupSet.Groups
-            .Where(group => group.Enabled && group.GroupKind.Equals("custom", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(group => PriorityRank(group.Priority))
+            .Where(group => group.Enabled && IsDashboardGroup(group))
+            .OrderBy(group => group.GroupKind.Equals("system", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(group => SystemGroupRank(group.SystemKey))
+            .ThenBy(group => PriorityRank(group.Priority))
             .ThenBy(group => group.Name, StringComparer.OrdinalIgnoreCase)
             .Select(group => BuildSummary(
                 group,
@@ -35,9 +37,9 @@ public static class DashboardAreaGroupBuilder
         IReadOnlyList<DeviceRecord> devices,
         IReadOnlyList<AreaGroupItemRecord> items)
     {
-        var matches = devices
-            .Where(device => AreaGroupMembership.MatchesAny(device, items))
-            .ToArray();
+        var matches = IsSystemGroup(group)
+            ? devices.Where(device => MatchesSystemGroup(device, group.SystemKey)).ToArray()
+            : devices.Where(device => AreaGroupMembership.MatchesAny(device, items)).ToArray();
         var publicMatches = matches
             .Where(device => string.Equals(
                 device.AreaType,
@@ -70,7 +72,45 @@ public static class DashboardAreaGroupBuilder
             PublicCoveredAreas: publicMatches
                 .Select(device => (device.Building, device.Floor, device.SubArea))
                 .Distinct()
-                .Count());
+                .Count(),
+            AreaType: group.SystemKey switch
+            {
+                "public" => DeviceAreaClassifier.PublicArea,
+                "non_public" => DeviceAreaClassifier.PrivateArea,
+                _ => string.Empty,
+            });
+    }
+
+    private static bool IsDashboardGroup(AreaGroupRecord group)
+    {
+        return group.GroupKind.Equals("custom", StringComparison.OrdinalIgnoreCase) ||
+            IsSystemGroup(group);
+    }
+
+    private static bool IsSystemGroup(AreaGroupRecord group)
+    {
+        return group.GroupKind.Equals("system", StringComparison.OrdinalIgnoreCase) &&
+            group.SystemKey is "public" or "non_public";
+    }
+
+    private static bool MatchesSystemGroup(DeviceRecord device, string systemKey)
+    {
+        return systemKey switch
+        {
+            "public" => string.Equals(device.AreaType, DeviceAreaClassifier.PublicArea, StringComparison.OrdinalIgnoreCase),
+            "non_public" => string.Equals(device.AreaType, DeviceAreaClassifier.PrivateArea, StringComparison.OrdinalIgnoreCase),
+            _ => false,
+        };
+    }
+
+    private static int SystemGroupRank(string systemKey)
+    {
+        return systemKey switch
+        {
+            "public" => 0,
+            "non_public" => 1,
+            _ => 2,
+        };
     }
 
     private static int PriorityRank(string priority)

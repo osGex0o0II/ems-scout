@@ -145,6 +145,9 @@ public sealed class SqliteDeviceAnnotationService(Func<string> databasePathResol
     {
         var connection = new SqliteConnection($"Data Source={databasePathResolver()};Mode=ReadWrite");
         connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA busy_timeout = 10000; PRAGMA foreign_keys = ON;";
+        command.ExecuteNonQuery();
         return connection;
     }
 

@@ -3,6 +3,11 @@ namespace EmsScout.Application.Quality;
 public interface IQualityAuditService
 {
     Task<QualityAuditReport?> LoadLatestAsync(CancellationToken cancellationToken = default);
+
+    Task<QualityAuditReport?> LoadForRunAsync(
+        long runId,
+        CancellationToken cancellationToken = default)
+        => LoadLatestAsync(cancellationToken);
 }
 
 public sealed record QualityAuditReport(

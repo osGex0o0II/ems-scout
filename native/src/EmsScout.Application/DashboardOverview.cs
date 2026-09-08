@@ -7,7 +7,6 @@ public sealed record DashboardOverview(
     DateTimeOffset? SourceUpdatedAt,
     FleetSummary Summary,
     IReadOnlyList<OverviewMetric> Metrics,
-    IReadOnlyList<DashboardRiskItem> Risks,
     IReadOnlyList<DashboardAreaGroupSummary> AreaGroups,
     string AreaGroupsError);
 
@@ -38,7 +37,8 @@ public sealed record DashboardAreaGroupSummary(
     int PublicStopped,
     int PublicOffline,
     int PublicUnknown,
-    int PublicCoveredAreas)
+    int PublicCoveredAreas,
+    string AreaType = "")
 {
     public int Attention => Offline + Unknown;
 

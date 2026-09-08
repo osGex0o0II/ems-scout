@@ -412,6 +412,20 @@ public sealed partial class CollectionTaskViewModel(
         await Task.CompletedTask;
     }
 
+    public void ReportInitializationError(Exception exception)
+    {
+        _environmentChecked = true;
+        IsEnvironmentReady = false;
+        IsCollectionBrowserConnected = false;
+        ReadinessTitle = "采集页面初始化失败";
+        ReadinessDetail = exception.Message;
+        ReadinessGlyph = "\uE7BA";
+        CollectionBrowserActionText = "重新检查采集环境";
+        EnvironmentText = "初始化失败：" + exception.Message;
+        StatusText = "采集准备未完成，请检查数据目录设置";
+        AddLog(EnvironmentText);
+    }
+
     public void LoadSettingsDefaults()
     {
         EnableLogFile = true;

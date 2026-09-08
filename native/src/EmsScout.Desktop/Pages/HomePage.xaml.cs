@@ -1,12 +1,15 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Navigation;
 using EmsScout.Desktop.ViewModels;
 
 namespace EmsScout.Desktop.Pages;
 
 public sealed partial class HomePage : Page
 {
+    private readonly CancellationTokenSource _pageLifetime = new();
+
     public HomeViewModel ViewModel { get; }
 
     public HomePage()
@@ -17,25 +20,48 @@ public sealed partial class HomePage : Page
 
     private async void Page_Loaded(object sender, RoutedEventArgs e)
     {
-        await Task.Yield();
-        await ViewModel.LoadAsync();
+        try
+        {
+            await Task.Yield();
+            await ViewModel.LoadAsync(_pageLifetime.Token);
+        }
+        catch (OperationCanceledException) when (_pageLifetime.IsCancellationRequested)
+        {
+        }
+    }
+
+    protected override void OnNavigatedFrom(NavigationEventArgs e)
+    {
+        _pageLifetime.Cancel();
+        base.OnNavigatedFrom(e);
+    }
+
+    private async Task RunPageOperationAsync(Func<CancellationToken, Task> operation)
+    {
+        try
+        {
+            await operation(_pageLifetime.Token);
+        }
+        catch (OperationCanceledException) when (_pageLifetime.IsCancellationRequested)
+        {
+        }
     }
 
     private async void Refresh_Click(object sender, RoutedEventArgs e)
     {
-        await ViewModel.RefreshLatestAsync();
+        await RunPageOperationAsync(ViewModel.RefreshLatestAsync);
     }
 
     private async void LatestBatch_Click(object sender, RoutedEventArgs e)
     {
-        await ViewModel.UseLatestDataSourceAsync();
+        await RunPageOperationAsync(ViewModel.UseLatestDataSourceAsync);
     }
 
     private async void DataSource_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (sender is ComboBox comboBox && comboBox.SelectedItem is DataSourceOption option)
         {
-            await ViewModel.SelectDataSourceAsync(option);
+            await RunPageOperationAsync(token => ViewModel.SelectDataSourceAsync(option, token));
         }
     }
 
@@ -47,11 +73,6 @@ public sealed partial class HomePage : Page
     private void Buildings_ItemClick(object sender, ItemClickEventArgs e)
     {
         ViewModel.OpenBuilding(e.ClickedItem as BuildingSummaryRow);
-    }
-
-    private void Risks_ItemClick(object sender, ItemClickEventArgs e)
-    {
-        ViewModel.OpenRisk(e.ClickedItem as DashboardRiskRow);
     }
 
     private void AreaGroups_ItemClick(object sender, ItemClickEventArgs e)
@@ -66,17 +87,44 @@ public sealed partial class HomePage : Page
 
     private void Page_SizeChanged(object sender, SizeChangedEventArgs e)
     {
-        var compactGroups = e.NewSize.Width < 1050;
+        ApplyMetricCardWidths();
+
+        var compactGroups = e.NewSize.Width < 1250;
         WideAreaGroupList.Visibility = compactGroups ? Visibility.Collapsed : Visibility.Visible;
         CompactAreaGroupList.Visibility = compactGroups ? Visibility.Visible : Visibility.Collapsed;
+    }
 
-        var splitWorkspace = e.NewSize.Width >= 1600;
-        SecondaryWorkspaceColumn.Width = splitWorkspace
-            ? new GridLength(0.78, GridUnitType.Star)
-            : new GridLength(0);
-        Grid.SetColumn(RiskPanel, splitWorkspace ? 1 : 0);
-        Grid.SetRow(RiskPanel, splitWorkspace ? 0 : 1);
-        PrimaryWorkspace.ColumnSpacing = splitWorkspace ? 14 : 0;
-        PrimaryWorkspace.RowSpacing = splitWorkspace ? 0 : 14;
+    private void MetricsGrid_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        ApplyMetricCardWidths();
+    }
+
+    private void MetricsGrid_ContainerContentChanging(ListViewBase sender, ContainerContentChangingEventArgs args)
+    {
+        ApplyMetricCardWidths();
+    }
+
+    private void ApplyMetricCardWidths()
+    {
+        var count = ViewModel.Metrics.Count;
+        if (count == 0 || MetricsGrid.ActualWidth <= 0)
+        {
+            return;
+        }
+
+        var width = Math.Max(1, Math.Floor((MetricsGrid.ActualWidth - (8 * count)) / count));
+        for (var index = 0; index < count; index++)
+        {
+            ApplyMetricCardWidth(MetricsGrid.ContainerFromIndex(index), width);
+        }
+    }
+
+    private void ApplyMetricCardWidth(DependencyObject? container, double? width = null)
+    {
+        if (container is GridViewItem item)
+        {
+            var cardWidth = width ?? Math.Max(1, Math.Floor((MetricsGrid.ActualWidth - (8 * ViewModel.Metrics.Count)) / Math.Max(1, ViewModel.Metrics.Count)));
+            item.Width = cardWidth;
+        }
     }
 }

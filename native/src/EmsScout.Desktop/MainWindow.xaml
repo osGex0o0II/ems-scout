@@ -18,7 +18,7 @@
             x:Name="AppTitleBar"
             Height="40"
             Padding="16,0,140,0"
-            Background="{ThemeResource LayerFillColorDefaultBrush}">
+            Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
             <TextBlock
                 VerticalAlignment="Center"
                 FontWeight="SemiBold"
@@ -30,6 +30,7 @@
             x:Name="NavView"
             IsBackButtonVisible="Collapsed"
             OpenPaneLength="180"
+            Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
             IsPaneToggleButtonVisible="True"
             IsSettingsVisible="False"
             SelectionChanged="NavView_SelectionChanged">

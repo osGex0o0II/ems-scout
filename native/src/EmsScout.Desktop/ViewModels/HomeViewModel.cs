@@ -15,35 +15,21 @@ public sealed partial class HomeViewModel(
     ICollectionRunRepository collectionRunRepository) : ObservableObject
 {
     private string _pageStatus = "正在读取当前采集数据";
-    private string _overviewStatusTitle = "当前数据";
-    private string _overviewStatusMessage = "正在读取当前采集数据";
     private string _onlineDevices = "--";
     private string _attentionDevices = "--";
     private string _runningRate = "--";
     private string _offlineRate = "--";
+    private string _currentBatchTimestamp = "--";
     private string _areaGroupsStatus = "正在计算区域组公区状态";
     private string _areaGroupsError = string.Empty;
-    private InfoBarSeverity _overviewSeverity = InfoBarSeverity.Informational;
-    private bool _hasLoadError;
     private bool _isLoading;
+    private long? _latestDataSourceRunId;
     private DataSourceOption? _selectedDataSource;
 
     public string PageStatus
     {
         get => _pageStatus;
         private set => SetProperty(ref _pageStatus, value);
-    }
-
-    public string OverviewStatusTitle
-    {
-        get => _overviewStatusTitle;
-        private set => SetProperty(ref _overviewStatusTitle, value);
-    }
-
-    public string OverviewStatusMessage
-    {
-        get => _overviewStatusMessage;
-        private set => SetProperty(ref _overviewStatusMessage, value);
     }
 
     public string OnlineDevices
@@ -70,6 +56,12 @@ public sealed partial class HomeViewModel(
         private set => SetProperty(ref _offlineRate, value);
     }
 
+    public string CurrentBatchTimestamp
+    {
+        get => _currentBatchTimestamp;
+        private set => SetProperty(ref _currentBatchTimestamp, value);
+    }
+
     public string AreaGroupsStatus
     {
         get => _areaGroupsStatus;
@@ -88,24 +80,6 @@ public sealed partial class HomeViewModel(
         }
     }
 
-    public InfoBarSeverity OverviewSeverity
-    {
-        get => _overviewSeverity;
-        private set => SetProperty(ref _overviewSeverity, value);
-    }
-
-    public bool HasLoadError
-    {
-        get => _hasLoadError;
-        private set
-        {
-            if (SetProperty(ref _hasLoadError, value))
-            {
-                OnPropertyChanged(nameof(LoadErrorVisibility));
-            }
-        }
-    }
-
     public bool IsLoading
     {
         get => _isLoading;
@@ -115,6 +89,7 @@ public sealed partial class HomeViewModel(
             {
                 OnPropertyChanged(nameof(CanRefresh));
                 OnPropertyChanged(nameof(CanChangeDataSource));
+                OnPropertyChanged(nameof(IsLatestDataSource));
                 OnPropertyChanged(nameof(LoadingVisibility));
                 NotifyAreaGroupState();
             }
@@ -132,14 +107,12 @@ public sealed partial class HomeViewModel(
     public double HistoricalBatchIndicatorOpacity => IsLatestDataSource ? 0.08 : 1;
 
     public string LatestBatchIndicatorToolTip => IsLatestDataSource
-        ? "当前为最新采集数据"
-        : "当前为历史数据，点击切换到最新数据";
+        ? "当前数据"
+        : "历史数据，点击切换当前数据";
 
     public string LatestBatchIndicatorAutomationName => IsLatestDataSource
-        ? "当前为最新采集数据"
-        : "当前为历史数据，切换到最新采集数据";
-
-    public Visibility LoadErrorVisibility => HasLoadError ? Visibility.Visible : Visibility.Collapsed;
+        ? "当前数据"
+        : "历史数据，切换当前数据";
 
     public Visibility AreaGroupsListVisibility => AreaGroups.Count > 0
         ? Visibility.Visible
@@ -156,8 +129,6 @@ public sealed partial class HomeViewModel(
         : Visibility.Collapsed;
 
     public ObservableCollection<MetricItem> Metrics { get; } = [];
-
-    public ObservableCollection<DashboardRiskRow> Risks { get; } = [];
 
     public ObservableCollection<StatusDistributionRow> StatusDistribution { get; } = [];
 
@@ -177,6 +148,7 @@ public sealed partial class HomeViewModel(
             if (SetProperty(ref _selectedDataSource, value))
             {
                 OnPropertyChanged(nameof(CanChangeDataSource));
+                OnPropertyChanged(nameof(IsLatestDataSource));
                 OnPropertyChanged(nameof(LatestBatchIndicatorOpacity));
                 OnPropertyChanged(nameof(HistoricalBatchIndicatorOpacity));
                 OnPropertyChanged(nameof(LatestBatchIndicatorToolTip));
@@ -185,7 +157,10 @@ public sealed partial class HomeViewModel(
         }
     }
 
-    public bool IsLatestDataSource => SelectedDataSource is null;
+    public bool IsLatestDataSource => SelectedDataSource is null ||
+                                      SelectedDataSource.IsCurrent ||
+                                      (SelectedDataSource.RunId is not null &&
+                                       SelectedDataSource.RunId == _latestDataSourceRunId);
 
     public async Task LoadAsync(CancellationToken cancellationToken = default)
     {
@@ -200,9 +175,8 @@ public sealed partial class HomeViewModel(
         {
             await RefreshDataSourcesAsync(cancellationToken).ConfigureAwait(true);
             await LoadOverviewAsync(cancellationToken).ConfigureAwait(true);
-            HasLoadError = false;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             SetLoadError(ex);
         }
@@ -226,9 +200,8 @@ public sealed partial class HomeViewModel(
         try
         {
             await LoadOverviewAsync(cancellationToken).ConfigureAwait(true);
-            HasLoadError = false;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             SetLoadError(ex);
         }
@@ -246,15 +219,14 @@ public sealed partial class HomeViewModel(
         }
 
         IsLoading = true;
-        PageStatus = "正在刷新最新采集数据";
+        PageStatus = "正在刷新当前数据";
         try
         {
             await RefreshDataSourcesAsync(cancellationToken).ConfigureAwait(true);
             SelectedDataSource = DataSources.FirstOrDefault();
             await LoadOverviewAsync(cancellationToken).ConfigureAwait(true);
-            HasLoadError = false;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             SetLoadError(ex);
         }
@@ -266,20 +238,20 @@ public sealed partial class HomeViewModel(
 
     public async Task UseLatestDataSourceAsync(CancellationToken cancellationToken = default)
     {
-        if (IsLoading || IsLatestDataSource)
+        var latestOption = DataSources.FirstOrDefault();
+        if (IsLoading || latestOption is null || SelectedDataSource?.RunId == latestOption.RunId)
         {
             return;
         }
 
         IsLoading = true;
-        PageStatus = "正在切换到最新采集数据";
+        PageStatus = "正在切换当前数据";
         try
         {
-            SelectedDataSource = null;
+            SelectedDataSource = latestOption;
             await LoadOverviewAsync(cancellationToken).ConfigureAwait(true);
-            HasLoadError = false;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             SetLoadError(ex);
         }
@@ -292,15 +264,18 @@ public sealed partial class HomeViewModel(
     private async Task RefreshDataSourcesAsync(CancellationToken cancellationToken)
     {
         var selectedRunId = SelectedDataSource?.RunId;
-        var runs = await collectionRunRepository.ListAsync(80, cancellationToken).ConfigureAwait(true);
+        var runs = await collectionRunRepository.ListAsync(500, cancellationToken).ConfigureAwait(true);
+        var catalog = CollectionDataSourceCatalog.Build(runs);
         DataSources.Clear();
-        foreach (var run in runs.Where(CollectionRunCompleteness.IsCompleteFleetSnapshot))
+        DataSources.Add(DataSourceOption.Current(catalog.CurrentRun));
+        foreach (var run in catalog.HistoricalRuns)
         {
             DataSources.Add(new DataSourceOption(run));
         }
 
+        _latestDataSourceRunId = DataSources.FirstOrDefault()?.RunId;
         SelectedDataSource = selectedRunId is null
-            ? null
+            ? DataSources.FirstOrDefault()
             : DataSources.FirstOrDefault(option => option.RunId == selectedRunId);
         OnPropertyChanged(nameof(CanChangeDataSource));
     }
@@ -309,11 +284,13 @@ public sealed partial class HomeViewModel(
     {
         var runId = SelectedDataSource?.RunId;
         PageStatus = runId is null
-            ? "正在读取最新采集数据"
-            : $"正在读取历史数据批次 #{runId.Value}";
+            ? "正在读取当前数据"
+            : "正在读取所选数据";
         var overview = await overviewService.LoadAsync(runId, cancellationToken).ConfigureAwait(true);
+        CurrentBatchTimestamp = overview.SourceUpdatedAt.HasValue
+            ? overview.SourceUpdatedAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+            : SelectedDataSource?.Label ?? "--";
         Metrics.Clear();
-        Risks.Clear();
         StatusDistribution.Clear();
         Buildings.Clear();
         AreaGroups.Clear();
@@ -321,11 +298,6 @@ public sealed partial class HomeViewModel(
         foreach (var metric in overview.Metrics)
         {
             Metrics.Add(new MetricItem(metric));
-        }
-
-        foreach (var risk in overview.Risks)
-        {
-            Risks.Add(new DashboardRiskRow(risk));
         }
 
         var summary = overview.Summary;
@@ -348,20 +320,15 @@ public sealed partial class HomeViewModel(
         AttentionDevices = (summary.Offline + summary.Unknown).ToString("N0");
         RunningRate = summary.RunningRate.ToString("P1");
         OfflineRate = summary.OfflineRate.ToString("P1");
-        ApplyOverviewStatus(summary, overview.Risks, runId);
         ApplyAreaGroupsStatus(overview.AreaGroupsError);
         PageStatus = runId is null
-            ? "已刷新最新采集数据"
-            : $"已读取历史数据批次 #{runId.Value}";
+            ? "已刷新当前数据"
+            : "已读取所选数据";
     }
 
     private void SetLoadError(Exception ex)
     {
-        HasLoadError = true;
         PageStatus = ex.Message;
-        OverviewSeverity = InfoBarSeverity.Error;
-        OverviewStatusTitle = "总览读取失败";
-        OverviewStatusMessage = ex.Message;
     }
 
     public void OpenMetric(MetricItem? item)
@@ -384,16 +351,6 @@ public sealed partial class HomeViewModel(
         navigationService.NavigateToData(row.NavigationRequest);
     }
 
-    public void OpenRisk(DashboardRiskRow? row)
-    {
-        if (row?.NavigationRequest is null)
-        {
-            return;
-        }
-
-        navigationService.NavigateToData(row.NavigationRequest);
-    }
-
     public void OpenAreaGroup(DashboardAreaGroupRow? row)
     {
         if (row is null)
@@ -401,7 +358,7 @@ public sealed partial class HomeViewModel(
             return;
         }
 
-        navigationService.NavigateToData(new DataNavigationRequest(AreaGroupId: row.Id));
+        navigationService.NavigateToData(row.NavigationRequest);
     }
 
     public void OpenAreaGroups()
@@ -412,11 +369,13 @@ public sealed partial class HomeViewModel(
     private void ApplyAreaGroupsStatus(string error)
     {
         AreaGroupsError = error;
+        var automaticCount = AreaGroups.Count(row => !string.IsNullOrWhiteSpace(row.AreaType));
+        var customCount = AreaGroups.Count - automaticCount;
         AreaGroupsStatus = !string.IsNullOrWhiteSpace(error)
             ? "区域组统计暂不可用"
             : AreaGroups.Count == 0
                 ? "尚未配置启用的自定义区域组"
-                : $"{AreaGroups.Count:N0} 个自定义区域组；点击任一组查看设备、继续筛选并导出";
+                : $"{AreaGroups.Count:N0} 个区域组；自动分类 {automaticCount:N0} 个，自定义 {customCount:N0} 个；点击任一组查看设备、继续筛选并导出";
         NotifyAreaGroupState();
     }
 
@@ -427,67 +386,6 @@ public sealed partial class HomeViewModel(
         OnPropertyChanged(nameof(AreaGroupsErrorVisibility));
     }
 
-    private void ApplyOverviewStatus(
-        FleetSummary summary,
-        IReadOnlyList<DashboardRiskItem> risks,
-        long? runId)
-    {
-        if (runId is not null)
-        {
-            OverviewSeverity = InfoBarSeverity.Informational;
-            OverviewStatusTitle = $"历史数据批次 #{runId.Value}";
-            OverviewStatusMessage = $"已加载 {summary.Total:N0} 台设备；历史快照为只读数据，不包含实时详情。";
-            return;
-        }
-
-        var attention = summary.Offline + summary.Unknown;
-        if (summary.Total == 0)
-        {
-            OverviewSeverity = InfoBarSeverity.Warning;
-            OverviewStatusTitle = "当前没有设备数据";
-            OverviewStatusMessage = "请先运行采集任务并导入 SQLite，再返回总览核验。";
-            return;
-        }
-
-        var actionableRisks = risks
-            .Where(risk => risk.Kind is OverviewMetricKind.Danger or OverviewMetricKind.Warning)
-            .ToList();
-        if (actionableRisks.Any(risk => risk.Kind == OverviewMetricKind.Danger))
-        {
-            OverviewSeverity = InfoBarSeverity.Error;
-            OverviewStatusTitle = "存在高优先级风险";
-            OverviewStatusMessage = actionableRisks[0].Detail;
-            return;
-        }
-
-        if (actionableRisks.Count > 0)
-        {
-            OverviewSeverity = InfoBarSeverity.Warning;
-            OverviewStatusTitle = "存在需要复核的风险";
-            OverviewStatusMessage = $"{actionableRisks.Count:N0} 类风险需要处理；请先查看首页“优先处理”。";
-            return;
-        }
-
-        if (summary.Unknown > 0)
-        {
-            OverviewSeverity = InfoBarSeverity.Warning;
-            OverviewStatusTitle = "存在未知通讯状态";
-            OverviewStatusMessage = $"当前有 {summary.Unknown:N0} 台设备状态未能判定，建议从数据管理筛选“未知”继续复核。";
-            return;
-        }
-
-        if (attention > 0)
-        {
-            OverviewSeverity = InfoBarSeverity.Informational;
-            OverviewStatusTitle = "当前数据已加载";
-            OverviewStatusMessage = $"在线 {summary.Online:N0} 台，离线 {summary.Offline:N0} 台；可从数据管理按楼栋、状态或区域继续筛查。";
-            return;
-        }
-
-        OverviewSeverity = InfoBarSeverity.Success;
-        OverviewStatusTitle = "当前数据状态平稳";
-        OverviewStatusMessage = $"已加载 {summary.Total:N0} 台设备，未发现离线或未知通讯状态。";
-    }
 }
 
 public sealed class StatusDistributionRow(string label, int count, int total, string detail)
@@ -537,9 +435,17 @@ public sealed class DashboardAreaGroupRow(DashboardAreaGroupSummary summary)
 
     public string Priority { get; } = string.IsNullOrWhiteSpace(summary.Priority) ? "普通" : summary.Priority;
 
-    public string ScopeText { get; } = summary.CoveredAreas == 0
-        ? $"{summary.MemberCount:N0} 个已添加范围，暂无设备"
-        : $"{summary.CoveredAreas:N0} 个位置 / {summary.MemberCount:N0} 个已添加范围";
+    public string ScopeText { get; } = !string.IsNullOrWhiteSpace(summary.AreaType)
+        ? $"{summary.AreaType}设备自动分类统计"
+        : summary.CoveredAreas == 0
+            ? $"{summary.MemberCount:N0} 个已添加范围，暂无设备"
+            : $"{summary.CoveredAreas:N0} 个位置 / {summary.MemberCount:N0} 个已添加范围";
+
+    public string AreaType { get; } = summary.AreaType;
+
+    public DataNavigationRequest NavigationRequest { get; } = string.IsNullOrWhiteSpace(summary.AreaType)
+        ? new DataNavigationRequest(AreaGroupId: summary.Id)
+        : new DataNavigationRequest(AreaType: summary.AreaType);
 
     public string Total { get; } = summary.Total.ToString("N0");
 
@@ -584,40 +490,4 @@ public sealed class DashboardAreaGroupRow(DashboardAreaGroupSummary summary)
             : "\uE930";
 
     public string AutomationName { get; } = $"区域组 {summary.Name}，设备 {summary.Total:N0} 台，在线 {summary.Online:N0} 台，离线 {summary.Offline:N0} 台，开机 {summary.Running:N0} 台，关机 {summary.Stopped:N0} 台，公区开机 {summary.PublicRunning:N0} 台，公区关机 {summary.PublicStopped:N0} 台";
-}
-
-public sealed class DashboardRiskRow(DashboardRiskItem risk)
-{
-    public string Title { get; } = risk.Title;
-
-    public string Detail { get; } = risk.Detail;
-
-    public string Source { get; } = risk.Source;
-
-    public string CountText { get; } = risk.Count > 0 ? risk.Count.ToString("N0") : "--";
-
-    public string SeverityText { get; } = risk.Kind switch
-    {
-        OverviewMetricKind.Danger => "高",
-        OverviewMetricKind.Warning => "中",
-        OverviewMetricKind.Success => "正常",
-        OverviewMetricKind.Info => "提示",
-        _ => "信息",
-    };
-
-    public string Glyph { get; } = risk.Kind switch
-    {
-        OverviewMetricKind.Danger => "\uE783",
-        OverviewMetricKind.Warning => "\uE7BA",
-        OverviewMetricKind.Success => "\uE930",
-        _ => "\uE946",
-    };
-
-    public DataNavigationRequest? NavigationRequest { get; } = string.IsNullOrWhiteSpace(risk.CommunicationState)
-        ? null
-        : new DataNavigationRequest(CommunicationState: risk.CommunicationState);
-
-    public string ActionText { get; } = string.IsNullOrWhiteSpace(risk.CommunicationState)
-        ? string.Empty
-        : string.IsNullOrWhiteSpace(risk.ActionLabel) ? "查看数据" : risk.ActionLabel;
 }

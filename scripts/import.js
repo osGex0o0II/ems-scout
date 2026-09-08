@@ -44,7 +44,8 @@ if (process.env.EMS_SKIP_ENUM_VALIDATION !== '1') {
 
 const db = new Database(DB_PATH);
 db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = OFF');
+db.pragma('busy_timeout = 10000');
+db.pragma('foreign_keys = ON');
 
 function ensureSchema() {
   db.exec(`
@@ -201,11 +202,12 @@ const importCurrent = db.transaction(() => {
   if (IMPORT_FILTER) clearBuildings(IMPORT_FILTER);
   else clearAll();
 
-  insertBuildings();
-
+  // Parent rows must exist before inserting sub_areas/pages/cards when FK checks are enabled.
   for (const bldg of buildings) {
     upsert.run(bldg.building, (bldg.subAreas||[]).length, bldg.menuClicked||'', buildingCollectedAt(bldg));
   }
+  insertBuildings();
+
   for (const bldg of buildings) {
     if (!IMPORT_FILTER || IMPORT_FILTER.includes(bldg.building)) updateTs.run(buildingCollectedAt(bldg), bldg.building);
   }

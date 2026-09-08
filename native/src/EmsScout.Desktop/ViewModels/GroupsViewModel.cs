@@ -578,7 +578,7 @@ public sealed partial class GroupsViewModel(
                 TargetBuilding = value;
                 if (!_loadingMemberDraft)
                 {
-                    _ = LoadFloorCatalogAsync();
+                    _ = LoadFloorCatalogSafeAsync();
                 }
             }
         }
@@ -612,9 +612,7 @@ public sealed partial class GroupsViewModel(
         StatusText = "正在计算区域组设备";
         try
         {
-            var groupTask = areaGroupRepository.LoadAsync(cancellationToken);
-            await groupTask.ConfigureAwait(true);
-            var groupSet = groupTask.Result;
+            var groupSet = await areaGroupRepository.LoadAsync(cancellationToken).ConfigureAwait(true);
             GroupRecords = groupSet.Groups;
             ItemRecords = groupSet.Items;
             await LoadFloorCatalogAsync(cancellationToken).ConfigureAwait(true);
@@ -1273,6 +1271,21 @@ public sealed partial class GroupsViewModel(
     private async Task LoadFloorCatalogAsync(CancellationToken cancellationToken = default)
     {
         await LoadFloorCatalogAsync(preferredFloorLabel: null, cancellationToken).ConfigureAwait(true);
+    }
+
+    private async Task LoadFloorCatalogSafeAsync()
+    {
+        try
+        {
+            await LoadFloorCatalogAsync().ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            StatusText = "读取楼层目录失败：" + ex.Message;
+        }
     }
 
     private async Task LoadFloorCatalogAsync(string? preferredFloorLabel, CancellationToken cancellationToken = default)

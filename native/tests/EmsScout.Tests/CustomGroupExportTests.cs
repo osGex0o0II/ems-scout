@@ -34,7 +34,7 @@ public sealed class CustomGroupExportTests
     }
 
     [Fact]
-    public async Task GroupFilterIncludesMatchingVirtualDevicesAndExcludesVirtualDevicesOutsideItsScope()
+    public async Task GroupFilterExcludesVirtualDevicesFromInventoryAndExport()
     {
         var databasePath = CreateDatabase();
         var realtimeSource = CreateRealtimeSource();
@@ -46,11 +46,10 @@ public sealed class CustomGroupExportTests
         var result = await repository.SearchAsync(query);
         var export = await exportService.ExportAsync(query, output);
 
-        Assert.Equal(4, result.Total);
+        Assert.Equal(2, result.Total);
         Assert.Equal(result.Total, result.Rows.Count);
         Assert.Equal(result.Total, export.RowCount);
-        Assert.Contains(result.Rows, row => row.Name == "GQ-VIRTUAL-IN-KT" && row.IsVirtual);
-        Assert.Contains(result.Rows, row => row.Name == "GQ-VIRTUAL-OFFLINE-IN-KT" && row.IsVirtual);
+        Assert.DoesNotContain(result.Rows, row => row.IsVirtual);
         Assert.DoesNotContain(result.Rows, row => row.Name == "GQ-VIRTUAL-OUT-KT");
         Assert.DoesNotContain(result.Rows, row => row.Name == "GQ-VIRTUAL-OTHER-BUILDING-KT");
         Assert.Equal(2, realtimeSource.RequestedBuildings.Count);
@@ -58,8 +57,8 @@ public sealed class CustomGroupExportTests
 
         using var archive = ZipFile.OpenRead(export.Path);
         var devices = ReadEntry(archive, "xl/worksheets/sheet1.xml");
-        Assert.Contains("GQ-VIRTUAL-IN-KT", devices);
-        Assert.Contains("GQ-VIRTUAL-OFFLINE-IN-KT", devices);
+        Assert.DoesNotContain("GQ-VIRTUAL-IN-KT", devices);
+        Assert.DoesNotContain("GQ-VIRTUAL-OFFLINE-IN-KT", devices);
         Assert.DoesNotContain("GQ-VIRTUAL-OUT-KT", devices);
         Assert.DoesNotContain("GQ-VIRTUAL-OTHER-BUILDING-KT", devices);
     }
@@ -75,7 +74,8 @@ public sealed class CustomGroupExportTests
         var query = new DeviceQuery(
             CommunicationState: "离线",
             AreaType: "公区",
-            MonitorGroupIds: "10");
+            MonitorGroupIds: "10",
+            RealtimeMatch: "virtual");
 
         var result = await repository.SearchAsync(query);
         var export = await exportService.ExportAsync(query, output);

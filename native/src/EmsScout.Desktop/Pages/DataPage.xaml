@@ -8,7 +8,7 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     Loaded="Page_Loaded"
     mc:Ignorable="d">
-    <Grid Padding="{StaticResource PagePadding}" RowSpacing="8">
+    <Grid Padding="{StaticResource PagePadding}" RowSpacing="6">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
@@ -23,17 +23,61 @@
             <StackPanel Spacing="3">
                 <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="数据管理" />
                 <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
-                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind ViewModel.LastExportPath, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
                 <Button
-                    Click="OpenExportLocation_Click"
+                    Width="32"
+                    Height="32"
+                    AutomationProperties.Name="{x:Bind ViewModel.LatestBatchIndicatorAutomationName, Mode=OneWay}"
+                    Click="LatestBatch_Click"
+                    HorizontalContentAlignment="Center"
+                    IsEnabled="{x:Bind ViewModel.CanRunDataAction, Mode=OneWay}"
+                    Padding="0"
                     Style="{StaticResource ToolbarButtonStyle}"
-                    IsEnabled="{x:Bind ViewModel.CanOpenLastExport, Mode=OneWay}">
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon FontSize="14" Glyph="&#xE838;" />
-                        <TextBlock Text="打开导出位置" />
-                    </StackPanel>
+                    ToolTipService.ToolTip="{x:Bind ViewModel.LatestBatchIndicatorToolTip, Mode=OneWay}">
+                    <Grid Width="18" Height="18">
+                        <Ellipse
+                            Width="14"
+                            Height="14"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Fill="{ThemeResource SystemFillColorSuccessBrush}"
+                            Opacity="{x:Bind ViewModel.LatestBatchIndicatorOpacity, Mode=OneWay}" />
+                        <Ellipse
+                            Width="14"
+                            Height="14"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Fill="{ThemeResource SystemFillColorCautionBrush}"
+                            Opacity="{x:Bind ViewModel.HistoricalBatchIndicatorOpacity, Mode=OneWay}" />
+                    </Grid>
+                </Button>
+                <ComboBox
+                    Width="320"
+                    MaxDropDownHeight="420"
+                    AutomationProperties.Name="选择数据批次"
+                    VerticalContentAlignment="Center"
+                    ItemsSource="{x:Bind ViewModel.DataSources, Mode=OneWay}"
+                    SelectedItem="{x:Bind ViewModel.SelectedDataSource, Mode=TwoWay}"
+                    IsEnabled="{x:Bind ViewModel.CanChangeDataSource, Mode=OneWay}"
+                    SelectionChanged="DataSource_SelectionChanged">
+                    <ComboBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding DisplayLabel}" TextTrimming="CharacterEllipsis" />
+                        </DataTemplate>
+                    </ComboBox.ItemTemplate>
+                </ComboBox>
+                <Button
+                    Width="36"
+                    Height="32"
+                    AutomationProperties.Name="刷新当前数据"
+                    Click="RefreshLatest_Click"
+                    HorizontalContentAlignment="Center"
+                    IsEnabled="{x:Bind ViewModel.CanRunDataAction, Mode=OneWay}"
+                    Padding="0"
+                    Style="{StaticResource ToolbarButtonStyle}"
+                    ToolTipService.ToolTip="刷新当前数据">
+                    <SymbolIcon Symbol="Refresh" />
                 </Button>
                 <Button
                     Click="Export_Click"
@@ -47,14 +91,14 @@
             </StackPanel>
         </Grid>
 
-        <Border Grid.Row="1" Style="{StaticResource WorkbenchCardStyle}">
-            <Grid RowSpacing="6">
+        <Border Grid.Row="1" Style="{StaticResource WorkbenchCardStyle}" Padding="12">
+            <Grid RowSpacing="4">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <Grid ColumnSpacing="12">
+                <Grid ColumnSpacing="8">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
@@ -63,7 +107,7 @@
                         <TextBlock Style="{StaticResource SectionTitleStyle}" Text="筛选条件" />
                         <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="筛选和 Excel 导出使用同一组条件。" />
                     </StackPanel>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
                         <Button Click="ApplyFilters_Click" Style="{StaticResource PrimaryToolbarButtonStyle}" IsEnabled="{x:Bind ViewModel.CanRunDataAction, Mode=OneWay}">
                             <StackPanel Orientation="Horizontal" Spacing="6">
                                 <FontIcon FontSize="14" Glyph="&#xE71C;" />
@@ -78,21 +122,21 @@
                         </Button>
                         <Button Click="Refresh_Click" Style="{StaticResource ToolbarButtonStyle}" IsEnabled="{x:Bind ViewModel.CanRunDataAction, Mode=OneWay}">
                             <StackPanel Orientation="Horizontal" Spacing="6">
-                                <FontIcon FontSize="14" Glyph="&#xE72C;" />
+                                <SymbolIcon Symbol="Refresh" />
                                 <TextBlock Text="刷新" />
                             </StackPanel>
                         </Button>
                     </StackPanel>
                 </Grid>
 
-                    <Grid Grid.Row="1" ColumnSpacing="8" RowSpacing="6">
+                    <Grid Grid.Row="1" ColumnSpacing="6" RowSpacing="4">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="1*" MinWidth="108" />
-                            <ColumnDefinition Width="1*" MinWidth="108" />
-                            <ColumnDefinition Width="1*" MinWidth="108" />
-                            <ColumnDefinition Width="1*" MinWidth="108" />
-                            <ColumnDefinition Width="1.25*" MinWidth="132" />
-                            <ColumnDefinition Width="1.35*" MinWidth="145" />
+                            <ColumnDefinition Width="1*" MinWidth="96" />
+                            <ColumnDefinition Width="1*" MinWidth="96" />
+                            <ColumnDefinition Width="1*" MinWidth="96" />
+                            <ColumnDefinition Width="1*" MinWidth="96" />
+                            <ColumnDefinition Width="1.2*" MinWidth="112" />
+                            <ColumnDefinition Width="1.25*" MinWidth="120" />
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
@@ -122,7 +166,7 @@
             </Grid>
         </Border>
 
-        <Grid Grid.Row="2" ColumnSpacing="14">
+        <Grid Grid.Row="2" ColumnSpacing="10">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="0" />
@@ -135,15 +179,26 @@
 
             <Border Style="{StaticResource WorkbenchCardStyle}" Padding="0">
                 <Grid>
+                    <VisualStateManager.VisualStateGroups>
+                        <VisualStateGroup>
+                            <VisualState x:Name="WideDataLayout">
+                                <VisualState.StateTriggers>
+                                    <AdaptiveTrigger MinWindowWidth="1500" />
+                                </VisualState.StateTriggers>
+                                <VisualState.Setters>
+                                    <Setter Target="WideDataList.Visibility" Value="Visible" />
+                                    <Setter Target="CompactDataList.Visibility" Value="Collapsed" />
+                                </VisualState.Setters>
+                            </VisualState>
+                        </VisualStateGroup>
+                    </VisualStateManager.VisualStateGroups>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
-                    <Grid Padding="14,8" ColumnSpacing="8">
+                    <Grid Padding="10,6" ColumnSpacing="8">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBlock
@@ -151,98 +206,214 @@
                             Foreground="{ThemeResource TextFillColorSecondaryBrush}"
                             Text="{x:Bind ViewModel.ResultSummary, Mode=OneWay}"
                             TextTrimming="CharacterEllipsis" />
-                        <Button
-                            Grid.Column="1"
-                            Click="PreviousPage_Click"
-                            Style="{StaticResource ToolbarButtonStyle}"
-                            AutomationProperties.Name="上一页"
-                            ToolTipService.ToolTip="上一页"
-                            IsEnabled="{x:Bind ViewModel.CanMovePrevious, Mode=OneWay}">
-                            <FontIcon FontSize="14" Glyph="&#xE72B;" />
-                        </Button>
-                        <TextBlock
-                            Grid.Column="2"
-                            MinWidth="92"
-                            HorizontalAlignment="Center"
-                            VerticalAlignment="Center"
-                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                            Text="{x:Bind ViewModel.PageSummary, Mode=OneWay}" />
-                        <Button
-                            Grid.Column="3"
-                            Click="NextPage_Click"
-                            Style="{StaticResource ToolbarButtonStyle}"
-                            AutomationProperties.Name="下一页"
-                            ToolTipService.ToolTip="下一页"
-                            IsEnabled="{x:Bind ViewModel.CanMoveNext, Mode=OneWay}">
-                            <FontIcon FontSize="14" Glyph="&#xE72A;" />
-                        </Button>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
+                            <Button
+                                Click="PreviousPage_Click"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                AutomationProperties.Name="上一页"
+                                ToolTipService.ToolTip="上一页"
+                                IsEnabled="{x:Bind ViewModel.CanMovePrevious, Mode=OneWay}">
+                                <FontIcon FontSize="14" Glyph="&#xE72B;" />
+                            </Button>
+                            <TextBlock
+                                MinWidth="82"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                Text="{x:Bind ViewModel.PageSummary, Mode=OneWay}" />
+                            <Button
+                                Click="NextPage_Click"
+                                Style="{StaticResource ToolbarButtonStyle}"
+                                AutomationProperties.Name="下一页"
+                                ToolTipService.ToolTip="下一页"
+                                IsEnabled="{x:Bind ViewModel.CanMoveNext, Mode=OneWay}">
+                                <FontIcon FontSize="14" Glyph="&#xE72A;" />
+                            </Button>
+                        </StackPanel>
                     </Grid>
                     <ListView
+                        x:Name="CompactDataList"
                         Grid.Row="1"
                         ItemsSource="{x:Bind ViewModel.Devices, Mode=OneWay}"
                         SelectedItem="{x:Bind ViewModel.SelectedDevice, Mode=TwoWay}"
                         SelectionChanged="DeviceList_SelectionChanged"
-                        ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                        HorizontalContentAlignment="Stretch"
+                        ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                        ScrollViewer.VerticalScrollBarVisibility="Auto"
                         SelectionMode="Single">
+                        <ListView.Resources>
+                            <Style x:Key="DataTableCellTextStyle" TargetType="TextBlock">
+                                <Setter Property="HorizontalAlignment" Value="Stretch" />
+                                <Setter Property="TextAlignment" Value="Center" />
+                                <Setter Property="TextWrapping" Value="NoWrap" />
+                                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                <Setter Property="FontSize" Value="14" />
+                            </Style>
+                        </ListView.Resources>
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="Padding" Value="0" />
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Setter Property="MinHeight" Value="0" />
+                            </Style>
+                        </ListView.ItemContainerStyle>
                         <ListView.Header>
-                            <Grid MinWidth="1620" Padding="{x:Bind ViewModel.TableHeaderPadding, Mode=OneWay}" ColumnSpacing="10">
+                            <Grid Padding="{x:Bind ViewModel.TableHeaderPadding, Mode=OneWay}" ColumnSpacing="4">
                                 <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="90" />
-                                    <ColumnDefinition Width="86" />
-                                    <ColumnDefinition Width="86" />
-                                    <ColumnDefinition Width="210" />
-                                    <ColumnDefinition Width="190" />
-                                    <ColumnDefinition Width="92" />
-                                    <ColumnDefinition Width="110" />
-                                    <ColumnDefinition Width="92" />
-                                    <ColumnDefinition Width="82" />
-                                    <ColumnDefinition Width="100" />
-                                    <ColumnDefinition Width="100" />
-                                    <ColumnDefinition Width="140" />
+                                    <ColumnDefinition Width="0.75*" />
+                                    <ColumnDefinition Width="0.75*" />
+                                    <ColumnDefinition Width="0.75*" />
+                                    <ColumnDefinition Width="1.05*" />
+                                    <ColumnDefinition Width="1.65*" />
+                                    <ColumnDefinition Width="0.95*" />
+                                    <ColumnDefinition Width="1.25*" />
+                                    <ColumnDefinition Width="0.9*" />
+                                    <ColumnDefinition Width="0.7*" />
+                                    <ColumnDefinition Width="1.55*" />
+                                    <ColumnDefinition Width="1.45*" />
                                 </Grid.ColumnDefinitions>
-                                <TextBlock FontWeight="SemiBold" Text="楼栋" />
-                                <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="座号" />
-                                <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="楼层" />
-                                <TextBlock Grid.Column="3" FontWeight="SemiBold" Text="页面" />
-                                <TextBlock Grid.Column="4" FontWeight="SemiBold" Text="设备名" />
-                                <TextBlock Grid.Column="5" FontWeight="SemiBold" Text="区域" />
-                                <TextBlock Grid.Column="6" FontWeight="SemiBold" Text="开关机状态" />
-                                <TextBlock Grid.Column="7" FontWeight="SemiBold" Text="模式" />
-                                <TextBlock Grid.Column="8" FontWeight="SemiBold" Text="风速" />
-                                <TextBlock Grid.Column="9" FontWeight="SemiBold" Text="设置温度(℃)" />
-                                <TextBlock Grid.Column="10" FontWeight="SemiBold" Text="环境温度(℃)" />
-                                <TextBlock Grid.Column="11" FontWeight="SemiBold" Text="集控锁定状态" />
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" FontWeight="SemiBold" Text="楼栋" />
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="1" FontWeight="SemiBold" Text="座号" />
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="2" FontWeight="SemiBold" Text="楼层" />
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="3" FontWeight="SemiBold" Text="页面" />
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="4" FontWeight="SemiBold" Text="设备名" />
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="5" FontWeight="SemiBold" Text="区域" />
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="6" FontWeight="SemiBold" Text="开关机状态" />
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="7" FontWeight="SemiBold" Text="模式" />
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="8" FontWeight="SemiBold" Text="风速" />
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="9" FontWeight="SemiBold" Text="温度（设 / 环，℃）" />
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="10" FontWeight="SemiBold" Text="集控锁定状态" />
                             </Grid>
                         </ListView.Header>
                         <ListView.ItemTemplate>
                             <DataTemplate>
-                                <Grid MinWidth="1620" Padding="{Binding DataContext.TableRowPadding, ElementName=DataRoot}" ColumnSpacing="10">
+                                <Grid Padding="{Binding DataContext.TableRowPadding, ElementName=DataRoot}" ColumnSpacing="4">
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="90" />
-                                        <ColumnDefinition Width="86" />
-                                        <ColumnDefinition Width="86" />
-                                        <ColumnDefinition Width="210" />
-                                        <ColumnDefinition Width="190" />
-                                        <ColumnDefinition Width="92" />
-                                        <ColumnDefinition Width="110" />
-                                        <ColumnDefinition Width="92" />
-                                        <ColumnDefinition Width="82" />
-                                        <ColumnDefinition Width="100" />
-                                        <ColumnDefinition Width="100" />
-                                        <ColumnDefinition Width="140" />
+                                        <ColumnDefinition Width="0.75*" />
+                                        <ColumnDefinition Width="0.75*" />
+                                        <ColumnDefinition Width="0.75*" />
+                                        <ColumnDefinition Width="1.05*" />
+                                        <ColumnDefinition Width="1.65*" />
+                                        <ColumnDefinition Width="0.95*" />
+                                        <ColumnDefinition Width="1.25*" />
+                                        <ColumnDefinition Width="0.9*" />
+                                        <ColumnDefinition Width="0.7*" />
+                                        <ColumnDefinition Width="1.55*" />
+                                        <ColumnDefinition Width="1.45*" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Text="{Binding Building}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Building}" />
-                                    <TextBlock Grid.Column="1" Text="{Binding Zuo}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Zuo}" />
-                                    <TextBlock Grid.Column="2" Text="{Binding FloorLabel}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding FloorLabel}" />
-                                    <TextBlock Grid.Column="3" Text="{Binding PageName}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding PageName}" />
-                                    <TextBlock Grid.Column="4" FontWeight="SemiBold" Text="{Binding Name}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Name}" />
-                                    <TextBlock Grid.Column="5" Text="{Binding AreaType}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding AreaType}" />
-                                    <TextBlock Grid.Column="6" Text="{Binding CommunicationText}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding CommunicationText}" />
-                                    <TextBlock Grid.Column="7" Text="{Binding Mode}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Mode}" />
-                                    <TextBlock Grid.Column="8" Text="{Binding Fan}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding Fan}" />
-                                    <TextBlock Grid.Column="9" Text="{Binding SetTemperature}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding SetTemperature}" />
-                                    <TextBlock Grid.Column="10" Text="{Binding IndoorTemperature}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding IndoorTemperature}" />
-                                    <TextBlock Grid.Column="11" Text="{Binding RealtimeLock}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{Binding RealtimeLock}" />
+                                    <TextBlock Style="{StaticResource DataTableCellTextStyle}" Text="{Binding Building}" ToolTipService.ToolTip="{Binding Building}" />
+                                    <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="1" Text="{Binding Zuo}" ToolTipService.ToolTip="{Binding Zuo}" />
+                                    <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="2" Text="{Binding FloorLabel}" ToolTipService.ToolTip="{Binding FloorLabel}" />
+                                    <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="3" Text="{Binding PageName}" ToolTipService.ToolTip="{Binding PageName}" />
+                                    <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="4" FontWeight="SemiBold" Text="{Binding Name}" ToolTipService.ToolTip="{Binding Name}" />
+                                    <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="5" Text="{Binding AreaType}" ToolTipService.ToolTip="{Binding AreaType}" />
+                                    <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="6" Foreground="{Binding CommunicationForeground}" Text="{Binding CommunicationText}" ToolTipService.ToolTip="{Binding CommunicationText}" />
+                                    <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="7" Text="{Binding Mode}" ToolTipService.ToolTip="{Binding Mode}" />
+                                    <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="8" Text="{Binding Fan}" ToolTipService.ToolTip="{Binding Fan}" />
+                                    <StackPanel Grid.Column="9" Orientation="Horizontal" HorizontalAlignment="Center" Spacing="2" ToolTipService.ToolTip="设置温度 / 环境温度">
+                                        <TextBlock Style="{StaticResource DataTableCellTextStyle}" FontWeight="SemiBold" Foreground="{Binding TemperatureForeground}" Text="{Binding SetTemperatureValue}" />
+                                        <TextBlock Style="{StaticResource DataTableCellTextStyle}" Text=" / " />
+                                        <TextBlock Style="{StaticResource DataTableCellTextStyle}" FontWeight="SemiBold" Foreground="{Binding TemperatureForeground}" Text="{Binding IndoorTemperatureValue}" />
+                                        <TextBlock Style="{StaticResource DataTableCellTextStyle}" Text=" ℃" />
+                                    </StackPanel>
+                                    <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="10" Text="{Binding RealtimeLock}" ToolTipService.ToolTip="{Binding RealtimeLock}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+                    </ListView>
+                    <ListView
+                        x:Name="WideDataList"
+                        Grid.Row="1"
+                        Visibility="Collapsed"
+                        ItemsSource="{x:Bind ViewModel.Devices, Mode=OneWay}"
+                        SelectedItem="{x:Bind ViewModel.SelectedDevice, Mode=TwoWay}"
+                        SelectionChanged="DeviceList_SelectionChanged"
+                        HorizontalContentAlignment="Stretch"
+                        ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                        ScrollViewer.VerticalScrollBarVisibility="Auto"
+                        SelectionMode="Single">
+                        <ListView.Resources>
+                            <Style x:Key="DataTableCellTextStyle" TargetType="TextBlock">
+                                <Setter Property="HorizontalAlignment" Value="Stretch" />
+                                <Setter Property="TextAlignment" Value="Center" />
+                                <Setter Property="TextWrapping" Value="NoWrap" />
+                                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                                <Setter Property="FontSize" Value="14" />
+                            </Style>
+                        </ListView.Resources>
+                        <ListView.ItemContainerStyle>
+                            <Style TargetType="ListViewItem">
+                                <Setter Property="Padding" Value="0" />
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Setter Property="MinHeight" Value="0" />
+                            </Style>
+                        </ListView.ItemContainerStyle>
+                        <ListView.Header>
+                            <Grid Padding="{x:Bind ViewModel.TableHeaderPadding, Mode=OneWay}" ColumnSpacing="4">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="0.75*" />
+                                    <ColumnDefinition Width="0.75*" />
+                                    <ColumnDefinition Width="0.75*" />
+                                    <ColumnDefinition Width="1.05*" />
+                                    <ColumnDefinition Width="1.65*" />
+                                    <ColumnDefinition Width="0.95*" />
+                                    <ColumnDefinition Width="1.25*" />
+                                    <ColumnDefinition Width="0.9*" />
+                                    <ColumnDefinition Width="0.7*" />
+                                    <ColumnDefinition Width="1.55*" />
+                                    <ColumnDefinition Width="1.45*" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" FontWeight="SemiBold" Text="楼栋" />
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="1" FontWeight="SemiBold" Text="座号" />
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="2" FontWeight="SemiBold" Text="楼层" />
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="3" FontWeight="SemiBold" Text="页面" />
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="4" FontWeight="SemiBold" Text="设备名" />
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="5" FontWeight="SemiBold" Text="区域" />
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="6" FontWeight="SemiBold" Text="开关机状态" />
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="7" FontWeight="SemiBold" Text="模式" />
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="8" FontWeight="SemiBold" Text="风速" />
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="9" FontWeight="SemiBold" Text="温度（设 / 环，℃）" />
+                                <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="10" FontWeight="SemiBold" Text="集控锁定状态" />
+                            </Grid>
+                        </ListView.Header>
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Padding="{Binding DataContext.TableRowPadding, ElementName=DataRoot}" ColumnSpacing="4">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="0.75*" />
+                                        <ColumnDefinition Width="0.75*" />
+                                        <ColumnDefinition Width="0.75*" />
+                                        <ColumnDefinition Width="1.05*" />
+                                        <ColumnDefinition Width="1.65*" />
+                                        <ColumnDefinition Width="0.95*" />
+                                        <ColumnDefinition Width="1.25*" />
+                                        <ColumnDefinition Width="0.9*" />
+                                        <ColumnDefinition Width="0.7*" />
+                                        <ColumnDefinition Width="1.55*" />
+                                        <ColumnDefinition Width="1.45*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Style="{StaticResource DataTableCellTextStyle}" Text="{Binding Building}" ToolTipService.ToolTip="{Binding Building}" />
+                                    <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="1" Text="{Binding Zuo}" ToolTipService.ToolTip="{Binding Zuo}" />
+                                    <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="2" Text="{Binding FloorLabel}" ToolTipService.ToolTip="{Binding FloorLabel}" />
+                                    <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="3" Text="{Binding PageName}" ToolTipService.ToolTip="{Binding PageName}" />
+                                    <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="4" FontWeight="SemiBold" Text="{Binding Name}" ToolTipService.ToolTip="{Binding Name}" />
+                                    <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="5" Text="{Binding AreaType}" ToolTipService.ToolTip="{Binding AreaType}" />
+                                    <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="6" Foreground="{Binding CommunicationForeground}" Text="{Binding CommunicationText}" ToolTipService.ToolTip="{Binding CommunicationText}" />
+                                    <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="7" Text="{Binding Mode}" ToolTipService.ToolTip="{Binding Mode}" />
+                                    <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="8" Text="{Binding Fan}" ToolTipService.ToolTip="{Binding Fan}" />
+                                    <StackPanel Grid.Column="9" Orientation="Horizontal" HorizontalAlignment="Center" Spacing="2" ToolTipService.ToolTip="设置温度 / 环境温度">
+                                        <TextBlock Style="{StaticResource DataTableCellTextStyle}" FontWeight="SemiBold" Foreground="{Binding TemperatureForeground}" Text="{Binding SetTemperatureValue}" />
+                                        <TextBlock Style="{StaticResource DataTableCellTextStyle}" Text=" / " />
+                                        <TextBlock Style="{StaticResource DataTableCellTextStyle}" FontWeight="SemiBold" Foreground="{Binding TemperatureForeground}" Text="{Binding IndoorTemperatureValue}" />
+                                        <TextBlock Style="{StaticResource DataTableCellTextStyle}" Text=" ℃" />
+                                    </StackPanel>
+                                    <TextBlock Style="{StaticResource DataTableCellTextStyle}" Grid.Column="10" Text="{Binding RealtimeLock}" ToolTipService.ToolTip="{Binding RealtimeLock}" />
                                 </Grid>
                             </DataTemplate>
                         </ListView.ItemTemplate>

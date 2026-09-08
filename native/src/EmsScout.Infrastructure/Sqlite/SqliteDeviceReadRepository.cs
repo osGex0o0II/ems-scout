@@ -64,6 +64,9 @@ public sealed class SqliteDeviceReadRepository(
             ? new RealtimeDetailSet([])
             : await realtimeDetailSource.LoadAsync(realtimeBuildings, cancellationToken).ConfigureAwait(false);
         rows = AttachRealtimeRows(rows, realtimeSet, overrides);
+        rows = rows
+            .Where(row => DeviceQueryVisibility.ShouldInclude(row, query))
+            .ToList();
         if (groupIds.Count > 0)
         {
             rows = rows
@@ -164,6 +167,9 @@ public sealed class SqliteDeviceReadRepository(
             ? new RealtimeDetailSet([])
             : await realtimeDetailSource.LoadAsync(realtimeBuildings, cancellationToken).ConfigureAwait(false);
         rows = AttachRealtimeRows(rows, realtimeSet, overrides);
+        rows = rows
+            .Where(row => DeviceQueryVisibility.ShouldInclude(row, query))
+            .ToList();
         if (groupIds.Count > 0)
         {
             rows = rows
@@ -205,6 +211,9 @@ public sealed class SqliteDeviceReadRepository(
     {
         var connection = new SqliteConnection($"Data Source={DatabasePathResolver()};Mode=ReadOnly;Cache=Shared");
         connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA busy_timeout = 10000; PRAGMA foreign_keys = ON;";
+        command.ExecuteNonQuery();
         return connection;
     }
 

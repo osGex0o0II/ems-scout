@@ -9,7 +9,24 @@ public sealed class JsonQualityAuditService(
 {
     public async Task<QualityAuditReport?> LoadLatestAsync(CancellationToken cancellationToken = default)
     {
-        var path = Path.Combine(qualityOutputDirectoryResolver(), "quality_report.json");
+        return await LoadAsync(null, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<QualityAuditReport?> LoadForRunAsync(
+        long runId,
+        CancellationToken cancellationToken = default)
+    {
+        return await LoadAsync(runId, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<QualityAuditReport?> LoadAsync(
+        long? runId,
+        CancellationToken cancellationToken)
+    {
+        var outputDirectory = qualityOutputDirectoryResolver();
+        var path = runId.HasValue
+            ? Path.Combine(outputDirectory, $"quality_report_run{runId.Value}.json")
+            : Path.Combine(outputDirectory, "quality_report.json");
         if (!File.Exists(path))
         {
             return null;

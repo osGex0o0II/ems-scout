@@ -107,6 +107,30 @@ public sealed class CollectionRunRepositoryTests
     }
 
     [Fact]
+    public async Task FailedRunCannotBeRestored()
+    {
+        var databasePath = CreateDatabase();
+        await ExecuteAsync(databasePath, "UPDATE collection_runs SET status = 'failed' WHERE id = 1");
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => repository.RestoreCurrentAsync(1));
+
+        Assert.Contains("仅允许恢复已完成批次", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task BrokenSnapshotMappingCannotBeRestored()
+    {
+        var databasePath = CreateDatabase();
+        await ExecuteAsync(databasePath, "DELETE FROM run_pages WHERE run_id = 1");
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => repository.RestoreCurrentAsync(1));
+
+        Assert.Contains("快照计数不完整", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task DeletesRunHistoryWithoutTouchingCurrentDataOrAnnotations()
     {
         var databasePath = CreateDatabase();
@@ -132,12 +156,43 @@ public sealed class CollectionRunRepositoryTests
         Assert.Equal(1L, await ScalarLongAsync(verify, "SELECT COUNT(*) FROM device_notes"));
     }
 
+    [Fact]
+    public async Task DeletesRunArtifactsInsideTheDatabaseDirectory()
+    {
+        var databasePath = CreateDatabase();
+        var directory = Path.GetDirectoryName(databasePath)!;
+        var jsonPath = Path.Combine(directory, "enum_run1.json");
+        var snapshotPath = Path.Combine(directory, "snapshot_run1.db");
+        var reportPath = Path.Combine(directory, "quality_report_run1.json");
+        var textPath = Path.Combine(directory, "quality_report_run1.txt");
+        foreach (var path in new[] { jsonPath, snapshotPath, reportPath, textPath })
+        {
+            File.WriteAllText(path, "artifact");
+        }
+
+        await ExecuteAsync(databasePath, "UPDATE collection_runs SET json_path = 'enum_run1.json', db_snapshot_path = 'snapshot_run1.db' WHERE id = 1");
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+
+        await repository.DeleteAsync(1);
+
+        Assert.All(new[] { jsonPath, snapshotPath, reportPath, textPath }, path => Assert.False(File.Exists(path), path));
+    }
+
     private static async Task<long> ScalarLongAsync(SqliteConnection connection, string sql)
     {
         await using var command = connection.CreateCommand();
         command.CommandText = sql;
         var value = await command.ExecuteScalarAsync();
         return Convert.ToInt64(value);
+    }
+
+    private static async Task ExecuteAsync(string databasePath, string sql)
+    {
+        await using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadWrite");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync();
     }
 
     private static string CreateDatabase()

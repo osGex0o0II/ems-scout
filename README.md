@@ -26,6 +26,24 @@ npm install
 npm run native:run
 ```
 
+安装、更新和卸载 Native MSIX：
+
+```powershell
+# 生成版本化安装包（开发签名示例）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/native-package.ps1 -Version 1.0.7.0 -CertificateThumbprint <thumbprint>
+
+# 首次使用开发证书时，以管理员 PowerShell 执行一次；随后可按普通用户运行
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/native-install.ps1 -PackageDirectory out/native-packages/1.0.7.0
+
+# 更新只接受高于当前安装版本的四段版本号，并校验 settings.json 未改变
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/native-update.ps1 -PackageDirectory out/native-packages/1.0.7.0
+
+# 默认保留 %LOCALAPPDATA%/EMS Scout；只有明确输入 PURGE 才删除用户数据
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/native-uninstall.ps1
+```
+
+安装脚本会安装匹配架构的 Windows App Runtime 依赖、校验证书信任、注册固定 AppUserModelID，并创建桌面 `EMS Scout.lnk` 快捷方式。开发包使用自签名证书时，首次安装/更新需要管理员权限把证书写入机器级 `Root`/`TrustedPeople`；脚本检测不到信任时会立即给出提示，不会启动隐藏的交互式证书工具。
+
 分步采集和导入：
 
 ```powershell

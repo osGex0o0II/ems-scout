@@ -8,127 +8,210 @@
     Loaded="Page_Loaded"
     mc:Ignorable="d">
 
-    <ScrollViewer>
-        <StackPanel Padding="{StaticResource PagePadding}" Spacing="12">
-            <Grid ColumnSpacing="12">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <StackPanel Spacing="3">
-                    <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="系统设置" />
-                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="集中管理连接、目录和界面偏好。" />
-                </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-                    <Button Command="{x:Bind ViewModel.SaveCommand}" Style="{StaticResource PrimaryToolbarButtonStyle}">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <FontIcon FontSize="14" Glyph="&#xE74E;" />
-                            <TextBlock Text="保存设置" />
+    <Grid Padding="{StaticResource PagePadding}" RowSpacing="12">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <StackPanel Spacing="3">
+                <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="系统设置" />
+                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="集中管理连接、目录和界面偏好。" />
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                <Button Command="{x:Bind ViewModel.SaveCommand}" Style="{StaticResource PrimaryToolbarButtonStyle}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon FontSize="14" Glyph="&#xE74E;" />
+                        <TextBlock Text="保存设置" />
+                    </StackPanel>
+                </Button>
+                <Button Command="{x:Bind ViewModel.ResetCommand}" Style="{StaticResource ToolbarButtonStyle}">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon FontSize="14" Glyph="&#xE777;" />
+                        <TextBlock Text="恢复默认" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+        </Grid>
+
+        <TextBlock
+            x:Name="StatusTextBlock"
+            Grid.Row="1"
+            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+            Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
+            TextTrimming="CharacterEllipsis" />
+
+        <NavigationView
+            x:Name="SectionNavigation"
+            Grid.Row="2"
+            IsBackButtonVisible="Collapsed"
+            IsPaneToggleButtonVisible="False"
+            IsSettingsVisible="False"
+            OpenPaneLength="176"
+            PaneDisplayMode="Left"
+            SelectionChanged="SectionNavigation_SelectionChanged">
+            <NavigationView.MenuItems>
+                <NavigationViewItem Content="连接" Tag="connection">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="Link" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="目录" Tag="directories">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="OpenFile" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="数据表" Tag="data-table">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="List" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="外观" Tag="appearance">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="AllApps" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="启动与窗口" Tag="behavior">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="Setting" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="高级" Tag="advanced">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="Setting" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
+            </NavigationView.MenuItems>
+            <NavigationView.Content>
+                <ScrollViewer
+                    Padding="14,0,0,12"
+                    HorizontalAlignment="Left"
+                    HorizontalScrollBarVisibility="Disabled"
+                    MaxWidth="860"
+                    VerticalScrollBarVisibility="Auto">
+                    <Grid HorizontalAlignment="Stretch" MaxWidth="820">
+                        <StackPanel x:Name="ConnectionSection" Spacing="12">
+                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="EMS 连接" />
+                            <TextBox Header="EMS 地址" Text="{x:Bind ViewModel.EmsUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                            <NumberBox
+                                Header="Edge CDP 端口"
+                                LargeChange="100"
+                                Minimum="1"
+                                Maximum="65535"
+                                SmallChange="1"
+                                SpinButtonPlacementMode="Inline"
+                                Value="{x:Bind ViewModel.EdgeCdpPort, Mode=TwoWay}" />
                         </StackPanel>
-                    </Button>
-                    <Button Command="{x:Bind ViewModel.ResetCommand}" Style="{StaticResource ToolbarButtonStyle}">
-                        <StackPanel Orientation="Horizontal" Spacing="6">
-                            <FontIcon FontSize="14" Glyph="&#xE777;" />
-                            <TextBlock Text="恢复默认" />
+
+                        <StackPanel x:Name="DirectoriesSection" Spacing="12" Visibility="Collapsed">
+                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="目录" />
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox Header="数据目录" Text="{x:Bind ViewModel.DataDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <Button
+                                    Grid.Column="1"
+                                    VerticalAlignment="Bottom"
+                                    Click="PickDataDirectory_Click"
+                                    Style="{StaticResource ToolbarButtonStyle}"
+                                    ToolTipService.ToolTip="选择数据目录">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <SymbolIcon Symbol="OpenFile" />
+                                        <TextBlock Text="选择" />
+                                    </StackPanel>
+                                </Button>
+                            </Grid>
+                            <TextBox Header="导出目录" Text="{x:Bind ViewModel.ExportDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                            <ToggleSwitch Header="记录最近导出" OnContent="开" OffContent="关" IsOn="{x:Bind ViewModel.TrackRecentExports, Mode=TwoWay}" />
                         </StackPanel>
-                    </Button>
-                </StackPanel>
-            </Grid>
 
-            <Border
-                Padding="12,8"
-                Background="{ThemeResource SubtleFillColorSecondaryBrush}"
-                CornerRadius="6">
-                <Grid ColumnSpacing="10">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <FontIcon
-                        VerticalAlignment="Center"
-                        FontSize="14"
-                        Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                        Glyph="&#xE946;" />
-                    <TextBlock
-                        Grid.Column="1"
-                        VerticalAlignment="Center"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Text="{x:Bind ViewModel.StatusText, Mode=OneWay}"
-                        TextWrapping="WrapWholeWords" />
-                </Grid>
-            </Border>
+                        <StackPanel x:Name="DataTableSection" Spacing="12" Visibility="Collapsed">
+                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="数据表" />
+                            <ToggleSwitch Header="紧凑数据表" OnContent="开" OffContent="关" IsOn="{x:Bind ViewModel.CompactDataTable, Mode=TwoWay}" />
+                            <NumberBox
+                                Header="温差警告阈值（℃）"
+                                Description="环境温度与设置温度的差额超过此值时标记。"
+                                Minimum="0"
+                                Maximum="50"
+                                SmallChange="0.5"
+                                LargeChange="1"
+                                SpinButtonPlacementMode="Inline"
+                                Value="{x:Bind ViewModel.TemperatureWarningThreshold, Mode=TwoWay}" />
+                            <ComboBox
+                                Header="离线状态颜色"
+                                ItemsSource="{x:Bind ViewModel.OfflineStatusColorOptions, Mode=OneWay}"
+                                SelectedItem="{x:Bind ViewModel.SelectedOfflineStatusColor, Mode=TwoWay}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <Border Width="18" Height="18" Background="{Binding SwatchBrush}" CornerRadius="3" />
+                                            <TextBlock VerticalAlignment="Center" Text="{Binding DisplayLabel}" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            <ComboBox
+                                Header="温差警告颜色"
+                                ItemsSource="{x:Bind ViewModel.TemperatureWarningColorOptions, Mode=OneWay}"
+                                SelectedItem="{x:Bind ViewModel.SelectedTemperatureWarningColor, Mode=TwoWay}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <Border Width="18" Height="18" Background="{Binding SwatchBrush}" CornerRadius="3" />
+                                            <TextBlock VerticalAlignment="Center" Text="{Binding DisplayLabel}" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                        </StackPanel>
 
-            <Grid ColumnSpacing="14" RowSpacing="12">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="Auto" />
-                </Grid.RowDefinitions>
+                        <StackPanel x:Name="AppearanceSection" Spacing="12" Visibility="Collapsed">
+                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="外观" />
+                            <ComboBox Header="主题" SelectedIndex="{x:Bind ViewModel.ThemeIndex, Mode=TwoWay}">
+                                <ComboBoxItem Content="跟随系统" />
+                                <ComboBoxItem Content="浅色" />
+                                <ComboBoxItem Content="深色" />
+                            </ComboBox>
+                            <ComboBox Header="页面切换" SelectedIndex="{x:Bind ViewModel.PageTransitionStyleIndex, Mode=TwoWay}">
+                                <ComboBoxItem Content="无动画" />
+                                <ComboBoxItem Content="淡入" />
+                                <ComboBoxItem Content="轻微滑入" />
+                            </ComboBox>
+                            <ToggleSwitch Header="降低动效" OnContent="开" OffContent="关" IsOn="{x:Bind ViewModel.ReduceMotion, Mode=TwoWay}" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="降低动效会关闭页面位移，只保留必要的即时反馈。" TextWrapping="WrapWholeWords" />
+                        </StackPanel>
 
-                <Border Style="{StaticResource WorkbenchCardStyle}">
-                    <StackPanel Spacing="10">
-                        <TextBlock Style="{StaticResource SectionTitleStyle}" Text="EMS 连接" />
-                        <TextBox Header="EMS 地址" Text="{x:Bind ViewModel.EmsUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                        <NumberBox
-                            Header="Edge CDP 端口"
-                            LargeChange="100"
-                            Minimum="1"
-                            Maximum="65535"
-                            SmallChange="1"
-                            SpinButtonPlacementMode="Inline"
-                            Value="{x:Bind ViewModel.EdgeCdpPort, Mode=TwoWay}" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="采集前请手动启动 Edge，打开并登录 EMS 页面。" TextWrapping="WrapWholeWords" />
-                    </StackPanel>
-                </Border>
+                        <StackPanel x:Name="BehaviorSection" Spacing="12" Visibility="Collapsed">
+                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="启动与窗口" />
+                            <ToggleSwitch Header="关闭时最小化到系统托盘" OnContent="开" OffContent="关" IsOn="{x:Bind ViewModel.CloseToTray, Mode=TwoWay}" />
+                            <ToggleSwitch Header="登录系统后自动启动" OnContent="开" OffContent="关" IsOn="{x:Bind ViewModel.LaunchAtLogin, Mode=TwoWay}" />
+                            <ToggleSwitch Header="启动时最小化到任务栏" OnContent="开" OffContent="关" IsOn="{x:Bind ViewModel.StartMinimized, Mode=TwoWay}" />
+                            <ToggleSwitch Header="保存窗口位置" OnContent="开" OffContent="关" IsOn="{x:Bind ViewModel.SaveWindowPlacement, Mode=TwoWay}" />
+                            <ToggleSwitch Header="在“发送到”菜单中显示 EMS Scout" OnContent="开" OffContent="关" IsOn="{x:Bind ViewModel.ShowInSendTo, Mode=TwoWay}" />
+                        </StackPanel>
 
-                <Border Grid.Column="1" Style="{StaticResource WorkbenchCardStyle}">
-                    <StackPanel Spacing="10">
-                        <TextBlock Style="{StaticResource SectionTitleStyle}" Text="目录" />
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <TextBox Header="数据目录" Text="{x:Bind ViewModel.DataDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                            <Button
-                                Grid.Column="1"
-                                VerticalAlignment="Bottom"
-                                Click="PickDataDirectory_Click"
-                                Style="{StaticResource ToolbarButtonStyle}"
-                                ToolTipService.ToolTip="选择数据目录">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <SymbolIcon Symbol="OpenFile" />
-                                    <TextBlock Text="选择" />
-                                </StackPanel>
-                            </Button>
-                        </Grid>
-                    </StackPanel>
-                </Border>
-
-                <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource WorkbenchCardStyle}">
-                    <StackPanel Spacing="10">
-                        <TextBlock Style="{StaticResource SectionTitleStyle}" Text="外观" />
-                        <ComboBox Header="主题" SelectedIndex="{x:Bind ViewModel.ThemeIndex, Mode=TwoWay}">
-                            <ComboBoxItem Content="跟随系统" />
-                            <ComboBoxItem Content="浅色" />
-                            <ComboBoxItem Content="深色" />
-                        </ComboBox>
-                        <ToggleSwitch Header="紧凑数据表" IsOn="{x:Bind ViewModel.CompactDataTable, Mode=TwoWay}" />
-                    </StackPanel>
-                </Border>
-
-                <Border Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource WorkbenchCardStyle}">
-                    <Grid ColumnSpacing="12">
-                        <StackPanel Spacing="4">
+                        <StackPanel x:Name="AdvancedSection" Spacing="12" Visibility="Collapsed">
                             <TextBlock Style="{StaticResource SectionTitleStyle}" Text="高级" />
-                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.SettingsPath, Mode=OneWay}" TextWrapping="WrapWholeWords" />
+                            <ComboBox Header="日志级别" SelectedIndex="{x:Bind ViewModel.LogLevelIndex, Mode=TwoWay}">
+                                <ComboBoxItem Content="错误" />
+                                <ComboBoxItem Content="信息" />
+                                <ComboBoxItem Content="调试" />
+                            </ComboBox>
+                            <ToggleSwitch Header="保存 NDJSON 日志" OnContent="开" OffContent="关" IsOn="{x:Bind ViewModel.SaveNdjsonLog, Mode=TwoWay}" />
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="设置文件" />
+                            <TextBlock Text="{x:Bind ViewModel.SettingsPath, Mode=OneWay}" TextWrapping="WrapWholeWords" />
                         </StackPanel>
                     </Grid>
-                </Border>
-            </Grid>
-        </StackPanel>
-    </ScrollViewer>
+                </ScrollViewer>
+            </NavigationView.Content>
+        </NavigationView>
+    </Grid>
 </Page>

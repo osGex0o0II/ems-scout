@@ -25,12 +25,11 @@
                     x:Name="HeaderActions"
                     Grid.Column="1"
                     VerticalAlignment="Center"
-                    ColumnSpacing="10">
+                    ColumnSpacing="6">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="36" />
+                        <ColumnDefinition Width="240" />
                         <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="270" />
-                        <ColumnDefinition Width="20" />
                         <ColumnDefinition Width="36" />
                     </Grid.ColumnDefinitions>
                     <Button
@@ -61,30 +60,27 @@
                                 Opacity="{x:Bind ViewModel.HistoricalBatchIndicatorOpacity, Mode=OneWay}" />
                         </Grid>
                     </Button>
-                    <TextBlock
-                        Grid.Column="1"
-                        VerticalAlignment="Center"
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Text="历史批次" />
                     <ComboBox
-                        Grid.Column="2"
-                        Width="270"
+                        Grid.Column="1"
+                        Width="240"
+                        AutomationProperties.Name="数据批次时间"
                         VerticalContentAlignment="Center"
                         DisplayMemberPath="DisplayLabel"
                         ItemsSource="{x:Bind ViewModel.HistoricalDataSources, Mode=OneWay}"
+                        PlaceholderText="{x:Bind ViewModel.CurrentBatchTimestamp, Mode=OneWay}"
                         SelectedItem="{x:Bind ViewModel.SelectedDataSource, Mode=TwoWay}"
                         IsEnabled="{x:Bind ViewModel.CanChangeDataSource, Mode=OneWay}"
                         SelectionChanged="DataSource_SelectionChanged" />
                     <ProgressRing
-                        Grid.Column="3"
-                        Width="20"
-                        Height="20"
+                        Grid.Column="2"
+                        Width="16"
+                        Height="16"
                         AutomationProperties.Name="正在刷新工作台"
                         IsActive="{x:Bind ViewModel.IsLoading, Mode=OneWay}"
                         VerticalAlignment="Center"
                         Visibility="{x:Bind ViewModel.LoadingVisibility, Mode=OneWay}" />
                     <Button
-                        Grid.Column="4"
+                        Grid.Column="3"
                         Width="36"
                         Height="32"
                         AutomationProperties.Name="刷新工作台"
@@ -102,25 +98,33 @@
                 </Grid>
             </Grid>
 
-            <InfoBar
-                AutomationProperties.Name="工作台数据状态"
-                IsClosable="False"
-                IsOpen="True"
-                Message="{x:Bind ViewModel.OverviewStatusMessage, Mode=OneWay}"
-                Severity="{x:Bind ViewModel.OverviewSeverity, Mode=OneWay}"
-                Title="{x:Bind ViewModel.OverviewStatusTitle, Mode=OneWay}" />
-
             <GridView
+                x:Name="MetricsGrid"
                 AutomationProperties.Name="核心运行指标"
                 IsItemClickEnabled="True"
                 ItemsSource="{x:Bind ViewModel.Metrics, Mode=OneWay}"
                 ItemClick="Metrics_ItemClick"
+                ContainerContentChanging="MetricsGrid_ContainerContentChanging"
+                HorizontalContentAlignment="Stretch"
+                VerticalContentAlignment="Top"
+                ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                ScrollViewer.HorizontalScrollMode="Disabled"
+                ScrollViewer.VerticalScrollBarVisibility="Disabled"
+                ScrollViewer.VerticalScrollMode="Disabled"
+                SizeChanged="MetricsGrid_SizeChanged"
                 SelectionMode="None">
+                <GridView.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <ItemsStackPanel Orientation="Horizontal" />
+                    </ItemsPanelTemplate>
+                </GridView.ItemsPanel>
                 <GridView.ItemContainerStyle>
                     <Style TargetType="GridViewItem">
-                        <Setter Property="MinWidth" Value="176" />
+                        <Setter Property="MinWidth" Value="0" />
                         <Setter Property="MinHeight" Value="104" />
+                        <Setter Property="Margin" Value="4,0" />
                         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="VerticalContentAlignment" Value="Top" />
                     </Style>
                 </GridView.ItemContainerStyle>
                 <GridView.ItemTemplate>
@@ -130,7 +134,7 @@
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind Label}" />
@@ -151,10 +155,8 @@
             <Grid x:Name="PrimaryWorkspace" ColumnSpacing="14" RowSpacing="14">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="1.22*" />
-                    <ColumnDefinition x:Name="SecondaryWorkspaceColumn" Width="0" />
                 </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
@@ -198,27 +200,30 @@
                             IsItemClickEnabled="True"
                             ItemsSource="{x:Bind ViewModel.AreaGroups, Mode=OneWay}"
                             ItemClick="AreaGroups_ItemClick"
+                            HorizontalContentAlignment="Stretch"
+                            ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                             SelectionMode="None"
                             Visibility="Collapsed">
                             <ListView.ItemContainerStyle>
                                 <Style TargetType="ListViewItem">
+                                    <Setter Property="Padding" Value="0" />
                                     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                                 </Style>
                             </ListView.ItemContainerStyle>
                             <ListView.Header>
-                                <Grid Padding="16,9" ColumnSpacing="10">
+                                <Grid HorizontalAlignment="Stretch" Padding="16,9" ColumnSpacing="8">
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="2*" MinWidth="190" />
-                                        <ColumnDefinition Width="72" />
-                                        <ColumnDefinition Width="72" />
-                                        <ColumnDefinition Width="72" />
-                                        <ColumnDefinition Width="72" />
-                                        <ColumnDefinition Width="72" />
-                                        <ColumnDefinition Width="72" />
-                                        <ColumnDefinition Width="72" />
-                                        <ColumnDefinition Width="92" />
-                                        <ColumnDefinition Width="92" />
-                                        <ColumnDefinition Width="94" />
+                                        <ColumnDefinition Width="2*" MinWidth="180" />
+                                        <ColumnDefinition Width="64" />
+                                        <ColumnDefinition Width="64" />
+                                        <ColumnDefinition Width="64" />
+                                        <ColumnDefinition Width="64" />
+                                        <ColumnDefinition Width="64" />
+                                        <ColumnDefinition Width="64" />
+                                        <ColumnDefinition Width="64" />
+                                        <ColumnDefinition Width="80" />
+                                        <ColumnDefinition Width="80" />
+                                        <ColumnDefinition Width="96" />
                                     </Grid.ColumnDefinitions>
                                     <TextBlock FontWeight="SemiBold" Text="区域组 / 覆盖范围" />
                                     <TextBlock Grid.Column="1" HorizontalAlignment="Right" FontWeight="SemiBold" Text="设备" />
@@ -230,27 +235,29 @@
                                     <TextBlock Grid.Column="7" HorizontalAlignment="Right" FontWeight="SemiBold" Text="关机" />
                                     <TextBlock Grid.Column="8" HorizontalAlignment="Right" FontWeight="SemiBold" Text="公区开机" />
                                     <TextBlock Grid.Column="9" HorizontalAlignment="Right" FontWeight="SemiBold" Text="公区关机" />
+                                    <TextBlock Grid.Column="10" HorizontalAlignment="Right" FontWeight="SemiBold" Text="操作" />
                                 </Grid>
                             </ListView.Header>
                             <ListView.ItemTemplate>
                                 <DataTemplate x:DataType="vm:DashboardAreaGroupRow">
                                     <Grid
                                         MinHeight="62"
+                                        HorizontalAlignment="Stretch"
                                         Padding="16,9"
                                         AutomationProperties.Name="{x:Bind AutomationName}"
-                                        ColumnSpacing="10">
+                                        ColumnSpacing="8">
                                         <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="2*" MinWidth="190" />
-                                            <ColumnDefinition Width="72" />
-                                            <ColumnDefinition Width="72" />
-                                            <ColumnDefinition Width="72" />
-                                            <ColumnDefinition Width="72" />
-                                            <ColumnDefinition Width="72" />
-                                            <ColumnDefinition Width="72" />
-                                            <ColumnDefinition Width="72" />
-                                            <ColumnDefinition Width="92" />
-                                            <ColumnDefinition Width="92" />
-                                            <ColumnDefinition Width="94" />
+                                            <ColumnDefinition Width="2*" MinWidth="180" />
+                                            <ColumnDefinition Width="64" />
+                                            <ColumnDefinition Width="64" />
+                                            <ColumnDefinition Width="64" />
+                                            <ColumnDefinition Width="64" />
+                                            <ColumnDefinition Width="64" />
+                                            <ColumnDefinition Width="64" />
+                                            <ColumnDefinition Width="64" />
+                                            <ColumnDefinition Width="80" />
+                                            <ColumnDefinition Width="80" />
+                                            <ColumnDefinition Width="96" />
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Spacing="3">
                                             <StackPanel Orientation="Horizontal" Spacing="8">
@@ -295,88 +302,90 @@
                             Visibility="Visible">
                             <ListView.ItemContainerStyle>
                                 <Style TargetType="ListViewItem">
+                                    <Setter Property="Padding" Value="0" />
                                     <Setter Property="HorizontalContentAlignment" Value="Stretch" />
                                 </Style>
                             </ListView.ItemContainerStyle>
                             <ListView.ItemTemplate>
                                 <DataTemplate x:DataType="vm:DashboardAreaGroupRow">
                                     <Grid
-                                        MinHeight="104"
-                                        Padding="16,10"
+                                        MinHeight="78"
+                                        Padding="12,7"
                                         AutomationProperties.Name="{x:Bind AutomationName}"
-                                        RowSpacing="8">
+                                        RowSpacing="4">
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto" />
                                             <RowDefinition Height="Auto" />
-                                            <RowDefinition Height="Auto" />
                                         </Grid.RowDefinitions>
-                                        <Grid ColumnSpacing="8">
+                                        <Grid ColumnSpacing="6">
                                             <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
-                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
                                                 <TextBlock FontWeight="SemiBold" Text="{x:Bind Name}" />
                                                 <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind Priority}" />
-                                                <StackPanel Orientation="Horizontal" Spacing="4">
+                                                <StackPanel Orientation="Horizontal" Spacing="3">
                                                     <FontIcon FontSize="12" Glyph="{x:Bind Glyph}" />
                                                     <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind StateText}" />
                                                 </StackPanel>
                                             </StackPanel>
-                                            <FontIcon Grid.Column="1" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Glyph="&#xE76C;" />
+                                            <TextBlock
+                                                Grid.Column="1"
+                                                HorizontalAlignment="Right"
+                                                Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                                Text="{x:Bind ScopeText}"
+                                                TextTrimming="CharacterEllipsis"
+                                                ToolTipService.ToolTip="{x:Bind Description}" />
+                                            <FontIcon Grid.Column="2" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Glyph="&#xE76C;" />
                                         </Grid>
-                                        <TextBlock
-                                            Grid.Row="1"
-                                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                            Text="{x:Bind ScopeText}"
-                                            TextTrimming="CharacterEllipsis"
-                                            ToolTipService.ToolTip="{x:Bind Description}" />
-                                        <Grid Grid.Row="2" ColumnSpacing="8" RowSpacing="8">
-                                            <Grid.RowDefinitions>
-                                                <RowDefinition Height="Auto" />
-                                                <RowDefinition Height="Auto" />
-                                            </Grid.RowDefinitions>
+                                        <Grid Grid.Row="1" ColumnSpacing="4">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
                                             </Grid.ColumnDefinitions>
-                                            <StackPanel Spacing="1">
-                                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="设备" />
+                                            <StackPanel HorizontalAlignment="Center" Spacing="0">
+                                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="设备" />
                                                 <TextBlock FontWeight="SemiBold" Text="{x:Bind Total}" />
                                             </StackPanel>
-                                            <StackPanel Grid.Column="1" Spacing="1">
-                                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="在线" />
+                                            <StackPanel Grid.Column="1" HorizontalAlignment="Center" Spacing="0">
+                                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="在线" />
                                                 <TextBlock Foreground="{ThemeResource SystemFillColorSuccessBrush}" FontWeight="SemiBold" Text="{x:Bind Online}" />
                                             </StackPanel>
-                                            <StackPanel Grid.Column="2" Spacing="1">
-                                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="离线" />
+                                            <StackPanel Grid.Column="2" HorizontalAlignment="Center" Spacing="0">
+                                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="离线" />
                                                 <TextBlock Foreground="{ThemeResource SystemFillColorCriticalBrush}" FontWeight="SemiBold" Text="{x:Bind Offline}" />
                                             </StackPanel>
-                                            <StackPanel Grid.Column="3" Spacing="1">
-                                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="开机" />
+                                            <StackPanel Grid.Column="3" HorizontalAlignment="Center" Spacing="0">
+                                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="开机" />
                                                 <TextBlock Foreground="{ThemeResource SystemFillColorSuccessBrush}" FontWeight="SemiBold" Text="{x:Bind Running}" />
                                             </StackPanel>
-                                            <StackPanel Grid.Column="4" Spacing="1">
-                                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="关机" />
+                                            <StackPanel Grid.Column="4" HorizontalAlignment="Center" Spacing="0">
+                                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="关机" />
                                                 <TextBlock FontWeight="SemiBold" Text="{x:Bind Stopped}" />
                                             </StackPanel>
-                                            <StackPanel Grid.Row="1" Spacing="1">
-                                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="公区开机" />
+                                            <StackPanel Grid.Column="5" HorizontalAlignment="Center" Spacing="0">
+                                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="公区开机" />
                                                 <TextBlock Foreground="{ThemeResource SystemFillColorSuccessBrush}" FontWeight="SemiBold" Text="{x:Bind PublicRunning}" />
                                             </StackPanel>
-                                            <StackPanel Grid.Row="1" Grid.Column="1" Spacing="1">
-                                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="公区关机" />
+                                            <StackPanel Grid.Column="6" HorizontalAlignment="Center" Spacing="0">
+                                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="公区关机" />
                                                 <TextBlock FontWeight="SemiBold" Text="{x:Bind PublicStopped}" />
                                             </StackPanel>
-                                            <StackPanel Grid.Row="1" Grid.Column="2" Spacing="1">
-                                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="公区" />
+                                            <StackPanel Grid.Column="7" HorizontalAlignment="Center" Spacing="0">
+                                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="公区" />
                                                 <TextBlock FontWeight="SemiBold" Text="{x:Bind PublicTotal}" />
                                             </StackPanel>
-                                            <StackPanel Grid.Row="1" Grid.Column="3" Spacing="1">
-                                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="非公区" />
+                                            <StackPanel Grid.Column="8" HorizontalAlignment="Center" Spacing="0">
+                                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="非公区" />
                                                 <TextBlock FontWeight="SemiBold" Text="{x:Bind PrivateTotal}" />
                                             </StackPanel>
                                         </Grid>
@@ -418,63 +427,6 @@
                     </Grid>
                 </Border>
 
-                <Border x:Name="RiskPanel" Grid.Row="1" Style="{StaticResource WorkbenchCardStyle}" Padding="0">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
-                        <StackPanel Padding="16,14,16,8" Spacing="2">
-                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="优先处理" />
-                            <TextBlock
-                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                Text="质量、实时对账、批次和关注设备的行动项。"
-                                TextWrapping="WrapWholeWords" />
-                        </StackPanel>
-                        <ListView
-                            Grid.Row="1"
-                            AutomationProperties.Name="优先处理事项"
-                            IsItemClickEnabled="True"
-                            ItemsSource="{x:Bind ViewModel.Risks, Mode=OneWay}"
-                            ItemClick="Risks_ItemClick"
-                            SelectionMode="None">
-                            <ListView.ItemContainerStyle>
-                                <Style TargetType="ListViewItem">
-                                    <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                                </Style>
-                            </ListView.ItemContainerStyle>
-                            <ListView.ItemTemplate>
-                                <DataTemplate x:DataType="vm:DashboardRiskRow">
-                                    <Grid MinHeight="58" Padding="16,8" ColumnSpacing="10">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="24" />
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <FontIcon FontSize="14" Glyph="{x:Bind Glyph}" />
-                                        <StackPanel Grid.Column="1" Spacing="2">
-                                            <StackPanel Orientation="Horizontal" Spacing="8">
-                                                <TextBlock FontWeight="SemiBold" Text="{x:Bind Title}" />
-                                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind Source}" />
-                                            </StackPanel>
-                                            <TextBlock
-                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                                MaxLines="2"
-                                                Text="{x:Bind Detail}"
-                                                TextTrimming="CharacterEllipsis"
-                                                TextWrapping="WrapWholeWords"
-                                                ToolTipService.ToolTip="{x:Bind Detail}" />
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center" Spacing="2">
-                                            <TextBlock HorizontalAlignment="Right" FontWeight="SemiBold" Text="{x:Bind CountText}" />
-                                            <TextBlock HorizontalAlignment="Right" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" Text="{x:Bind ActionText}" />
-                                        </StackPanel>
-                                    </Grid>
-                                </DataTemplate>
-                            </ListView.ItemTemplate>
-                        </ListView>
-                    </Grid>
-                </Border>
             </Grid>
 
             <Border Style="{StaticResource WorkbenchCardStyle}" Padding="0">

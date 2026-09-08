@@ -1,8 +1,15 @@
+using System.Globalization;
 using EmsScout.Application.Devices;
+using Microsoft.UI.Xaml.Media;
+using Windows.UI;
 
 namespace EmsScout.Desktop.ViewModels;
 
-public sealed class DataDeviceRow(DeviceRecord record)
+public sealed class DataDeviceRow(
+    DeviceRecord record,
+    double temperatureWarningThreshold = 2.0,
+    string offlineStatusColor = "#808080",
+    string temperatureWarningColor = "#D97706")
 {
     public long Id { get; } = record.Id;
 
@@ -62,6 +69,26 @@ public sealed class DataDeviceRow(DeviceRecord record)
 
     public string SetTemperature { get; } = string.IsNullOrWhiteSpace(record.SetTemperature) ? "--" : $"{record.SetTemperature} ℃";
 
+    public string IndoorTemperatureValue { get; } = string.IsNullOrWhiteSpace(record.IndoorTemperature) ? "--" : record.IndoorTemperature.Trim();
+
+    public string SetTemperatureValue { get; } = string.IsNullOrWhiteSpace(record.SetTemperature) ? "--" : record.SetTemperature.Trim();
+
+    public double TemperatureWarningThreshold { get; } = double.IsFinite(temperatureWarningThreshold)
+        ? Math.Max(0, temperatureWarningThreshold)
+        : 2.0;
+
+    public double? TemperatureDifference { get; } = ParseTemperatureDifference(record.IndoorTemperature, record.SetTemperature);
+
+    public bool IsTemperatureWarning => TemperatureDifference is double difference && difference > TemperatureWarningThreshold;
+
+    public Brush? CommunicationForeground { get; } = record.CommunicationStatusText == "离线"
+        ? CreateBrush(offlineStatusColor, Color.FromArgb(255, 128, 128, 128))
+        : null;
+
+    public Brush? TemperatureForeground => IsTemperatureWarning
+        ? CreateBrush(temperatureWarningColor, Color.FromArgb(255, 217, 119, 6))
+        : null;
+
     public string Indicator { get; } = string.IsNullOrWhiteSpace(record.Indicator) ? "--" : record.Indicator;
 
     public string Note { get; } = string.IsNullOrWhiteSpace(record.Note) ? "--" : record.Note;
@@ -87,4 +114,38 @@ public sealed class DataDeviceRow(DeviceRecord record)
     public string RawTags { get; } = string.Join(", ", record.TagList);
 
     public bool HasRealtime => record.Realtime is not null;
+
+    private static double? ParseTemperatureDifference(string? indoor, string? setTemperature)
+    {
+        if (!double.TryParse(indoor, NumberStyles.Float, CultureInfo.InvariantCulture, out var indoorValue) ||
+            !double.TryParse(setTemperature, NumberStyles.Float, CultureInfo.InvariantCulture, out var setValue))
+        {
+            return null;
+        }
+
+        return Math.Abs(indoorValue - setValue);
+    }
+
+    private static SolidColorBrush CreateBrush(string? value, Color fallback)
+    {
+        var candidate = value?.Trim();
+        if (candidate is null || (candidate.Length != 7 && candidate.Length != 9) || candidate[0] != '#')
+        {
+            return new SolidColorBrush(fallback);
+        }
+
+        try
+        {
+            var offset = candidate.Length == 9 ? 1 : 0;
+            var alpha = candidate.Length == 9 ? Convert.ToByte(candidate.Substring(1, 2), 16) : (byte)255;
+            var red = Convert.ToByte(candidate.Substring(1 + offset, 2), 16);
+            var green = Convert.ToByte(candidate.Substring(3 + offset, 2), 16);
+            var blue = Convert.ToByte(candidate.Substring(5 + offset, 2), 16);
+            return new SolidColorBrush(Color.FromArgb(alpha, red, green, blue));
+        }
+        catch (FormatException)
+        {
+            return new SolidColorBrush(fallback);
+        }
+    }
 }

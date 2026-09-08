@@ -5,12 +5,20 @@ using System.Text.RegularExpressions;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EmsScout.Application.Settings;
+using Windows.ApplicationModel;
+using Windows.ApplicationModel.DataTransfer;
 
 namespace EmsScout.Desktop.ViewModels;
 
 public sealed partial class DiagnosticsViewModel(
     AppDataPathService pathService) : ObservableObject
 {
+    private const string RepositoryUrlValue = "https://github.com/osGex0o0II/ems-scout";
+
+    public const string RepositoryOwner = "osGex0o0II";
+
+    public string RepositoryUrl => RepositoryUrlValue;
+
     private const int PreviewMaxLines = 160;
     private static readonly Regex NativeExportFileNamePattern =
         new(@"^数据管理筛选结果_\d{8}_\d{6}\.xlsx$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -44,6 +52,8 @@ public sealed partial class DiagnosticsViewModel(
 
     public string ExportDirectory => pathService.ExportDirectory;
 
+    public string AuthorText => $"{RepositoryOwner} · Codex";
+
     public void Load()
     {
         Refresh();
@@ -59,16 +69,60 @@ public sealed partial class DiagnosticsViewModel(
         RecentExports.Clear();
 
         var assembly = Assembly.GetExecutingAssembly();
-        var appVersion = assembly.GetName().Version?.ToString() ?? "unknown";
+        var appVersion = GetApplicationVersion(assembly);
         var buildTime = TryGetBuildTime(assembly);
 
-        AppRows.Add(new DiagnosticInfoRow("软件", "EMS 空调控制台", "空调设备采集与数据管理"));
-        AppRows.Add(new DiagnosticInfoRow("版本", appVersion, "当前程序集版本"));
-        AppRows.Add(new DiagnosticInfoRow("作者", "EMS Scout Team", "项目维护团队"));
+        AppRows.Add(new DiagnosticInfoRow("版本", appVersion, "当前 MSIX 包版本"));
+        AppRows.Add(new DiagnosticInfoRow("作者", AuthorText, "项目作者与 AI 协作助手"));
         AppRows.Add(new DiagnosticInfoRow("构建时间", buildTime, "当前运行文件时间"));
         AppRows.Add(new DiagnosticInfoRow("运行环境", $".NET {Environment.Version}", "WinUI 3 / Windows App SDK"));
 
         StatusText = "软件信息已加载";
+    }
+
+    [RelayCommand]
+    private void OpenRepository()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = RepositoryUrl,
+                UseShellExecute = true,
+            });
+            StatusText = "已打开 GitHub 仓库";
+        }
+        catch (Exception ex)
+        {
+            StatusText = "无法打开 GitHub 仓库：" + ex.Message;
+        }
+    }
+
+    [RelayCommand]
+    private void CopyRepository()
+    {
+        CopyToClipboard(RepositoryUrl, "仓库地址已复制");
+    }
+
+    [RelayCommand]
+    private void CopyDiagnostics()
+    {
+        var lines = AppRows.Select(row => $"{row.Label}: {row.Value}（{row.Detail}）").ToList();
+        lines.Add($"仓库: {RepositoryUrl}");
+        CopyToClipboard(string.Join(Environment.NewLine, lines), "诊断信息已复制");
+    }
+
+    private static string GetApplicationVersion(Assembly assembly)
+    {
+        try
+        {
+            var version = Package.Current.Id.Version;
+            return $"{version.Major}.{version.Minor}.{version.Build}.{version.Revision}";
+        }
+        catch (Exception)
+        {
+            return assembly.GetName().Version?.ToString() ?? "unknown";
+        }
     }
 
     private static string TryGetBuildTime(Assembly assembly)
@@ -262,5 +316,20 @@ public sealed partial class DiagnosticsViewModel(
             ArgumentList = { "/select,", path },
             UseShellExecute = true,
         });
+    }
+
+    private void CopyToClipboard(string text, string status)
+    {
+        try
+        {
+            var package = new DataPackage();
+            package.SetText(text);
+            Clipboard.SetContent(package);
+            StatusText = status;
+        }
+        catch (Exception ex)
+        {
+            StatusText = "复制失败：" + ex.Message;
+        }
     }
 }

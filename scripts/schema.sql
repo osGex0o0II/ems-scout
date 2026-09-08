@@ -1,18 +1,17 @@
 -- EMS schema.sql — 数据库建表语句
 -- AC Energy Management - SQLite schema
 
-DROP TABLE IF EXISTS cards;
-DROP TABLE IF EXISTS pages;
-DROP TABLE IF EXISTS sub_areas;
-DROP TABLE IF EXISTS buildings;
+-- This file is an additive initializer. Production imports use idempotent migrations;
+-- never execute destructive DROP statements against the working database.
 
-CREATE TABLE buildings (
+CREATE TABLE IF NOT EXISTS buildings (
     building TEXT PRIMARY KEY,
     sub_area_count INT,
-    menu_clicked TEXT
+    menu_clicked TEXT,
+    updated_at TEXT
 );
 
-CREATE TABLE sub_areas (
+CREATE TABLE IF NOT EXISTS sub_areas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     building TEXT NOT NULL,
     sub_idx INT,
@@ -22,10 +21,10 @@ CREATE TABLE sub_areas (
     y INT,
     FOREIGN KEY(building) REFERENCES buildings(building)
 );
-CREATE INDEX idx_sa_building ON sub_areas(building);
-CREATE INDEX idx_sa_floor ON sub_areas(building, floor);
+CREATE INDEX IF NOT EXISTS idx_sa_building ON sub_areas(building);
+CREATE INDEX IF NOT EXISTS idx_sa_floor ON sub_areas(building, floor);
 
-CREATE TABLE pages (
+CREATE TABLE IF NOT EXISTS pages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     sub_area_id INT NOT NULL,
     page_name TEXT,
@@ -41,9 +40,9 @@ CREATE TABLE pages (
     err TEXT,
     FOREIGN KEY(sub_area_id) REFERENCES sub_areas(id)
 );
-CREATE INDEX idx_pg_sa ON pages(sub_area_id);
+CREATE INDEX IF NOT EXISTS idx_pg_sa ON pages(sub_area_id);
 
-CREATE TABLE cards (
+CREATE TABLE IF NOT EXISTS cards (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     page_id INT NOT NULL,
     name TEXT,
@@ -56,9 +55,9 @@ CREATE TABLE cards (
     comm TEXT,
     FOREIGN KEY(page_id) REFERENCES pages(id)
 );
-CREATE INDEX idx_cd_pg ON cards(page_id);
-CREATE INDEX idx_cd_sw ON cards(switch);
-CREATE INDEX idx_cd_name ON cards(name);
+CREATE INDEX IF NOT EXISTS idx_cd_pg ON cards(page_id);
+CREATE INDEX IF NOT EXISTS idx_cd_sw ON cards(switch);
+CREATE INDEX IF NOT EXISTS idx_cd_name ON cards(name);
 
 -- Native custom group tables. These store manual classification choices across imports.
 CREATE TABLE IF NOT EXISTS monitor_groups (

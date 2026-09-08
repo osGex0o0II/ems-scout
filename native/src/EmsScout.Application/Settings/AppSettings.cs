@@ -26,6 +26,26 @@ public sealed class AppSettings
 
     public bool ReduceMotion { get; set; }
 
+    public string PageTransitionStyle { get; set; } = "fade";
+
+    public bool SaveWindowPlacement { get; set; } = true;
+
+    public bool StartMinimized { get; set; }
+
+    public bool LaunchAtLogin { get; set; }
+
+    public bool ShowInSendTo { get; set; }
+
+    public bool CloseToTray { get; set; } = true;
+
+    public WindowPlacementState? WindowPlacement { get; set; }
+
+    public double TemperatureWarningThreshold { get; set; } = 2.0;
+
+    public string OfflineStatusColor { get; set; } = "#808080";
+
+    public string TemperatureWarningColor { get; set; } = "#D97706";
+
     public AppSettings Clone() => new()
     {
         EmsUrl = EmsUrl,
@@ -40,5 +60,34 @@ public sealed class AppSettings
         Theme = Theme,
         CompactDataTable = CompactDataTable,
         ReduceMotion = ReduceMotion,
+        PageTransitionStyle = PageTransitionStyle,
+        SaveWindowPlacement = SaveWindowPlacement,
+        StartMinimized = StartMinimized,
+        LaunchAtLogin = LaunchAtLogin,
+        ShowInSendTo = ShowInSendTo,
+        CloseToTray = CloseToTray,
+        WindowPlacement = WindowPlacement?.Clone(),
+        TemperatureWarningThreshold = TemperatureWarningThreshold,
+        OfflineStatusColor = OfflineStatusColor,
+        TemperatureWarningColor = TemperatureWarningColor,
+    };
+}
+
+public sealed class WindowPlacementState
+{
+    public int Left { get; set; }
+
+    public int Top { get; set; }
+
+    public int Width { get; set; }
+
+    public int Height { get; set; }
+
+    public WindowPlacementState Clone() => new()
+    {
+        Left = Left,
+        Top = Top,
+        Width = Width,
+        Height = Height,
     };
 }

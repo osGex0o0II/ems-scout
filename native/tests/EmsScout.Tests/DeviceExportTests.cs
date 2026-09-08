@@ -23,7 +23,7 @@ public sealed class DeviceExportTests
         Assert.Equal(current.Total, export.RowCount);
         Assert.Equal(current.Facets.Total, export.Facets.Total);
         Assert.Equal(export.Facets.Total, export.Facets.PublicArea + export.Facets.PrivateArea);
-        Assert.Equal(2, export.Facets.VirtualManaged);
+        Assert.Equal(0, export.Facets.VirtualManaged);
         UserDeviceWorkbookAssert.AssertShape(export);
         Assert.Equal(["全部设备", "1号楼", "2号楼", "3号楼", "4号楼", "5号楼", "6号楼"], export.Sheets);
     }
