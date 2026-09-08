@@ -37,7 +37,7 @@ public sealed class RealtimeLatestJsonSourceTests
         Assert.Equal(result.Rows.Count(row => row.RealtimeLocked), result.Facets.RealtimeLocked);
         Assert.Equal(result.Total, result.Facets.RealtimePointsComplete + result.Facets.RealtimePointsIncomplete);
         Assert.Equal(result.Rows.Count(row => row.Realtime?.IsInvalid == true), result.Facets.RealtimeInvalid);
-        Assert.Equal(2, result.Facets.VirtualManaged);
+        Assert.Equal(0, result.Facets.VirtualManaged);
         Assert.True(result.Facets.ManualOverrides > 0);
         Assert.Equal("已匹配", result.Rows[0].RealtimeMatchLabel);
         Assert.NotNull(result.Rows[0].Realtime);
@@ -51,7 +51,7 @@ public sealed class RealtimeLatestJsonSourceTests
             Path.Combine(root, "out", "ac.db"),
             CurrentRealtimeSource());
 
-        var virtualDevice = await repository.SearchAsync(new(SearchText: "2F-HTDTT-KT-2", Limit: 5));
+        var virtualDevice = await repository.SearchAsync(new(SearchText: "2F-HTDTT-KT-2", RealtimeMatch: "virtual", Limit: 5));
         var manualDevices = await repository.SearchAsync(new(RealtimeMatch: "manual", Limit: 5));
 
         Assert.Equal(1, virtualDevice.Total);
@@ -100,7 +100,7 @@ public sealed class RealtimeLatestJsonSourceTests
         var missingPoints = await repository.SearchAsync(new(RealtimePoints: "missing", Limit: 1));
         Assert.Equal(all.Total, completePoints.Total + incompletePoints.Total);
         Assert.True(missingPoints.Total <= incompletePoints.Total);
-        Assert.Equal(1, (await repository.SearchAsync(new(SearchText: "2F-HTDTT-KT-2", Limit: 1))).Total);
+        Assert.Equal(1, (await repository.SearchAsync(new(SearchText: "2F-HTDTT-KT-2", RealtimeMatch: "virtual", Limit: 1))).Total);
     }
 
     private static RealtimeLatestJsonSource CurrentRealtimeSource()

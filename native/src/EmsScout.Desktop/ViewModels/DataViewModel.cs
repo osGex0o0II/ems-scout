@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
+using EmsScout.Application.Collection;
 using EmsScout.Application.Devices;
 using EmsScout.Application.Groups;
 using EmsScout.Application.Settings;
@@ -15,6 +16,7 @@ public sealed class DataViewModel(
     IDeviceReadRepository repository,
     IDeviceExportService exportService,
     IAreaGroupRepository areaGroupRepository,
+    ICollectionRunRepository collectionRunRepository,
     AppDataPathService pathService,
     AppUiSettingsService uiSettingsService) : ObservableObject
 {
@@ -29,6 +31,8 @@ public sealed class DataViewModel(
     private string _lastExportPath = string.Empty;
     private string _lastExportFilePath = string.Empty;
     private bool _isLoading;
+    private long? _latestDataSourceRunId;
+    private string _currentDataSourceTimestamp = "暂无采集时间";
     private Thickness _tableRowPadding = new(14, 8, 14, 8);
     private Thickness _tableHeaderPadding = new(14, 8, 14, 8);
     private int _currentPage = 1;
@@ -47,6 +51,7 @@ public sealed class DataViewModel(
     private DataFilterOption? _selectedAreaGroup;
     private string _deviceNameText = string.Empty;
     private bool _isInitializing;
+    private DataSourceOption? _selectedDataSource;
 
     public ObservableCollection<DataDeviceRow> Devices { get; } = [];
 
@@ -73,6 +78,16 @@ public sealed class DataViewModel(
     public ObservableCollection<DataFilterOption> AreaOptions { get; } = [];
 
     public ObservableCollection<DataFilterOption> AreaGroupOptions { get; } = [];
+
+    public ObservableCollection<DataSourceOption> DataSources { get; } = [];
+
+    public ObservableCollection<DataSourceOption> HistoricalDataSources => DataSources;
+
+    public string CurrentDataSourceTimestamp
+    {
+        get => _currentDataSourceTimestamp;
+        private set => SetProperty(ref _currentDataSourceTimestamp, value);
+    }
 
     public Thickness TableRowPadding
     {
@@ -122,7 +137,44 @@ public sealed class DataViewModel(
 
     public bool CanRunDataAction => !IsLoading;
 
-    public bool CanExport => !IsLoading && TotalRows > 0 && TotalRows <= ExportLimit;
+    public bool CanExport => IsLatestDataSource && !IsLoading && TotalRows > 0 && TotalRows <= ExportLimit;
+
+    public bool CanChangeDataSource => !IsLoading && DataSources.Count > 0;
+
+    public bool IsLatestDataSource => SelectedDataSource is null ||
+                                      SelectedDataSource.IsCurrent ||
+                                      (SelectedDataSource.RunId is not null &&
+                                       SelectedDataSource.RunId == _latestDataSourceRunId);
+
+    public double LatestBatchIndicatorOpacity => IsLatestDataSource ? 1 : 0.22;
+
+    public double HistoricalBatchIndicatorOpacity => IsLatestDataSource ? 0.08 : 1;
+
+    public string LatestBatchIndicatorToolTip => IsLatestDataSource
+        ? "当前数据"
+        : "历史数据，点击切换当前数据";
+
+    public string LatestBatchIndicatorAutomationName => IsLatestDataSource
+        ? "当前数据"
+        : "历史数据，切换当前数据";
+
+    public DataSourceOption? SelectedDataSource
+    {
+        get => _selectedDataSource;
+        set
+        {
+            if (SetProperty(ref _selectedDataSource, value))
+            {
+                OnPropertyChanged(nameof(CanChangeDataSource));
+                OnPropertyChanged(nameof(IsLatestDataSource));
+                OnPropertyChanged(nameof(LatestBatchIndicatorOpacity));
+                OnPropertyChanged(nameof(HistoricalBatchIndicatorOpacity));
+                OnPropertyChanged(nameof(LatestBatchIndicatorToolTip));
+                OnPropertyChanged(nameof(LatestBatchIndicatorAutomationName));
+                OnPropertyChanged(nameof(CanExport));
+            }
+        }
+    }
 
     public Visibility EmptyStateVisibility => !IsLoading && Devices.Count == 0
         ? Visibility.Visible
@@ -290,6 +342,7 @@ public sealed class DataViewModel(
         try
         {
             RefreshRecentExports();
+            await RefreshDataSourcesAsync(cancellationToken).ConfigureAwait(true);
             if (navigationRequest is not null)
             {
                 ApplyNavigationRequest(navigationRequest);
@@ -322,6 +375,11 @@ public sealed class DataViewModel(
         }
     }
 
+    public void ReportInitializationError(Exception exception)
+    {
+        SetDataError(exception);
+    }
+
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
         if (IsLoading || _isInitializing)
@@ -338,7 +396,7 @@ public sealed class DataViewModel(
             await LoadPageCoreAsync(cancellationToken).ConfigureAwait(true);
             StatusText = ResultStatusText("已刷新当前 SQLite 数据");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Devices.Clear();
             SelectedDevice = null;
@@ -349,6 +407,76 @@ public sealed class DataViewModel(
             OnPropertyChanged(nameof(EmptyStateVisibility));
             OnPropertyChanged(nameof(LoadingStateVisibility));
             RefreshRecentExports();
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    public async Task SelectDataSourceAsync(
+        DataSourceOption? option,
+        CancellationToken cancellationToken = default)
+    {
+        if (option is null || IsLoading || _isInitializing)
+        {
+            return;
+        }
+
+        SelectedDataSource = option;
+        IsLoading = true;
+        StatusText = $"正在读取 {option.Label}";
+        try
+        {
+            await ReloadFilterOptionsAsync(cancellationToken).ConfigureAwait(true);
+            CurrentPage = 1;
+            await LoadPageCoreAsync(cancellationToken).ConfigureAwait(true);
+            StatusText = ResultStatusText($"已读取 {option.Label}");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            SetDataError(ex);
+        }
+        finally
+        {
+            IsLoading = false;
+        }
+    }
+
+    public async Task UseLatestDataSourceAsync(CancellationToken cancellationToken = default)
+    {
+        var latestOption = DataSources.FirstOrDefault();
+        if (IsLoading || _isInitializing || latestOption is null ||
+            SelectedDataSource?.RunId == latestOption.RunId)
+        {
+            return;
+        }
+
+        SelectedDataSource = latestOption;
+        await RefreshAsync(cancellationToken).ConfigureAwait(true);
+    }
+
+    public async Task RefreshLatestAsync(CancellationToken cancellationToken = default)
+    {
+        if (IsLoading || _isInitializing)
+        {
+            return;
+        }
+
+        IsLoading = true;
+        StatusText = "正在刷新当前数据";
+        try
+        {
+            await RefreshDataSourcesAsync(cancellationToken).ConfigureAwait(true);
+            SelectedDataSource = DataSources.FirstOrDefault();
+            await ReloadFilterOptionsAsync(cancellationToken).ConfigureAwait(true);
+            CurrentPage = 1;
+            await LoadPageCoreAsync(cancellationToken).ConfigureAwait(true);
+            StatusText = ResultStatusText("已刷新当前数据");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            SetDataError(ex);
         }
         finally
         {
@@ -415,7 +543,7 @@ public sealed class DataViewModel(
     private void ApplyVisualSettings()
     {
         var compact = uiSettingsService.CompactDataTable;
-        TableRowPadding = compact ? new Thickness(14, 6, 14, 6) : new Thickness(14, 10, 14, 10);
+        TableRowPadding = compact ? new Thickness(14, 14, 14, 14) : new Thickness(14, 16, 14, 16);
         TableHeaderPadding = compact ? new Thickness(14, 8, 14, 8) : new Thickness(14, 12, 14, 12);
     }
 
@@ -435,21 +563,26 @@ public sealed class DataViewModel(
             await LoadPageCoreAsync(cancellationToken).ConfigureAwait(true);
             StatusText = ResultStatusText("已读取当前 SQLite 设备数据");
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            Devices.Clear();
-            SelectedDevice = null;
-            TotalRows = 0;
-            ResultSummary = "--";
-            PageSummary = "--";
-            StatusText = ex.Message;
-            OnPropertyChanged(nameof(EmptyStateVisibility));
-            OnPropertyChanged(nameof(LoadingStateVisibility));
+            SetDataError(ex);
         }
         finally
         {
             IsLoading = false;
         }
+    }
+
+    private void SetDataError(Exception exception)
+    {
+        Devices.Clear();
+        SelectedDevice = null;
+        TotalRows = 0;
+        ResultSummary = "--";
+        PageSummary = "--";
+        StatusText = exception.Message;
+        OnPropertyChanged(nameof(EmptyStateVisibility));
+        OnPropertyChanged(nameof(LoadingStateVisibility));
     }
 
     public async Task ApplyBuildingSelectionAsync(CancellationToken cancellationToken = default)
@@ -509,7 +642,7 @@ public sealed class DataViewModel(
             OnPropertyChanged(nameof(EmptyStateVisibility));
             OnPropertyChanged(nameof(LoadingStateVisibility));
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             Devices.Clear();
             SelectedDevice = null;
@@ -534,7 +667,11 @@ public sealed class DataViewModel(
         Devices.Clear();
         foreach (var record in result.Rows)
         {
-            Devices.Add(new DataDeviceRow(record));
+            Devices.Add(new DataDeviceRow(
+                record,
+                uiSettingsService.TemperatureWarningThreshold,
+                uiSettingsService.OfflineStatusColor,
+                uiSettingsService.TemperatureWarningColor));
         }
 
         SelectedDevice = Devices.FirstOrDefault();
@@ -611,9 +748,9 @@ public sealed class DataViewModel(
             LastExportPath = $"上次导出：{result.FileName}；位置：{Path.GetDirectoryName(result.Path)}";
             SetLastExportFilePath(result.Path);
             RefreshRecentExports();
-            StatusText = $"已导出 {result.RowCount:N0} 行当前筛选 Excel：{result.FileName}；可打开导出位置查看";
+            StatusText = $"已导出 {result.RowCount:N0} 行当前筛选 Excel：{result.FileName}";
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException)
         {
             StatusText = ex.Message;
         }
@@ -670,32 +807,37 @@ public sealed class DataViewModel(
     private void RefreshRecentExports()
     {
         RecentExports.Clear();
-        if (!uiSettingsService.TrackRecentExports)
+        try
+        {
+            if (!uiSettingsService.TrackRecentExports)
+            {
+                return;
+            }
+
+            var exportDirectory = pathService.ExportDirectory;
+            if (!Directory.Exists(exportDirectory))
+            {
+                return;
+            }
+
+            foreach (var file in new DirectoryInfo(exportDirectory)
+                         .EnumerateFiles("数据管理筛选结果_*.xlsx", SearchOption.TopDirectoryOnly)
+                         .Where(file => NativeExportFileNamePattern.IsMatch(file.Name))
+                         .OrderByDescending(file => file.LastWriteTimeUtc)
+                         .Take(8))
+            {
+                RecentExports.Add(new RecentExportRow(file, exportDirectory));
+            }
+        }
+        catch (Exception)
+        {
+            // Recent exports are optional; an invalid legacy path must not block data loading.
+        }
+        finally
         {
             OnPropertyChanged(nameof(HasRecentExports));
             OnPropertyChanged(nameof(RecentExportsEmptyVisibility));
-            return;
         }
-
-        var exportDirectory = pathService.ExportDirectory;
-        if (!Directory.Exists(exportDirectory))
-        {
-            OnPropertyChanged(nameof(HasRecentExports));
-            OnPropertyChanged(nameof(RecentExportsEmptyVisibility));
-            return;
-        }
-
-        foreach (var file in new DirectoryInfo(exportDirectory)
-                     .EnumerateFiles("数据管理筛选结果_*.xlsx", SearchOption.TopDirectoryOnly)
-                     .Where(file => NativeExportFileNamePattern.IsMatch(file.Name))
-                     .OrderByDescending(file => file.LastWriteTimeUtc)
-                     .Take(8))
-        {
-            RecentExports.Add(new RecentExportRow(file, exportDirectory));
-        }
-
-        OnPropertyChanged(nameof(HasRecentExports));
-        OnPropertyChanged(nameof(RecentExportsEmptyVisibility));
     }
 
     private void SetLastExportFilePath(string path)
@@ -726,7 +868,28 @@ public sealed class DataViewModel(
             MonitorGroupIds: EmptyToNull(SelectedAreaGroup?.Value),
             Limit: limit,
             Offset: offset,
-            RunId: null);
+            RunId: SelectedDataSource?.RunId);
+    }
+
+    private async Task RefreshDataSourcesAsync(CancellationToken cancellationToken)
+    {
+        var selectedRunId = SelectedDataSource?.RunId;
+            var runs = await collectionRunRepository.ListAsync(500, cancellationToken).ConfigureAwait(true);
+            var catalog = CollectionDataSourceCatalog.Build(runs);
+            DataSources.Clear();
+        DataSources.Add(DataSourceOption.Current(catalog.CurrentRun));
+        foreach (var run in catalog.HistoricalRuns)
+        {
+            DataSources.Add(new DataSourceOption(run));
+        }
+
+        var latestOption = DataSources.FirstOrDefault();
+        _latestDataSourceRunId = latestOption?.RunId;
+        CurrentDataSourceTimestamp = latestOption?.Label ?? "暂无采集时间";
+        SelectedDataSource = selectedRunId is null
+            ? latestOption
+            : DataSources.FirstOrDefault(option => option.RunId == selectedRunId) ?? latestOption;
+        OnPropertyChanged(nameof(CanChangeDataSource));
     }
 
     private void ApplyNavigationRequest(DataNavigationRequest request)

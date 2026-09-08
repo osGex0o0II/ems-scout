@@ -3,6 +3,7 @@ using EmsScout.Application.Collection;
 using EmsScout.Application.Devices;
 using EmsScout.Application.Groups;
 using EmsScout.Application.Quality;
+using EmsScout.Domain;
 
 namespace EmsScout.Tests;
 
@@ -14,10 +15,6 @@ public sealed class DashboardOverviewServiceTests
         var repository = new CapturingDeviceRepository();
         var service = new DashboardOverviewService(
             repository,
-            new EmptyQualityAuditService(),
-            new EmptyRealtimeQualityAuditService(),
-            new FailingRealtimeReconciliationService(),
-            new EmptyCollectionRunRepository(),
             new FailingAreaGroupRepository());
 
         await service.LoadAsync(runId: 42);
@@ -26,14 +23,76 @@ public sealed class DashboardOverviewServiceTests
         Assert.Equal(42, repository.LastQuery!.RunId);
     }
 
-    private sealed class CapturingDeviceRepository : IDeviceReadRepository
+    [Fact]
+    public async Task ExcludesVirtualRealtimeRowsFromInventorySummary()
     {
+        var regular = TestDevice(1, isVirtual: false);
+        var virtualRow = TestDevice(-10, isVirtual: true);
+        var repository = new CapturingDeviceRepository(
+            new DeviceListResult(
+                2,
+                [regular, virtualRow],
+                DeviceFacets.From([regular, virtualRow])));
+        var service = new DashboardOverviewService(
+            repository,
+            new FailingAreaGroupRepository());
+
+        var overview = await service.LoadAsync();
+
+        Assert.Equal(1, overview.Summary.Total);
+        Assert.Equal("1", overview.Metrics.Single(metric => metric.Label == "总设备数").Value);
+        Assert.DoesNotContain("实时纳管", overview.Metrics.Single(metric => metric.Label == "总设备数").Detail);
+    }
+
+    [Fact]
+    public async Task LabelsHistoricalInventoryMetricAsHistorical()
+    {
+        var repository = new CapturingDeviceRepository();
+        var service = new DashboardOverviewService(
+            repository,
+            new FailingAreaGroupRepository());
+
+        var overview = await service.LoadAsync(runId: 42);
+
+        var totalMetric = overview.Metrics.Single(metric => metric.Label == "总设备数");
+        Assert.Contains("历史批次", totalMetric.Detail);
+        Assert.DoesNotContain("当前完整采集批次", totalMetric.Detail);
+    }
+
+    private static DeviceRecord TestDevice(long id, bool isVirtual)
+    {
+        return new DeviceRecord(
+            Id: id,
+            Building: "1号",
+            Floor: 1,
+            FloorLabel: "1F",
+            SubArea: "1F A",
+            X: null,
+            Y: null,
+            PageName: "1",
+            Name: isVirtual ? "GQ-VIRTUAL-KT" : "1-0101-KT",
+            Layout: "grid",
+            SwitchState: "OFF",
+            Mode: "制冷",
+            IndoorTemperature: "26",
+            SetTemperature: "25",
+            Fan: "中",
+            Indicator: string.Empty,
+            CommunicationText: "关机",
+            CommunicationState: DeviceCommunicationState.Stopped,
+            IsVirtual: isVirtual);
+    }
+
+    private sealed class CapturingDeviceRepository(DeviceListResult? result = null) : IDeviceReadRepository
+    {
+        private readonly DeviceListResult _result = result ?? new DeviceListResult(0, [], DeviceFacets.From([]));
+
         public DeviceQuery? LastQuery { get; private set; }
 
         public Task<DeviceListResult> SearchAsync(DeviceQuery query, CancellationToken cancellationToken = default)
         {
             LastQuery = query;
-            return Task.FromResult(new DeviceListResult(0, [], DeviceFacets.From([])));
+            return Task.FromResult(_result);
         }
 
         public Task<DeviceFilterOptions> LoadFilterOptionsAsync(CancellationToken cancellationToken = default) =>

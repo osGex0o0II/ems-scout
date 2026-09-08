@@ -56,15 +56,18 @@
 
         <Grid Grid.Row="2" ColumnSpacing="14">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="360" MinWidth="280" />
-                <ColumnDefinition Width="*" MinWidth="620" />
+                <ColumnDefinition Width="0.85*" MinWidth="260" />
+                <ColumnDefinition Width="1.15*" MinWidth="0" />
             </Grid.ColumnDefinitions>
 
-            <Border Style="{StaticResource WorkbenchCardStyle}" Padding="0">
+            <Border
+                VerticalAlignment="Top"
+                Style="{StaticResource WorkbenchCardStyle}"
+                Padding="0">
                 <Grid RowSpacing="0">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <StackPanel Padding="16,14,16,8" Spacing="2">
                         <TextBlock Style="{StaticResource SectionTitleStyle}" Text="我的区域组" />
@@ -121,7 +124,11 @@
                 </Grid>
             </Border>
 
-            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+            <ScrollViewer
+                Grid.Column="1"
+                HorizontalScrollBarVisibility="Disabled"
+                HorizontalScrollMode="Disabled"
+                VerticalScrollBarVisibility="Auto">
                 <StackPanel Spacing="12">
                     <Border Style="{StaticResource WorkbenchCardStyle}">
                         <StackPanel Spacing="12">
@@ -153,10 +160,9 @@
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
                                 <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
@@ -184,49 +190,49 @@
                                         <TextBlock Foreground="{ThemeResource SystemFillColorSuccessBrush}" FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedGroup.RunningCount, Mode=OneWay, FallbackValue=0}" />
                                     </StackPanel>
                                 </Border>
-                                <Border Grid.Column="4" Padding="10" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
+                                <Border Grid.Row="1" Padding="10" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
                                     <StackPanel Spacing="2">
                                         <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="关机" />
                                         <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedGroup.StoppedCount, Mode=OneWay, FallbackValue=0}" />
                                     </StackPanel>
                                 </Border>
-                                <Border Grid.Column="5" Padding="10" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
+                                <Border Grid.Row="1" Grid.Column="1" Padding="10" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
                                     <StackPanel Spacing="2">
                                         <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="已添加" />
                                         <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedGroup.ItemCountText, Mode=OneWay, FallbackValue='--'}" />
                                     </StackPanel>
                                 </Border>
-                                <Border Grid.Row="1" Padding="10" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
+                                <Border Grid.Row="1" Grid.Column="2" Padding="10" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
                                     <StackPanel Spacing="2">
                                         <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="公区" />
                                         <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedGroup.PublicCount, Mode=OneWay, FallbackValue=0}" />
                                     </StackPanel>
                                 </Border>
-                                <Border Grid.Row="1" Grid.Column="1" Padding="10" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
+                                <Border Grid.Row="1" Grid.Column="3" Padding="10" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
                                     <StackPanel Spacing="2">
                                         <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="非公区" />
                                         <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedGroup.PrivateCount, Mode=OneWay, FallbackValue=0}" />
                                     </StackPanel>
                                 </Border>
-                                <Border Grid.Row="1" Grid.Column="2" Padding="10" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
+                                <Border Grid.Row="2" Padding="10" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
                                     <StackPanel Spacing="2">
                                         <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="公区开机" />
                                         <TextBlock Foreground="{ThemeResource SystemFillColorSuccessBrush}" FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedGroup.PublicRunningCount, Mode=OneWay, FallbackValue=0}" />
                                     </StackPanel>
                                 </Border>
-                                <Border Grid.Row="1" Grid.Column="3" Padding="10" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
+                                <Border Grid.Row="2" Grid.Column="1" Padding="10" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
                                     <StackPanel Spacing="2">
                                         <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="公区关机" />
                                         <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedGroup.PublicStoppedCount, Mode=OneWay, FallbackValue=0}" />
                                     </StackPanel>
                                 </Border>
-                                <Border Grid.Row="1" Grid.Column="4" Padding="10" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
+                                <Border Grid.Row="2" Grid.Column="2" Padding="10" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
                                     <StackPanel Spacing="2">
                                         <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="位置" />
                                         <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedGroup.CoveredAreas, Mode=OneWay, FallbackValue=0}" />
                                     </StackPanel>
                                 </Border>
-                                <Border Grid.Row="1" Grid.Column="5" Padding="10" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
+                                <Border Grid.Row="2" Grid.Column="3" Padding="10" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
                                     <StackPanel Spacing="2">
                                         <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="未知" />
                                         <TextBlock Foreground="{ThemeResource SystemFillColorCautionBrush}" FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedGroup.UnknownCount, Mode=OneWay, FallbackValue=0}" />

@@ -77,6 +77,9 @@ public sealed class SqliteRealtimeReconciliationService(
     {
         var connection = new SqliteConnection($"Data Source={DatabasePathResolver()};Mode=ReadOnly;Cache=Shared");
         connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA busy_timeout = 10000; PRAGMA foreign_keys = ON;";
+        command.ExecuteNonQuery();
         return connection;
     }
 

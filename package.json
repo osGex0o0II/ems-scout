@@ -12,6 +12,12 @@
     "validate": "node scripts/validate-enum.js",
     "quality": "node scripts/quality-report.js",
     "native:run": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/run-native.ps1",
+    "native:shortcut": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-native-shortcut.ps1",
+    "native:package": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/native-package.ps1",
+    "native:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/native-install.ps1",
+    "native:update": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/native-update.ps1",
+    "native:uninstall": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/native-uninstall.ps1",
+    "native:lifecycle-test": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tests/native-install-lifecycle.tests.ps1",
     "native:build": "dotnet build native/EmsScout.Native.slnx -c Debug --no-restore /p:UseSharedCompilation=false",
     "native:test": "dotnet test native/tests/EmsScout.Tests/EmsScout.Tests.csproj -c Debug --no-restore /p:UseSharedCompilation=false",
     "self-test": "node scripts/self-test.js"

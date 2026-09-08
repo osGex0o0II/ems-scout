@@ -1,6 +1,7 @@
 using System.Collections.Specialized;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Data;
@@ -29,10 +30,17 @@ public sealed partial class TasksPage : Page
         AttachLogs();
         if (!_loaded)
         {
-            await ViewModel.InitializeAsync();
-            if (ViewModel.CheckEnvironmentCommand.CanExecute(null))
+            try
             {
-                await ViewModel.CheckEnvironmentCommand.ExecuteAsync(null);
+                await ViewModel.InitializeAsync();
+                if (ViewModel.CheckEnvironmentCommand.CanExecute(null))
+                {
+                    await ViewModel.CheckEnvironmentCommand.ExecuteAsync(null);
+                }
+            }
+            catch (Exception ex)
+            {
+                ViewModel.ReportInitializationError(ex);
             }
             _loaded = true;
         }
@@ -130,7 +138,28 @@ public sealed partial class TasksPage : Page
             return;
         }
 
-        LogsList.ScrollIntoView(ViewModel.FilteredLogs[^1]);
+        if (!IsLoaded || XamlRoot is null)
+        {
+            return;
+        }
+
+        var latest = ViewModel.FilteredLogs[^1];
+        DispatcherQueue.GetForCurrentThread()?.TryEnqueue(() =>
+        {
+            if (!IsLoaded || XamlRoot is null)
+            {
+                return;
+            }
+
+            try
+            {
+                LogsList.ScrollIntoView(latest);
+            }
+            catch (Exception)
+            {
+                // The item can be removed while navigation or layout is completing.
+            }
+        });
     }
 
     private void AttachLogs()

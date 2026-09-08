@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EmsScout.Application.Settings;
+using Windows.UI;
 
 namespace EmsScout.Desktop.ViewModels;
 
@@ -45,9 +46,61 @@ public sealed partial class SettingsViewModel(AppSettingsService settingsService
     public partial bool ReduceMotion { get; set; }
 
     [ObservableProperty]
+    public partial int PageTransitionStyleIndex { get; set; }
+
+    [ObservableProperty]
+    public partial bool SaveWindowPlacement { get; set; }
+
+    [ObservableProperty]
+    public partial bool StartMinimized { get; set; }
+
+    [ObservableProperty]
+    public partial bool LaunchAtLogin { get; set; }
+
+    [ObservableProperty]
+    public partial bool ShowInSendTo { get; set; }
+
+    [ObservableProperty]
+    public partial bool CloseToTray { get; set; }
+
+    [ObservableProperty]
+    public partial double TemperatureWarningThreshold { get; set; } = 2.0;
+
+    [ObservableProperty]
+    public partial Color OfflineStatusColor { get; set; } = Color.FromArgb(255, 128, 128, 128);
+
+    [ObservableProperty]
+    public partial Color TemperatureWarningColor { get; set; } = Color.FromArgb(255, 217, 119, 6);
+
+    public IReadOnlyList<ColorPresetOption> OfflineStatusColorOptions { get; } =
+    [
+        new("浅灰", Color.FromArgb(255, 154, 160, 166)),
+        new("中灰", Color.FromArgb(255, 128, 128, 128)),
+        new("深灰", Color.FromArgb(255, 95, 99, 104)),
+    ];
+
+    public IReadOnlyList<ColorPresetOption> TemperatureWarningColorOptions { get; } =
+    [
+        new("浅黄", Color.FromArgb(255, 233, 196, 106)),
+        new("琥珀", Color.FromArgb(255, 217, 119, 6)),
+        new("深黄", Color.FromArgb(255, 180, 83, 9)),
+    ];
+
+    [ObservableProperty]
+    public partial ColorPresetOption? SelectedOfflineStatusColor { get; set; }
+
+    [ObservableProperty]
+    public partial ColorPresetOption? SelectedTemperatureWarningColor { get; set; }
+
+    [ObservableProperty]
     public partial string StatusText { get; private set; } = "设置尚未加载";
 
     public string SettingsPath => settingsService.SettingsPath;
+
+    public void SetStatus(string text)
+    {
+        StatusText = text;
+    }
 
     public void Load()
     {
@@ -103,6 +156,20 @@ public sealed partial class SettingsViewModel(AppSettingsService settingsService
         };
         CompactDataTable = settings.CompactDataTable;
         ReduceMotion = settings.ReduceMotion;
+        PageTransitionStyleIndex = settings.PageTransitionStyle.ToLowerInvariant() switch
+        {
+            "none" => 0,
+            "slide" => 2,
+            _ => 1,
+        };
+        SaveWindowPlacement = settings.SaveWindowPlacement;
+        StartMinimized = settings.StartMinimized;
+        LaunchAtLogin = settings.LaunchAtLogin;
+        ShowInSendTo = settings.ShowInSendTo;
+        CloseToTray = settings.CloseToTray;
+        TemperatureWarningThreshold = settings.TemperatureWarningThreshold;
+        OfflineStatusColor = ParseColor(settings.OfflineStatusColor, Color.FromArgb(255, 128, 128, 128));
+        TemperatureWarningColor = ParseColor(settings.TemperatureWarningColor, Color.FromArgb(255, 217, 119, 6));
     }
 
     private AppSettings ToSettings()
@@ -131,7 +198,81 @@ public sealed partial class SettingsViewModel(AppSettingsService settingsService
             },
             CompactDataTable = CompactDataTable,
             ReduceMotion = ReduceMotion,
+            PageTransitionStyle = PageTransitionStyleIndex switch
+            {
+                0 => "none",
+                2 => "slide",
+                _ => "fade",
+            },
+            SaveWindowPlacement = SaveWindowPlacement,
+            StartMinimized = StartMinimized,
+            LaunchAtLogin = LaunchAtLogin,
+            ShowInSendTo = ShowInSendTo,
+            CloseToTray = CloseToTray,
+            TemperatureWarningThreshold = TemperatureWarningThreshold,
+            OfflineStatusColor = ToHex(OfflineStatusColor),
+            TemperatureWarningColor = ToHex(TemperatureWarningColor),
         };
+    }
+
+    private static Color ParseColor(string? value, Color fallback)
+    {
+        var candidate = value?.Trim();
+        if (candidate is null || (candidate.Length != 7 && candidate.Length != 9) || candidate[0] != '#')
+        {
+            return fallback;
+        }
+
+        try
+        {
+            var offset = candidate.Length == 9 ? 1 : 0;
+            var alpha = candidate.Length == 9 ? Convert.ToByte(candidate.Substring(1, 2), 16) : (byte)255;
+            var red = Convert.ToByte(candidate.Substring(1 + offset, 2), 16);
+            var green = Convert.ToByte(candidate.Substring(3 + offset, 2), 16);
+            var blue = Convert.ToByte(candidate.Substring(5 + offset, 2), 16);
+            return Color.FromArgb(alpha, red, green, blue);
+        }
+        catch (FormatException)
+        {
+            return fallback;
+        }
+    }
+
+    private static string ToHex(Color color) =>
+        $"#{color.A:X2}{color.R:X2}{color.G:X2}{color.B:X2}";
+
+    partial void OnSelectedOfflineStatusColorChanged(ColorPresetOption? value)
+    {
+        if (value is not null && value.Color != OfflineStatusColor)
+        {
+            OfflineStatusColor = value.Color;
+        }
+    }
+
+    partial void OnSelectedTemperatureWarningColorChanged(ColorPresetOption? value)
+    {
+        if (value is not null && value.Color != TemperatureWarningColor)
+        {
+            TemperatureWarningColor = value.Color;
+        }
+    }
+
+    partial void OnOfflineStatusColorChanged(Color value)
+    {
+        SelectedOfflineStatusColor = FindPreset(OfflineStatusColorOptions, value, 1);
+    }
+
+    partial void OnTemperatureWarningColorChanged(Color value)
+    {
+        SelectedTemperatureWarningColor = FindPreset(TemperatureWarningColorOptions, value, 1);
+    }
+
+    private static ColorPresetOption FindPreset(
+        IReadOnlyList<ColorPresetOption> options,
+        Color value,
+        int fallbackIndex)
+    {
+        return options.FirstOrDefault(option => option.Color == value) ?? options[fallbackIndex];
     }
 
     private bool ValidateBeforeSave()

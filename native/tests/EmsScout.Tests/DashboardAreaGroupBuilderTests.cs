@@ -27,7 +27,9 @@ public sealed class DashboardAreaGroupBuilderTests
             Device(7, "GQ-0201-KT", 2, "2F A", DeviceCommunicationState.Running),
         };
 
-        var summary = Assert.Single(DashboardAreaGroupBuilder.Build(devices, set));
+        var summary = Assert.Single(
+            DashboardAreaGroupBuilder.Build(devices, set),
+            summary => summary.Id == enabled.Id);
 
         Assert.Equal(enabled.Id, summary.Id);
         Assert.Equal(6, summary.Total);
@@ -49,6 +51,36 @@ public sealed class DashboardAreaGroupBuilderTests
         Assert.Equal(1, summary.PrivateTotal);
         Assert.Equal(1, summary.PrivateRunning);
         Assert.Equal(0, summary.PrivateStopped);
+    }
+
+    [Fact]
+    public void IncludesPublicAndPrivateSystemGroupsAsStandaloneRows()
+    {
+        var publicGroup = Group(1, "公区", enabled: true, groupKind: "system", systemKey: "public");
+        var privateGroup = Group(2, "非公区", enabled: true, groupKind: "system", systemKey: "non_public");
+        var set = new AreaGroupSet([publicGroup, privateGroup], []);
+        var devices = new[]
+        {
+            Device(1, "GQ-0101-KT", 1, "1F A", DeviceCommunicationState.Running),
+            Device(2, "QL-0102-KT", 1, "1F A", DeviceCommunicationState.Stopped),
+            Device(3, "GQ-0103-KT", 1, "1F B", DeviceCommunicationState.Offline),
+        };
+
+        var summaries = DashboardAreaGroupBuilder.Build(devices, set);
+
+        var publicSummary = Assert.Single(summaries, summary => summary.Id == publicGroup.Id);
+        Assert.Equal(2, publicSummary.Total);
+        Assert.Equal(DeviceAreaClassifier.PublicArea, publicSummary.AreaType);
+        Assert.Equal(2, publicSummary.PublicTotal);
+        Assert.Equal(1, publicSummary.Running);
+        Assert.Equal(1, publicSummary.Offline);
+
+        var privateSummary = Assert.Single(summaries, summary => summary.Id == privateGroup.Id);
+        Assert.Equal(1, privateSummary.Total);
+        Assert.Equal(DeviceAreaClassifier.PrivateArea, privateSummary.AreaType);
+        Assert.Equal(0, privateSummary.PublicTotal);
+        Assert.Equal(1, privateSummary.Stopped);
+        Assert.Equal(1, privateSummary.PrivateTotal);
     }
 
     [Fact]

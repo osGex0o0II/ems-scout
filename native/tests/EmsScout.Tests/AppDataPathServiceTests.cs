@@ -70,4 +70,21 @@ public sealed class AppDataPathServiceTests
         Assert.Throws<InvalidOperationException>(() => service.ResolveWorkspacePath(file));
         Directory.Delete(root, recursive: true);
     }
+
+    [Fact]
+    public void MigratesAbsoluteWorkspaceDataDirectoryToCompleteOutDirectory()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-path-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "data"));
+        Directory.CreateDirectory(Path.Combine(root, "out"));
+        File.WriteAllText(Path.Combine(root, "out", "ac.db"), "complete");
+        var settings = new AppSettingsService(Path.Combine(root, "settings.json"));
+        settings.Save(new AppSettings { DataDirectory = Path.Combine(root, "data") });
+
+        var service = new AppDataPathService(root, settings);
+
+        Assert.Equal(Path.Combine(root, "out"), service.DataDirectory);
+
+        Directory.Delete(root, recursive: true);
+    }
 }

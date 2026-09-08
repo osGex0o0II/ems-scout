@@ -10,7 +10,7 @@ public sealed class DataManagementUiContractTests
         var xaml = File.ReadAllText(xamlPath);
 
         Assert.DoesNotContain("核验", xaml);
-        Assert.DoesNotContain("HorizontalScrollBarVisibility=\"Disabled\"", xaml);
+        Assert.Contains("HorizontalScrollBarVisibility=\"Disabled\"", xaml);
         Assert.DoesNotContain("运行状态", xaml);
         Assert.DoesNotContain("打开上次导出", xaml);
         Assert.Contains("筛选和 Excel 导出使用同一组条件", xaml);
@@ -30,17 +30,240 @@ public sealed class DataManagementUiContractTests
         Assert.DoesNotContain("<ScrollViewer VerticalScrollBarVisibility=\"Auto\">", xaml);
         Assert.Contains("Text=\"开关机状态\"", xaml);
         Assert.Contains("Text=\"集控锁定状态\"", xaml);
-        Assert.Contains("Text=\"设置温度(℃)\"", xaml);
-        Assert.Contains("Text=\"环境温度(℃)\"", xaml);
-        Assert.Contains("Text=\"打开导出位置\"", xaml);
+        Assert.Contains("Text=\"温度（设 / 环，℃）\"", xaml);
+        Assert.DoesNotContain("Text=\"打开导出位置\"", xaml);
         Assert.Contains("ToolTipService.ToolTip=\"{Binding Name}\"", xaml);
         Assert.Contains("ToolTipService.ToolTip=\"{Binding PageName}\"", xaml);
-        Assert.Contains("MinWidth=\"1620\"", xaml);
+        Assert.DoesNotContain("MinWidth=\"1620\"", xaml);
+        Assert.Contains("x:Name=\"WideDataList\"", xaml);
+        Assert.Contains("x:Name=\"CompactDataList\"", xaml);
+        Assert.Contains("AdaptiveTrigger MinWindowWidth=\"1500\"", xaml);
+        Assert.Contains("Text=\"楼栋\"", xaml);
+        Assert.Contains("Text=\"集控锁定状态\"", xaml);
 
         var codeBehind = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml.cs"));
         Assert.Contains("new FileSavePicker", codeBehind);
         Assert.Contains("PickSaveFileAsync", codeBehind);
-        Assert.Contains("ViewModel.ExportAsync(file.Path)", codeBehind);
+        Assert.Contains("ViewModel.ExportAsync(file.Path, token)", codeBehind);
+    }
+
+    [Fact]
+    public void DataPageUsesCompactTwoRowTableBelowWideLayoutBreakpoint()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml"));
+
+        var compactStart = xaml.IndexOf("x:Name=\"CompactDataList\"", StringComparison.Ordinal);
+        var wideStart = xaml.IndexOf("x:Name=\"WideDataList\"", StringComparison.Ordinal);
+
+        Assert.True(compactStart >= 0);
+        Assert.True(wideStart >= 0);
+        Assert.Contains("AdaptiveTrigger MinWindowWidth=\"1500\"", xaml);
+        Assert.Contains("Grid.Row=\"1\"", xaml[compactStart..]);
+        Assert.Contains("Text=\"温度（设 / 环，℃）\"", xaml[compactStart..]);
+        Assert.Contains("Text=\"温度（设 / 环，℃）\"", xaml[wideStart..]);
+        Assert.DoesNotContain("MinWidth=\"1620\"", xaml);
+    }
+
+    [Fact]
+    public void DataPageKeepsHeadersOnOneLineInsideBothTableLayouts()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml"));
+        var compactStart = xaml.IndexOf("x:Name=\"CompactDataList\"", StringComparison.Ordinal);
+        var wideStart = xaml.IndexOf("x:Name=\"WideDataList\"", StringComparison.Ordinal);
+
+        Assert.True(compactStart >= 0);
+        Assert.True(wideStart > compactStart);
+
+        foreach (var label in new[] { "温度（设 / 环，℃）", "集控锁定状态" })
+        {
+            AssertHeaderIsSingleLine(xaml[compactStart..wideStart], label);
+            AssertHeaderIsSingleLine(xaml[wideStart..], label);
+        }
+    }
+
+    [Fact]
+    public void DataPageDeclaresStableRowsAndStretchingForBothTableLayouts()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml"));
+        var compactStart = xaml.IndexOf("x:Name=\"CompactDataList\"", StringComparison.Ordinal);
+        var wideStart = xaml.IndexOf("x:Name=\"WideDataList\"", StringComparison.Ordinal);
+
+        Assert.True(compactStart >= 0);
+        Assert.True(wideStart > compactStart);
+
+        var compact = xaml[compactStart..wideStart];
+        var wide = xaml[wideStart..];
+
+        Assert.DoesNotContain("<Grid.RowDefinitions>", compact);
+        Assert.Contains("<Grid.RowDefinitions>", wide);
+        Assert.Contains("<Setter Property=\"Padding\" Value=\"0\" />", compact);
+        Assert.Contains("<Setter Property=\"Padding\" Value=\"0\" />", wide);
+        Assert.Contains("<Setter Property=\"HorizontalContentAlignment\" Value=\"Stretch\" />", compact);
+        Assert.Contains("<Setter Property=\"HorizontalContentAlignment\" Value=\"Stretch\" />", wide);
+    }
+
+    [Fact]
+    public void DataPageKeepsHistoryControlTimestampOnlyInHeader()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml"));
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs"));
+
+        Assert.DoesNotContain("Text=\"历史批次\"", xaml);
+        Assert.DoesNotContain("PlaceholderText=\"选择历史批次\"", xaml);
+        Assert.DoesNotContain("CurrentDataSourceTimestamp", xaml);
+        Assert.Contains("CurrentDataSourceTimestamp", viewModel);
+        Assert.Contains("DisplayLabel => $\"{Label} · {Detail}\"", File.ReadAllText(Path.Combine(
+            root,
+            "native",
+            "src",
+            "EmsScout.Desktop",
+            "ViewModels",
+            "DataSourceOption.cs")));
+    }
+
+    [Fact]
+    public void DataPageBindsBatchPickerToRealCollectionWithScrollableDropDown()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml"));
+
+        Assert.Contains("ItemsSource=\"{x:Bind ViewModel.DataSources, Mode=OneWay}\"", xaml);
+        Assert.Contains("<ComboBox.ItemTemplate>", xaml);
+        Assert.Contains("Text=\"{Binding DisplayLabel}\"", xaml);
+        Assert.Contains("Width=\"320\"", xaml);
+        Assert.Contains("MaxDropDownHeight=\"420\"", xaml);
+    }
+
+    [Fact]
+    public void DataTablesUseComfortableCenteredColumns()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml"));
+
+        Assert.DoesNotContain("MinWidth=\"1060\"", xaml);
+        Assert.DoesNotContain("MinWidth=\"1460\"", xaml);
+        Assert.DoesNotContain("HorizontalScrollBarVisibility=\"Auto\"", xaml);
+        Assert.Contains("DataTableCellTextStyle", xaml);
+        Assert.Contains("<Setter Property=\"TextAlignment\" Value=\"Center\" />", xaml);
+        Assert.Contains("<Setter Property=\"HorizontalAlignment\" Value=\"Stretch\" />", xaml);
+        Assert.Contains("<Setter Property=\"FontSize\" Value=\"14\" />", xaml);
+        Assert.Contains("<ColumnDefinition Width=\"1.65*\" />", xaml);
+    }
+
+    [Fact]
+    public void DataPageKeepsTableRowsReadableAndRemovesRedundantExportHeaderControls()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml"));
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs"));
+
+        Assert.DoesNotContain("OpenExportLocation_Click", xaml);
+        Assert.DoesNotContain("打开导出位置", xaml);
+        Assert.DoesNotContain("LastExportPath", xaml);
+        Assert.Contains("Width=\"320\"", xaml);
+        Assert.Contains("compact ? new Thickness(14, 14, 14, 14)", viewModel);
+    }
+
+    [Fact]
+    public void DataPageCombinesTemperatureColumnsWithAColorCodedPair()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml"));
+        var row = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataDeviceRow.cs"));
+
+        Assert.Contains("Text=\"温度（设 / 环，℃）\"", xaml);
+        Assert.DoesNotContain("Text=\"设置温度(℃)\"", xaml);
+        Assert.DoesNotContain("Text=\"环境温度(℃)\"", xaml);
+        Assert.Contains("Text=\" / \"", xaml);
+        Assert.Contains("Foreground=\"{Binding TemperatureForeground}\"", xaml);
+        Assert.Contains("SetTemperatureValue", row);
+        Assert.Contains("IndoorTemperatureValue", row);
+        Assert.Contains("new Thickness(14, 12, 14, 12)", File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs")));
+    }
+
+    [Fact]
+    public void DataPageUsesNeutralTextAndConditionalStatusColors()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml"));
+        var row = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataDeviceRow.cs"));
+
+        Assert.DoesNotContain("Foreground=\"{ThemeResource AccentTextFillColorPrimaryBrush}\" Text=\"{Binding SetTemperatureValue}\"", xaml);
+        Assert.DoesNotContain("Foreground=\"{ThemeResource SystemFillColorCautionBrush}\" Text=\"{Binding IndoorTemperatureValue}\"", xaml);
+        Assert.Contains("Foreground=\"{Binding CommunicationForeground}\"", xaml);
+        Assert.Contains("Foreground=\"{Binding TemperatureForeground}\"", xaml);
+        Assert.Contains("TemperatureWarningThreshold", row);
+        Assert.Contains("IsTemperatureWarning", row);
+    }
+
+    [Fact]
+    public void DataTableRowsUseTheLargerComfortableHeight()
+    {
+        var root = LocateRepositoryRoot();
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs"));
+
+        Assert.Contains("compact ? new Thickness(14, 14, 14, 14)", viewModel);
+        Assert.Contains("new Thickness(14, 16, 14, 16)", viewModel);
+    }
+
+    [Fact]
+    public void SettingsPageProvidesSecondarySectionsAndEditableAppearanceControls()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "SettingsPage.xaml"));
+        var codeBehind = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "SettingsPage.xaml.cs"));
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "SettingsViewModel.cs"));
+
+        Assert.Contains("<NavigationView", xaml);
+        Assert.Contains("连接", xaml);
+        Assert.Contains("数据表", xaml);
+        Assert.Contains("SelectionChanged=\"SectionNavigation_SelectionChanged\"", xaml);
+        Assert.DoesNotContain("<ColorPicker", xaml);
+        Assert.Contains("OfflineStatusColorOptions", xaml);
+        Assert.Contains("TemperatureWarningColorOptions", xaml);
+        Assert.Contains("SelectedOfflineStatusColor", xaml);
+        Assert.Contains("SelectedTemperatureWarningColor", xaml);
+        Assert.Contains("TemperatureWarningThreshold", xaml);
+        Assert.Contains("OfflineStatusColor", xaml);
+        Assert.Contains("TemperatureWarningColor", xaml);
+        Assert.Contains("SectionNavigation_SelectionChanged", codeBehind);
+        Assert.Contains("TemperatureWarningThreshold", viewModel);
+    }
+
+    [Fact]
+    public void SettingsPageUsesLimitedColorPresetsInsteadOfFreeFormColorEditing()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "SettingsPage.xaml"));
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "SettingsViewModel.cs"));
+        var option = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "ColorPresetOption.cs"));
+
+        Assert.DoesNotContain("ColorPicker", xaml);
+        Assert.Contains("ItemsSource=\"{x:Bind ViewModel.OfflineStatusColorOptions, Mode=OneWay}\"", xaml);
+        Assert.Contains("ItemsSource=\"{x:Bind ViewModel.TemperatureWarningColorOptions, Mode=OneWay}\"", xaml);
+        Assert.Contains("ColorPresetOption", viewModel);
+        Assert.Contains("new(\"浅灰\"", viewModel);
+        Assert.Contains("new(\"琥珀\"", viewModel);
+        Assert.Contains("SwatchBrush", option);
+    }
+
+    [Fact]
+    public void SettingsPageUsesAStableSecondaryPaneAndConstrainedContent()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "SettingsPage.xaml"));
+
+        Assert.Contains("IsPaneToggleButtonVisible=\"False\"", xaml);
+        Assert.Contains("PaneDisplayMode=\"Left\"", xaml);
+        Assert.Contains("OpenPaneLength=\"176\"", xaml);
+        Assert.Contains("HorizontalAlignment=\"Left\"", xaml);
+        Assert.Contains("MaxWidth=\"860\"", xaml);
+        Assert.Contains("x:Name=\"StatusTextBlock\"", xaml);
+        Assert.DoesNotContain("x:Name=\"StatusBanner\"", xaml);
     }
 
     [Fact]
@@ -77,6 +300,63 @@ public sealed class DataManagementUiContractTests
         Assert.Contains("DataFilterOption.All(\"全部设置温度\")", source);
         Assert.Contains("DataFilterOption.All(\"全部集控锁定状态\")", source);
         Assert.DoesNotContain("new DataFilterOption(\"无实时数据\", \"无实时数据\", -1)", source);
+    }
+
+    [Fact]
+    public void DataViewModelTreatsSelectedNewestBatchAsLatest()
+    {
+        var root = LocateRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(
+            root,
+            "native",
+            "src",
+            "EmsScout.Desktop",
+            "ViewModels",
+            "DataViewModel.cs"));
+
+        Assert.Contains("private long? _latestDataSourceRunId", source);
+        Assert.Contains("_latestDataSourceRunId = latestOption?.RunId", source);
+        Assert.Contains("SelectedDataSource.RunId == _latestDataSourceRunId", source);
+    }
+
+    [Fact]
+    public void DataViewModelDisplaysNewestBatchWhenNoBatchWasPreviouslySelected()
+    {
+        var root = LocateRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(
+            root,
+            "native",
+            "src",
+            "EmsScout.Desktop",
+            "ViewModels",
+            "DataViewModel.cs"));
+
+        Assert.Contains("var latestOption = DataSources.FirstOrDefault()", source);
+        Assert.Contains("SelectedDataSource = selectedRunId is null", source);
+        Assert.Contains("?? latestOption", source);
+    }
+
+    [Fact]
+    public void CompactDataTableKeepsAllFieldsOnOneScrollableRow()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml"));
+        var compactStart = xaml.IndexOf("x:Name=\"CompactDataList\"", StringComparison.Ordinal);
+        var wideStart = xaml.IndexOf("x:Name=\"WideDataList\"", StringComparison.Ordinal);
+
+        Assert.True(compactStart >= 0);
+        Assert.True(wideStart > compactStart);
+        var compact = xaml[compactStart..wideStart];
+
+        foreach (var label in new[] { "楼栋", "设备名", "集控锁定状态", "温度（设 / 环，℃）" })
+        {
+            Assert.Contains($"Text=\"{label}\"", compact);
+        }
+
+        Assert.Contains("Grid.Column=\"10\"", compact);
+        var compactItemTemplate = compact[compact.IndexOf("<ListView.ItemTemplate>", StringComparison.Ordinal)..];
+        Assert.DoesNotContain("Grid.Row=\"1\"", compactItemTemplate);
+        Assert.Contains("ScrollViewer.HorizontalScrollBarVisibility=\"Disabled\"", compact);
     }
 
     [Fact]
@@ -140,7 +420,7 @@ public sealed class DataManagementUiContractTests
         Assert.Contains("AreaType: EmptyToNull(SelectedArea?.Value)", buildQuery);
         Assert.Contains("Limit: limit", buildQuery);
         Assert.Contains("Offset: offset", buildQuery);
-        Assert.Contains("RunId: null", buildQuery);
+        Assert.Contains("RunId: SelectedDataSource?.RunId", buildQuery);
     }
 
     [Fact]
@@ -389,6 +669,23 @@ public sealed class DataManagementUiContractTests
         var index = source.IndexOf(value, StringComparison.Ordinal);
         Assert.True(index >= 0, "Missing expected text: " + value);
         return index;
+    }
+
+    private static void AssertHeaderIsSingleLine(string tableMarkup, string label)
+    {
+        var line = tableMarkup
+            .Split(["\r\n", "\n"], StringSplitOptions.None)
+            .FirstOrDefault(candidate => candidate.Contains($"Text=\"{label}\"", StringComparison.Ordinal));
+
+        Assert.NotNull(line);
+        Assert.True(
+            line.Contains("TextWrapping=\"NoWrap\"", StringComparison.Ordinal) ||
+            tableMarkup.Contains("<Setter Property=\"TextWrapping\" Value=\"NoWrap\" />", StringComparison.Ordinal),
+            "Header must use single-line text wrapping.");
+        Assert.True(
+            line.Contains("TextTrimming=\"CharacterEllipsis\"", StringComparison.Ordinal) ||
+            tableMarkup.Contains("<Setter Property=\"TextTrimming\" Value=\"CharacterEllipsis\" />", StringComparison.Ordinal),
+            "Header must use ellipsis trimming.");
     }
 
     private static string LocateRepositoryRoot()

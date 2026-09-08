@@ -192,6 +192,9 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
         var mode = readOnly ? "ReadOnly" : "ReadWrite";
         var connection = new SqliteConnection($"Data Source={databasePathResolver()};Mode={mode}");
         connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA busy_timeout = 10000; PRAGMA foreign_keys = ON;";
+        command.ExecuteNonQuery();
         return connection;
     }
 

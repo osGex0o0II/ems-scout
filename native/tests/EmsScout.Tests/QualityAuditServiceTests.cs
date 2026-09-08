@@ -128,4 +128,36 @@ public sealed class QualityAuditServiceTests
         Assert.Equal(114, building.DeviceAnomalyRows);
         Assert.Equal(3, building.InvalidLock);
     }
+
+    [Fact]
+    public async Task LoadsTheReportThatMatchesTheRequestedRun()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-quality-run-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var dbPath = Path.Combine(root, "ac.db");
+        File.WriteAllText(dbPath, string.Empty);
+        File.WriteAllText(Path.Combine(root, "quality_report.json"), ReportJson(21, 6573));
+        File.WriteAllText(Path.Combine(root, "quality_report_run24.json"), ReportJson(24, 6471));
+
+        var service = new JsonQualityAuditService(() => root, () => dbPath);
+
+        var report = await service.LoadForRunAsync(24);
+
+        Assert.NotNull(report);
+        Assert.Equal(24, report.RunId);
+        Assert.Equal(6471, report.Summary.TotalCards);
+        Assert.EndsWith("quality_report_run24.json", report.SourcePath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ReportJson(long runId, int totalCards) => JsonSerializer.Serialize(new
+    {
+        generated_at = "2026-07-01T10:51:56.564Z",
+        run_id = runId,
+        summary = new
+        {
+            total_cards = totalCards,
+            issue_count = 0,
+        },
+        issues = Array.Empty<object>(),
+    });
 }

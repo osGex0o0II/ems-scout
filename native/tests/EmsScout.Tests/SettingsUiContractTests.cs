@@ -1,0 +1,113 @@
+namespace EmsScout.Tests;
+
+public sealed class SettingsUiContractTests
+{
+    [Fact]
+    public void SettingsModelExposesTheNewUserPreferences()
+    {
+        var root = LocateRepositoryRoot();
+        var settings = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Application", "Settings", "AppSettings.cs"));
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "SettingsViewModel.cs"));
+
+        Assert.Contains("PageTransitionStyle", settings);
+        Assert.DoesNotContain("Language", settings);
+        Assert.Contains("SaveWindowPlacement", settings);
+        Assert.Contains("StartMinimized", settings);
+        Assert.Contains("LaunchAtLogin", settings);
+        Assert.Contains("ShowInSendTo", settings);
+        Assert.Contains("PageTransitionStyleIndex", viewModel);
+        Assert.DoesNotContain("LanguageIndex", viewModel);
+        Assert.Contains("SaveWindowPlacement", viewModel);
+        Assert.Contains("StartMinimized", viewModel);
+        Assert.Contains("LaunchAtLogin", viewModel);
+        Assert.Contains("ShowInSendTo", viewModel);
+    }
+
+    [Fact]
+    public void SettingsPageGroupsAppearanceStartupAndSystemIntegrationOptions()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "SettingsPage.xaml"));
+
+        Assert.Contains("Tag=\"behavior\"", xaml);
+        Assert.DoesNotContain("Tag=\"integration\"", xaml);
+        Assert.Contains("Header=\"页面切换\"", xaml);
+        Assert.DoesNotContain("Header=\"语言\"", xaml);
+        Assert.Contains("Header=\"保存窗口位置\"", xaml);
+        Assert.Contains("Header=\"登录系统后自动启动\"", xaml);
+        Assert.Contains("Header=\"在\u201c发送到\u201d菜单中显示 EMS Scout\"", xaml);
+        Assert.DoesNotContain("Header=\"减少动效\"", xaml);
+        Assert.DoesNotContain("IntegrationSection", xaml);
+        Assert.Contains("OpenPaneLength=\"176\"", xaml);
+        Assert.Contains("MaxWidth=\"860\"", xaml);
+        Assert.Contains("MaxWidth=\"820\"", xaml);
+
+        var toggleSwitches = System.Text.RegularExpressions.Regex.Matches(
+            xaml,
+            @"<ToggleSwitch\b[^>]*>");
+        Assert.NotEmpty(toggleSwitches);
+        Assert.All(toggleSwitches, toggle =>
+        {
+            Assert.Contains("OnContent=\"开\"", toggle.Value);
+            Assert.Contains("OffContent=\"关\"", toggle.Value);
+        });
+    }
+
+    [Fact]
+    public void MainWindowUsesOneCentralizedPageTransitionPolicy()
+    {
+        var root = LocateRepositoryRoot();
+        var mainWindow = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "MainWindow.xaml.cs"));
+        var uiSettings = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Services", "AppUiSettingsService.cs"));
+
+        Assert.Contains("PageTransitionStyle", mainWindow);
+        Assert.Contains("ReduceMotion", mainWindow);
+        Assert.Contains("EntranceNavigationTransitionInfo", mainWindow);
+        Assert.Contains("SlideNavigationTransitionInfo", mainWindow);
+        Assert.Contains("SuppressNavigationTransitionInfo", mainWindow);
+        Assert.Contains("PageTransitionStyle", uiSettings);
+    }
+
+    [Fact]
+    public void PackageDeclaresStartupTaskAndRuntimeIntegrations()
+    {
+        var root = LocateRepositoryRoot();
+        var manifest = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Package.appxmanifest"));
+        var app = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "App.xaml.cs"));
+        var mainWindow = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "MainWindow.xaml.cs"));
+
+        Assert.Contains("windows.startupTask", manifest);
+        Assert.Contains("Executable=\"EmsScout.Desktop.exe\"", manifest);
+        Assert.Contains("EntryPoint=\"Windows.FullTrustApplication\"", manifest);
+        Assert.Contains("StartupTask", app);
+        Assert.Contains("SaveWindowPlacement", mainWindow);
+        Assert.Contains("SendToShortcutService", app);
+    }
+
+    [Fact]
+    public void WindowPlacementRestoresPhysicalPixelsWithoutApplyingDpiTwice()
+    {
+        var root = LocateRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Services", "WindowSizeConstraint.cs"));
+
+        Assert.Contains("ConstrainPhysicalSizeForWindow", source);
+        Assert.Contains("ConstrainPhysicalSizeForWindow(window, new SizeInt32(placement.Width, placement.Height))", source);
+        Assert.DoesNotContain("ScaleSizeForWindow(window, new SizeInt32(placement.Width, placement.Height))", source);
+    }
+
+    private static string LocateRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "package.json")))
+            {
+                return directory.FullName;
+            }
+
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Repository root was not found.");
+    }
+}

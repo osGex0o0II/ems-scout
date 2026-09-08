@@ -1,23 +1,78 @@
 using System.Runtime.InteropServices;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Windowing;
 using WinRT.Interop;
 using Windows.Graphics;
+using EmsScout.Application.Settings;
 
 namespace EmsScout.Desktop.Services;
 
 public static class WindowSizeConstraint
 {
-    public const int MinimumClientWidth = 1200;
-    public const int MinimumClientHeight = 800;
+    public const int MinimumClientWidth = 1040;
+    public const int MinimumClientHeight = 680;
+    public const int InitialClientWidth = 1160;
+    public const int InitialClientHeight = 760;
+    private const double InitialWidthWorkAreaRatio = 0.82;
+    private const double InitialHeightWorkAreaRatio = 0.86;
 
     public static SizeInt32 ScaleSizeForWindow(Window window, SizeInt32 desiredSize)
     {
         var handle = WindowNative.GetWindowHandle(window);
         var dpi = GetDpiForWindow(handle);
         var scale = (dpi == 0 ? 96u : dpi) / 96d;
-        return new SizeInt32(
+        var scaled = new SizeInt32(
             (int)Math.Round(desiredSize.Width * scale),
             (int)Math.Round(desiredSize.Height * scale));
+        return ConstrainPhysicalSizeForWindow(window, scaled);
+    }
+
+    public static SizeInt32 ConstrainPhysicalSizeForWindow(Window window, SizeInt32 physicalSize)
+    {
+        var handle = WindowNative.GetWindowHandle(window);
+        var dpi = GetDpiForWindow(handle);
+        var scale = (dpi == 0 ? 96u : dpi) / 96d;
+        var workArea = DisplayArea.GetFromWindowId(
+            window.AppWindow.Id,
+            DisplayAreaFallback.Nearest).WorkArea;
+        var minimumWidth = (int)Math.Round(MinimumClientWidth * scale);
+        var minimumHeight = (int)Math.Round(MinimumClientHeight * scale);
+        var maxWidth = Math.Max(minimumWidth, (int)Math.Round(workArea.Width * InitialWidthWorkAreaRatio));
+        var maxHeight = Math.Max(minimumHeight, (int)Math.Round(workArea.Height * InitialHeightWorkAreaRatio));
+        return new SizeInt32(
+            Math.Clamp(physicalSize.Width, minimumWidth, maxWidth),
+            Math.Clamp(physicalSize.Height, minimumHeight, maxHeight));
+    }
+
+    public static WindowPlacementState Capture(Window window)
+    {
+        var position = window.AppWindow.Position;
+        var size = window.AppWindow.Size;
+        return new WindowPlacementState
+        {
+            Left = position.X,
+            Top = position.Y,
+            Width = size.Width,
+            Height = size.Height,
+        };
+    }
+
+    public static void Restore(Window window, WindowPlacementState placement)
+    {
+        var size = ConstrainPhysicalSizeForWindow(window, new SizeInt32(placement.Width, placement.Height));
+        var workArea = DisplayArea.GetFromWindowId(window.AppWindow.Id, DisplayAreaFallback.Nearest).WorkArea;
+        var maxLeft = workArea.X + Math.Max(0, workArea.Width - size.Width);
+        var maxTop = workArea.Y + Math.Max(0, workArea.Height - size.Height);
+        var position = new PointInt32(
+            Math.Clamp(placement.Left, workArea.X, maxLeft),
+            Math.Clamp(placement.Top, workArea.Y, maxTop));
+        window.AppWindow.Move(position);
+        window.AppWindow.Resize(size);
+    }
+
+    public static void Minimize(Window window)
+    {
+        ShowWindow(WindowNative.GetWindowHandle(window), 6);
     }
 
     private const int GwlWndProc = -4;

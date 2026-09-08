@@ -37,6 +37,8 @@ function floorLabelFromValue(value) {
 }
 
 function ensureHistorySchema(db) {
+  db.pragma('busy_timeout = 10000');
+  db.pragma('foreign_keys = ON');
   db.exec(`
     CREATE TABLE IF NOT EXISTS collection_runs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

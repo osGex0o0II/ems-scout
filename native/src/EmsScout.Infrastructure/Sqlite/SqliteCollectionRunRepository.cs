@@ -82,10 +82,25 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             throw new InvalidOperationException("异常隔离批次不能恢复，请先取消异常标记并复核数据。");
         }
 
-        if (!await HasRunSnapshotAsync(connection, runId, cancellationToken).ConfigureAwait(false))
+        if (!run.Status.Equals("completed", StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidOperationException($"Run {runId} does not contain a restorable snapshot.");
+            throw new InvalidOperationException($"状态为“{run.Status}”的批次不能恢复，仅允许恢复已完成批次。");
         }
+
+        if (!run.Scope.Equals("full", StringComparison.OrdinalIgnoreCase) &&
+            !run.Scope.Equals("partial", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"批次范围“{run.Scope}”无效，无法安全恢复。");
+        }
+
+        if (run.Scope.Equals("full", StringComparison.OrdinalIgnoreCase) &&
+            !run.Buildings.ToHashSet(StringComparer.OrdinalIgnoreCase)
+                .SetEquals(CollectionRunCompleteness.RequiredBuildings))
+        {
+            throw new InvalidOperationException("全量批次未覆盖 1-6 号楼，无法安全恢复。");
+        }
+
+        await ValidateSnapshotAsync(connection, run, cancellationToken).ConfigureAwait(false);
 
         var isPartial = run.Scope.Equals("partial", StringComparison.OrdinalIgnoreCase);
         if (isPartial && run.Buildings.Count == 0)
@@ -143,6 +158,7 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         var deletedBuildings = await ExecuteCountAsync(connection, transaction, "DELETE FROM run_buildings WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
         await ExecuteCountAsync(connection, transaction, "DELETE FROM collection_runs WHERE id = $run_id", runId, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        DeleteAssociatedArtifacts(run);
 
         return new CollectionRunDeleteResult(
             run.Id,
@@ -159,6 +175,9 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         var mode = readOnly ? "ReadOnly" : "ReadWrite";
         var connection = new SqliteConnection($"Data Source={databasePathResolver()};Mode={mode}");
         connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA busy_timeout = 10000; PRAGMA foreign_keys = ON;";
+        command.ExecuteNonQuery();
         return connection;
     }
 
@@ -221,16 +240,53 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             SnapshotCardCount: ReadInt32(reader, "snapshot_card_count"));
     }
 
-    private static async Task<bool> HasRunSnapshotAsync(
+    private static async Task ValidateSnapshotAsync(
         SqliteConnection connection,
+        CollectionRunRecord run,
+        CancellationToken cancellationToken)
+    {
+        var runId = run.Id;
+        var buildings = await ScalarLongAsync(connection, "SELECT COUNT(*) FROM run_buildings WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
+        var subAreas = await ScalarLongAsync(connection, "SELECT COUNT(*) FROM run_sub_areas WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
+        var pages = await ScalarLongAsync(connection, "SELECT COUNT(*) FROM run_pages WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
+        var cards = await ScalarLongAsync(connection, "SELECT COUNT(*) FROM run_cards WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
+        if (buildings != run.Buildings.Count || subAreas == 0 || pages == 0 || cards != run.CardCount || cards == 0)
+        {
+            throw new InvalidOperationException($"批次 #{runId} 快照计数不完整：楼栋 {buildings}/{run.Buildings.Count}，子区 {subAreas}，页面 {pages}，卡片 {cards}/{run.CardCount}。");
+        }
+
+        var orphanSubAreas = await ScalarLongAsync(connection, """
+            SELECT COUNT(*) FROM run_sub_areas sa
+            WHERE sa.run_id = $run_id AND NOT EXISTS (
+                SELECT 1 FROM run_buildings b WHERE b.run_id = sa.run_id AND b.building = sa.building)
+            """, runId, cancellationToken).ConfigureAwait(false);
+        var orphanPages = await ScalarLongAsync(connection, """
+            SELECT COUNT(*) FROM run_pages p
+            WHERE p.run_id = $run_id AND NOT EXISTS (
+                SELECT 1 FROM run_sub_areas sa WHERE sa.run_id = p.run_id AND sa.id = p.run_sub_area_id)
+            """, runId, cancellationToken).ConfigureAwait(false);
+        var orphanCards = await ScalarLongAsync(connection, """
+            SELECT COUNT(*) FROM run_cards c
+            WHERE c.run_id = $run_id AND NOT EXISTS (
+                SELECT 1 FROM run_pages p WHERE p.run_id = c.run_id AND p.id = c.run_page_id)
+            """, runId, cancellationToken).ConfigureAwait(false);
+        if (orphanSubAreas > 0 || orphanPages > 0 || orphanCards > 0)
+        {
+            throw new InvalidOperationException($"批次 #{runId} 层级映射不完整：孤立子区 {orphanSubAreas}，孤立页面 {orphanPages}，孤立卡片 {orphanCards}。");
+        }
+    }
+
+    private static async Task<long> ScalarLongAsync(
+        SqliteConnection connection,
+        string sql,
         long runId,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = "SELECT COUNT(*) FROM run_cards WHERE run_id = $run_id";
+        command.CommandText = sql;
         command.Parameters.AddWithValue("$run_id", runId);
         var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-        return Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture) > 0;
+        return Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private static async Task<long?> CreatePreRestoreBackupAsync(
@@ -315,9 +371,9 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             """
             INSERT INTO run_pages
                 (run_id, run_sub_area_id, source_page_id, page_name, count, raw_count, unique_count,
-                 duplicate_names, on_href, off_href, layout, quality_reason, err)
+                 duplicate_names, on_href, off_href, layout, quality_reason, collected_at, err)
             SELECT $run_id, rsa.id, p.id, p.page_name, p.count, p.raw_count, p.unique_count,
-                   p.duplicate_names, p.on_href, p.off_href, p.layout, p.quality_reason, p.err
+                   p.duplicate_names, p.on_href, p.off_href, p.layout, p.quality_reason, p.collected_at, p.err
             FROM pages p
             JOIN run_sub_areas rsa
               ON rsa.run_id = $run_id AND rsa.source_sub_area_id = p.sub_area_id
@@ -477,7 +533,7 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         select.Transaction = transaction;
         select.CommandText = """
             SELECT id, run_sub_area_id, page_name, count, raw_count, unique_count,
-                   duplicate_names, on_href, off_href, layout, quality_reason, err
+                   duplicate_names, on_href, off_href, layout, quality_reason, collected_at, err
             FROM run_pages
             WHERE run_id = $run_id
             ORDER BY id
@@ -487,8 +543,8 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         await using var insert = connection.CreateCommand();
         insert.Transaction = transaction;
         insert.CommandText = """
-            INSERT INTO pages (sub_area_id, page_name, count, raw_count, unique_count, duplicate_names, on_href, off_href, layout, quality_reason, err)
-            VALUES ($sub_area_id, $page_name, $count, $raw_count, $unique_count, $duplicate_names, $on_href, $off_href, $layout, $quality_reason, $err)
+            INSERT INTO pages (sub_area_id, page_name, count, raw_count, unique_count, duplicate_names, on_href, off_href, layout, quality_reason, collected_at, err)
+            VALUES ($sub_area_id, $page_name, $count, $raw_count, $unique_count, $duplicate_names, $on_href, $off_href, $layout, $quality_reason, $collected_at, $err)
             RETURNING id
             """;
         var subAreaId = insert.Parameters.Add("$sub_area_id", SqliteType.Integer);
@@ -501,6 +557,7 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         var offHref = insert.Parameters.Add("$off_href", SqliteType.Text);
         var layout = insert.Parameters.Add("$layout", SqliteType.Text);
         var qualityReason = insert.Parameters.Add("$quality_reason", SqliteType.Text);
+        var collectedAt = insert.Parameters.Add("$collected_at", SqliteType.Text);
         var err = insert.Parameters.Add("$err", SqliteType.Text);
 
         var map = new Dictionary<long, long>();
@@ -523,6 +580,7 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             offHref.Value = DbValue(ReadString(reader, "off_href"));
             layout.Value = DbValue(ReadString(reader, "layout"));
             qualityReason.Value = DbValue(ReadString(reader, "quality_reason"));
+            collectedAt.Value = DbValue(ReadString(reader, "collected_at"));
             err.Value = DbValue(ReadString(reader, "err"));
             var newId = await insert.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
             map[reader.GetInt64(reader.GetOrdinal("id"))] =
@@ -634,6 +692,49 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
     {
         await AddColumnIfMissingAsync(connection, "pages", "quality_reason", "TEXT", cancellationToken).ConfigureAwait(false);
         await AddColumnIfMissingAsync(connection, "run_pages", "quality_reason", "TEXT", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(connection, "pages", "collected_at", "TEXT", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(connection, "run_pages", "collected_at", "TEXT", cancellationToken).ConfigureAwait(false);
+    }
+
+    private void DeleteAssociatedArtifacts(CollectionRunRecord run)
+    {
+        var databaseDirectory = Path.GetFullPath(Path.GetDirectoryName(databasePathResolver()) ?? Directory.GetCurrentDirectory());
+        var candidates = new List<string>();
+        foreach (var path in new[] { run.JsonPath, run.DbSnapshotPath })
+        {
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                candidates.Add(Path.IsPathRooted(path) ? path : Path.Combine(databaseDirectory, path));
+            }
+        }
+
+        candidates.Add(Path.Combine(databaseDirectory, $"quality_report_run{run.Id}.json"));
+        candidates.Add(Path.Combine(databaseDirectory, $"quality_report_run{run.Id}.txt"));
+        foreach (var candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var fullPath = Path.GetFullPath(candidate);
+                if (!fullPath.StartsWith(databaseDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(fullPath, Path.GetFullPath(databasePathResolver()), StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (File.Exists(fullPath))
+                {
+                    File.Delete(fullPath);
+                }
+            }
+            catch (IOException)
+            {
+                // History deletion must not leave the SQLite database half-deleted because an optional artifact is locked.
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // The next cleanup can remove a file that is temporarily protected by another process.
+            }
+        }
     }
 
     private static async Task AddColumnIfMissingAsync(

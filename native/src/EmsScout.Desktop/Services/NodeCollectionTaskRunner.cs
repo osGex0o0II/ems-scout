@@ -58,7 +58,7 @@ public sealed class NodeCollectionTaskRunner(string workspaceRoot)
             throw new InvalidOperationException("Failed to start Node.js process.");
         }
 
-        await using var registration = cancellationToken.Register(() =>
+        using var registration = cancellationToken.Register(() =>
         {
             try
             {
@@ -70,13 +70,34 @@ public sealed class NodeCollectionTaskRunner(string workspaceRoot)
             catch (InvalidOperationException)
             {
             }
+            catch (System.ComponentModel.Win32Exception)
+            {
+            }
         });
 
         var stdout = PumpAsync(process.StandardOutput, onOutput);
         var stderr = PumpAsync(process.StandardError, line => onOutput("[stderr] " + line));
-        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
-        await Task.WhenAll(stdout, stderr).ConfigureAwait(false);
-        return process.ExitCode;
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            await Task.WhenAll(stdout, stderr).ConfigureAwait(false);
+            return process.ExitCode;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // WaitForExitAsync observes cancellation before the killed child has closed its redirected pipes.
+            // Always drain both pumps before returning control to the task state machine.
+            try
+            {
+                await process.WaitForExitAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                await Task.WhenAll(stdout, stderr).ConfigureAwait(false);
+            }
+
+            throw;
+        }
     }
 
     private static async Task PumpAsync(StreamReader reader, Action<string> onOutput)

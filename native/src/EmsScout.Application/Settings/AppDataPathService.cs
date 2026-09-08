@@ -11,7 +11,7 @@ public sealed class AppDataPathService(
         get
         {
             var settings = settingsService.Load();
-            return ResolveWorkspacePath(settings.DataDirectory);
+            return ResolveWorkspacePath(ResolveConfiguredDataDirectory(settings.DataDirectory));
         }
     }
 
@@ -46,5 +46,16 @@ public sealed class AppDataPathService(
     public string ResolveWorkspacePath(string path)
     {
         return PathSafety.ResolveDirectory(WorkspaceRoot, path);
+    }
+
+    private string ResolveConfiguredDataDirectory(string configuredPath)
+    {
+        var configured = Path.GetFullPath(configuredPath, WorkspaceRoot);
+        var legacyData = Path.GetFullPath("data", WorkspaceRoot);
+        var completeOut = Path.GetFullPath("out", WorkspaceRoot);
+        return configured.Equals(legacyData, StringComparison.OrdinalIgnoreCase) &&
+               File.Exists(Path.Combine(completeOut, "ac.db"))
+            ? completeOut
+            : configuredPath;
     }
 }

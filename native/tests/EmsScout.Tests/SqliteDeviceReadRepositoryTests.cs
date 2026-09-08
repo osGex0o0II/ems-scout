@@ -2,11 +2,49 @@ using EmsScout.Application.Devices;
 using EmsScout.Infrastructure.Sqlite;
 using EmsScout.Infrastructure.Realtime;
 using Microsoft.Data.Sqlite;
+using EmsScout.Domain;
 
 namespace EmsScout.Tests;
 
 public sealed class SqliteDeviceReadRepositoryTests
 {
+    [Fact]
+    public void VirtualRealtimeRowsAreExcludedFromTheDefaultInventoryContract()
+    {
+        var virtualRow = TestDevice(isVirtual: true);
+        var regularRow = TestDevice(isVirtual: false);
+
+        Assert.False(DeviceQueryVisibility.ShouldInclude(virtualRow, new DeviceQuery()));
+        Assert.True(DeviceQueryVisibility.ShouldInclude(regularRow, new DeviceQuery()));
+        Assert.True(DeviceQueryVisibility.ShouldInclude(
+            virtualRow,
+            new DeviceQuery(RealtimeMatch: "virtual")));
+    }
+
+    private static DeviceRecord TestDevice(bool isVirtual)
+    {
+        return new DeviceRecord(
+            Id: isVirtual ? 2 : 1,
+            Building: "1号",
+            Floor: 1,
+            FloorLabel: "1F",
+            SubArea: "1F A",
+            X: null,
+            Y: null,
+            PageName: "default",
+            Name: isVirtual ? "虚拟-KT" : "设备-KT",
+            Layout: "grid",
+            SwitchState: "OFF",
+            Mode: "制冷",
+            IndoorTemperature: "26",
+            SetTemperature: "25",
+            Fan: "中",
+            Indicator: string.Empty,
+            CommunicationText: "关机",
+            CommunicationState: DeviceCommunicationState.Stopped,
+            IsVirtual: isVirtual);
+    }
+
     [Fact]
     public async Task SearchesCurrentDatabaseWithSelfConsistentCounts()
     {

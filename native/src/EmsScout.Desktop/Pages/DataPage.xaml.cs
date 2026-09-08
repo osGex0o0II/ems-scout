@@ -13,6 +13,7 @@ public sealed partial class DataPage : Page
 {
     private DataNavigationRequest? _navigationRequest;
     private readonly WindowHandleProvider _windowHandleProvider;
+    private readonly CancellationTokenSource _pageLifetime = new();
 
     public DataViewModel ViewModel { get; }
 
@@ -25,8 +26,22 @@ public sealed partial class DataPage : Page
 
     private async void Page_Loaded(object sender, RoutedEventArgs e)
     {
-        await ViewModel.InitializeAsync(_navigationRequest);
-        _navigationRequest = null;
+        try
+        {
+            await ViewModel.InitializeAsync(_navigationRequest, _pageLifetime.Token);
+        }
+        catch (OperationCanceledException) when (_pageLifetime.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            ViewModel.ReportInitializationError(ex);
+        }
+        finally
+        {
+            _navigationRequest = null;
+        }
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -35,39 +50,74 @@ public sealed partial class DataPage : Page
         base.OnNavigatedTo(e);
     }
 
+    protected override void OnNavigatedFrom(NavigationEventArgs e)
+    {
+        _pageLifetime.Cancel();
+        base.OnNavigatedFrom(e);
+    }
+
+    private async Task RunPageOperationAsync(Func<CancellationToken, Task> operation)
+    {
+        try
+        {
+            await operation(_pageLifetime.Token);
+        }
+        catch (OperationCanceledException) when (_pageLifetime.IsCancellationRequested)
+        {
+        }
+    }
+
     private async void ApplyFilters_Click(object sender, RoutedEventArgs e)
     {
-        await ViewModel.ApplyFiltersAsync();
+        await RunPageOperationAsync(ViewModel.ApplyFiltersAsync);
     }
 
     private async void BuildingFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        await ViewModel.ApplyBuildingSelectionAsync();
+        await RunPageOperationAsync(ViewModel.ApplyBuildingSelectionAsync);
     }
 
     private async void FloorFilter_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        await ViewModel.ApplyFloorSelectionAsync();
+        await RunPageOperationAsync(ViewModel.ApplyFloorSelectionAsync);
     }
 
     private async void ResetFilters_Click(object sender, RoutedEventArgs e)
     {
-        await ViewModel.ResetFiltersAsync();
+        await RunPageOperationAsync(ViewModel.ResetFiltersAsync);
     }
 
     private async void Refresh_Click(object sender, RoutedEventArgs e)
     {
-        await ViewModel.RefreshAsync();
+        await RunPageOperationAsync(ViewModel.RefreshAsync);
+    }
+
+    private async void DataSource_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ComboBox comboBox && comboBox.SelectedItem is DataSourceOption option)
+        {
+            await RunPageOperationAsync(token => ViewModel.SelectDataSourceAsync(option, token));
+        }
+    }
+
+    private async void LatestBatch_Click(object sender, RoutedEventArgs e)
+    {
+        await RunPageOperationAsync(ViewModel.UseLatestDataSourceAsync);
+    }
+
+    private async void RefreshLatest_Click(object sender, RoutedEventArgs e)
+    {
+        await RunPageOperationAsync(ViewModel.RefreshLatestAsync);
     }
 
     private async void PreviousPage_Click(object sender, RoutedEventArgs e)
     {
-        await ViewModel.MovePreviousAsync();
+        await RunPageOperationAsync(ViewModel.MovePreviousAsync);
     }
 
     private async void NextPage_Click(object sender, RoutedEventArgs e)
     {
-        await ViewModel.MoveNextAsync();
+        await RunPageOperationAsync(ViewModel.MoveNextAsync);
     }
 
     private async void Export_Click(object sender, RoutedEventArgs e)
@@ -86,7 +136,7 @@ public sealed partial class DataPage : Page
             return;
         }
 
-        await ViewModel.ExportAsync(file.Path);
+        await RunPageOperationAsync(token => ViewModel.ExportAsync(file.Path, token));
     }
 
     private void OpenExportLocation_Click(object sender, RoutedEventArgs e)

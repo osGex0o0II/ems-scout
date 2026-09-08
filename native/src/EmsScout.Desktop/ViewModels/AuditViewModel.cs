@@ -90,6 +90,11 @@ public sealed partial class AuditViewModel(
     [NotifyPropertyChangedFor(nameof(CanRestoreSelectedRun))]
     public partial CollectionRunRow? SelectedRun { get; set; }
 
+    partial void OnSelectedRunChanged(CollectionRunRow? value)
+    {
+        _ = RefreshQualityAsync(CancellationToken.None);
+    }
+
     public ObservableCollection<DataFacetItem> Facets { get; } = [];
 
     public ObservableCollection<QualityAuditIssueRow> QualityIssues { get; } = [];
@@ -146,10 +151,10 @@ public sealed partial class AuditViewModel(
         StatusText = "正在刷新审计中心";
         try
         {
+            await RefreshRunsAsync(cancellationToken).ConfigureAwait(true);
             await RefreshQualityAsync(cancellationToken).ConfigureAwait(true);
             await RefreshRealtimeQualityAsync(cancellationToken).ConfigureAwait(true);
             await RefreshReconciliationAsync(cancellationToken).ConfigureAwait(true);
-            await RefreshRunsAsync(cancellationToken).ConfigureAwait(true);
             RefreshFacets();
             StatusText = "审计中心已刷新";
         }
@@ -241,7 +246,9 @@ public sealed partial class AuditViewModel(
     {
         try
         {
-            var report = await qualityAuditService.LoadLatestAsync(cancellationToken).ConfigureAwait(true);
+            var report = SelectedRun is null
+                ? await qualityAuditService.LoadLatestAsync(cancellationToken).ConfigureAwait(true)
+                : await qualityAuditService.LoadForRunAsync(SelectedRun.Id, cancellationToken).ConfigureAwait(true);
             QualityIssues.Clear();
             if (report is null)
             {

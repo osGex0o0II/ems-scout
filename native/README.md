@@ -26,7 +26,26 @@ Use the packaged Windows App SDK launch path:
 npm run native:run
 ```
 
-Do not validate the app by directly running `bin\...\EmsScout.Desktop.exe`. The direct unpackaged executable can fail Windows App SDK runtime initialization without package identity. The `native:run` script closes any previous native app process, then launches through `dotnet run` with the MSIX package profile.
+Do not validate the app by directly running `bin\...\EmsScout.Desktop.exe`. The direct unpackaged executable can fail Windows App SDK runtime initialization without package identity. The `native:run` script closes any previous native app process, then launches the currently installed MSIX through `shell:AppsFolder`, the same package identity used by the desktop shortcut.
+
+## MSIX lifecycle
+
+The supported distribution format is the versioned MSIX produced by `scripts/native-package.ps1`. Artifacts are isolated
+under `out/native-packages/<version>/` and include the main package, architecture dependencies, certificate material, and
+`package-manifest.json`.
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/native-package.ps1 -Version 1.0.7.0 -CertificateThumbprint <thumbprint>
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/native-install.ps1 -PackageDirectory out/native-packages/1.0.7.0
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/native-update.ps1 -PackageDirectory out/native-packages/1.0.7.0
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/native-uninstall.ps1
+```
+
+For a development certificate, run the first install or update from an elevated PowerShell so Windows AppX deployment
+can trust the signer in the machine certificate stores. The installer fails fast if that trust is missing. Update rejects
+equal or lower versions and verifies the user settings hash. Uninstall removes the app registration and desktop shortcut
+but preserves `%LOCALAPPDATA%\EMS Scout`, repository `out`, and `data`; `-PurgeData` requires typing `PURGE` and is the
+only path that removes the user-data directory.
 
 ## Validate
 

@@ -92,10 +92,40 @@ public sealed class AppSettingsService
         output.CheckLoginBeforeCollection = true;
         output.LogLevel = NormalizeOption(output.LogLevel, "INFO", "ERROR", "INFO", "DEBUG");
         output.Theme = NormalizeOption(output.Theme, "system", "system", "light", "dark");
+        output.PageTransitionStyle = NormalizeOption(output.PageTransitionStyle, "fade", "none", "fade", "slide");
+        if (output.WindowPlacement is not null)
+        {
+            output.WindowPlacement.Width = Math.Max(1, output.WindowPlacement.Width);
+            output.WindowPlacement.Height = Math.Max(1, output.WindowPlacement.Height);
+        }
+        output.TemperatureWarningThreshold = double.IsFinite(output.TemperatureWarningThreshold)
+            ? Math.Clamp(output.TemperatureWarningThreshold, 0, 50)
+            : 2.0;
+        output.OfflineStatusColor = NormalizeHexColor(output.OfflineStatusColor, "#808080");
+        output.TemperatureWarningColor = NormalizeHexColor(output.TemperatureWarningColor, "#D97706");
         return output;
     }
 
-    private static string NormalizeOption(string value, string fallback, params string[] allowed)
+    private static string NormalizeHexColor(string? value, string fallback)
+    {
+        var candidate = value?.Trim();
+        if (candidate is null || (candidate.Length != 7 && candidate.Length != 9) || candidate[0] != '#')
+        {
+            return fallback;
+        }
+
+        for (var index = 1; index < candidate.Length; index++)
+        {
+            if (!Uri.IsHexDigit(candidate[index]))
+            {
+                return fallback;
+            }
+        }
+
+        return candidate.ToUpperInvariant();
+    }
+
+    private static string NormalizeOption(string? value, string fallback, params string[] allowed)
     {
         return allowed.FirstOrDefault(item => item.Equals(value, StringComparison.OrdinalIgnoreCase)) ?? fallback;
     }

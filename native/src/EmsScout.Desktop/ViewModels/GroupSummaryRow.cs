@@ -76,7 +76,7 @@ public sealed class GroupSummaryRow(
 
     public int ItemCount { get; } = itemCount;
 
-    public string ItemCountText => ItemCount.ToString("N0");
+    public string ItemCountText => $"{ItemCount:N0} 个范围";
 
     public int OnCount { get; } = 0;
 

@@ -91,6 +91,21 @@ public sealed class GroupSettingsUiContractTests
     }
 
     [Fact]
+    public void AreaGroupsPageKeepsEditorContentResponsiveAndLabelsMemberRanges()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "AreasPage.xaml"));
+        var row = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "GroupSummaryRow.cs"));
+
+        Assert.Contains("ColumnDefinition Width=\"0.85*\" MinWidth=\"260\"", xaml);
+        Assert.DoesNotContain("MinWidth=\"620\"", xaml);
+        Assert.Contains("HorizontalScrollBarVisibility=\"Disabled\"", xaml);
+        Assert.Contains("Grid.Row=\"2\" Grid.Column=\"3\"", xaml);
+        Assert.Contains("VerticalAlignment=\"Top\"", xaml);
+        Assert.Contains("个范围", row);
+    }
+
+    [Fact]
     public void WatchIncidentNavigationUsesExactDeviceScope()
     {
         var root = LocateRepositoryRoot();
