@@ -8,6 +8,32 @@ public sealed class RealtimeLatestJsonSourceTests
     private static readonly string[] Buildings = ["1号", "2号", "3号", "4号", "5号", "6号"];
 
     [Fact]
+    public async Task UsesCaptureTimestampFromJsonInsteadOfFileWriteTime()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-realtime-source-tests", Guid.NewGuid().ToString("N"));
+        var outDirectory = Path.Combine(root, "out");
+        Directory.CreateDirectory(outDirectory);
+        var path = Path.Combine(outDirectory, "realtime_1号_latest.json");
+        await File.WriteAllTextAsync(path, """
+            {
+              "capturedAt": "2026-08-31T04:10:00.000Z",
+              "rows": [{
+                "building": "1号",
+                "name": "1-0101-KT",
+                "fields": { "集控锁定": "开启" }
+              }]
+            }
+            """);
+        File.SetLastWriteTimeUtc(path, DateTimeOffset.Parse("2026-08-31T01:00:00Z").UtcDateTime);
+
+        var source = new RealtimeLatestJsonSource(root, outDirectory);
+
+        var details = await source.LoadAsync(["1号"]);
+
+        Assert.Equal(DateTimeOffset.Parse("2026-08-31T04:10:00.000Z"), details.Rows[0].SourceUpdatedAt);
+    }
+
+    [Fact]
     public async Task LoadsRealtimeLatestFilesWithSelfConsistentCounts()
     {
         var source = CurrentRealtimeSource();

@@ -26,7 +26,8 @@ public sealed class DashboardOverviewServiceTests
     [Fact]
     public async Task ExcludesVirtualRealtimeRowsFromInventorySummary()
     {
-        var regular = TestDevice(1, isVirtual: false);
+        var collectedAt = new DateTimeOffset(2026, 9, 8, 8, 41, 40, TimeSpan.FromHours(8));
+        var regular = TestDevice(1, isVirtual: false, collectedAt);
         var virtualRow = TestDevice(-10, isVirtual: true);
         var repository = new CapturingDeviceRepository(
             new DeviceListResult(
@@ -41,11 +42,28 @@ public sealed class DashboardOverviewServiceTests
 
         Assert.Equal(1, overview.Summary.Total);
         Assert.Equal("1", overview.Metrics.Single(metric => metric.Label == "总设备数").Value);
-        Assert.DoesNotContain("实时纳管", overview.Metrics.Single(metric => metric.Label == "总设备数").Detail);
+        Assert.Equal("2026-09-08 08:41:40", overview.Metrics.Single(metric => metric.Label == "总设备数").Detail);
     }
 
     [Fact]
-    public async Task LabelsHistoricalInventoryMetricAsHistorical()
+    public async Task DisplaysLatestCollectedAtForSelectedInventoryMetric()
+    {
+        var collectedAt = DateTimeOffset.Parse("2026-09-09T08:09:10+08:00");
+        var device = TestDevice(42, isVirtual: false, collectedAt);
+        var repository = new CapturingDeviceRepository(
+            new DeviceListResult(1, [device], DeviceFacets.From([device])));
+        var service = new DashboardOverviewService(
+            repository,
+            new FailingAreaGroupRepository());
+
+        var overview = await service.LoadAsync(runId: 42);
+
+        var totalMetric = overview.Metrics.Single(metric => metric.Label == "总设备数");
+        Assert.Equal(collectedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"), totalMetric.Detail);
+    }
+
+    [Fact]
+    public async Task UsesFallbackWhenSelectedInventoryHasNoCollectionTime()
     {
         var repository = new CapturingDeviceRepository();
         var service = new DashboardOverviewService(
@@ -55,11 +73,11 @@ public sealed class DashboardOverviewServiceTests
         var overview = await service.LoadAsync(runId: 42);
 
         var totalMetric = overview.Metrics.Single(metric => metric.Label == "总设备数");
-        Assert.Contains("历史批次", totalMetric.Detail);
-        Assert.DoesNotContain("当前完整采集批次", totalMetric.Detail);
+        Assert.Equal("暂无采集时间", totalMetric.Detail);
+        Assert.DoesNotContain("历史批次", totalMetric.Detail);
     }
 
-    private static DeviceRecord TestDevice(long id, bool isVirtual)
+    private static DeviceRecord TestDevice(long id, bool isVirtual, DateTimeOffset? collectedAt = null)
     {
         return new DeviceRecord(
             Id: id,
@@ -80,7 +98,8 @@ public sealed class DashboardOverviewServiceTests
             Indicator: string.Empty,
             CommunicationText: "关机",
             CommunicationState: DeviceCommunicationState.Stopped,
-            IsVirtual: isVirtual);
+            IsVirtual: isVirtual,
+            CollectedAt: collectedAt);
     }
 
     private sealed class CapturingDeviceRepository(DeviceListResult? result = null) : IDeviceReadRepository

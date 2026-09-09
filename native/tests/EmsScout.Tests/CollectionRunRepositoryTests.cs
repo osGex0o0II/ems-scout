@@ -28,6 +28,44 @@ public sealed class CollectionRunRepositoryTests
     }
 
     [Fact]
+    public async Task ComparesDuplicateNamesByStableLocationOccurrence()
+    {
+        var databasePath = CreateDatabase();
+        await ExecuteAsync(databasePath, """
+            UPDATE cards SET indoor = '28' WHERE id = 1;
+            INSERT INTO cards (id, page_id, name, switch, mode, indoor, set_temp, fan, indicator, comm)
+            VALUES (2, 1, '1-0101-KT', 'OFF', '制冷', '27', '25', '中', 'green.png', '关机');
+            INSERT INTO run_cards (id, run_id, run_page_id, source_card_id, name, switch, mode, indoor, set_temp, fan, indicator, comm)
+            VALUES (2, 1, 21, 2, '1-0101-KT', 'OFF', '制冷', '27', '25', '中', 'green.png', '关机');
+            """);
+
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+        var comparison = await repository.CompareCurrentAsync(1);
+
+        Assert.Equal(2, comparison.SnapshotCardCount);
+        Assert.Equal(2, comparison.CurrentCardCount);
+        Assert.Equal(1, comparison.ChangedCount);
+    }
+
+    [Fact]
+    public async Task DoesNotTreatDuplicateCardOrderAsFieldChanges()
+    {
+        var databasePath = CreateDatabase();
+        await ExecuteAsync(databasePath, """
+            UPDATE cards SET indoor = '27' WHERE id = 1;
+            INSERT INTO cards (id, page_id, name, switch, mode, indoor, set_temp, fan, indicator, comm)
+            VALUES (2, 1, '1-0101-KT', 'OFF', '制冷', '26', '25', '中', 'green.png', '关机');
+            INSERT INTO run_cards (id, run_id, run_page_id, source_card_id, name, switch, mode, indoor, set_temp, fan, indicator, comm)
+            VALUES (2, 1, 21, 2, '1-0101-KT', 'OFF', '制冷', '27', '25', '中', 'green.png', '关机');
+            """);
+
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+        var comparison = await repository.CompareCurrentAsync(1);
+
+        Assert.Equal(0, comparison.ChangedCount);
+    }
+
+    [Fact]
     public async Task ListsAndMarksCollectionRuns()
     {
         var databasePath = CreateDatabase();
@@ -109,6 +147,7 @@ public sealed class CollectionRunRepositoryTests
         Assert.Equal(1L, await ScalarLongAsync(verify, "SELECT COUNT(*) FROM cards WHERE name = '1-0101-KT'"));
         Assert.Equal(1L, await ScalarLongAsync(verify, "SELECT COUNT(*) FROM cards WHERE name = '2-0201-KT'"));
         Assert.Equal(1L, await ScalarLongAsync(verify, "SELECT COUNT(*) FROM collection_runs WHERE status = 'backup' AND note LIKE '恢复批次 #1 前自动备份%'"));
+        Assert.Equal(1L, await ScalarLongAsync(verify, "SELECT COUNT(*) FROM collection_runs WHERE status = 'backup' AND source = '手动恢复' AND restored_from_run_id = 1"));
         Assert.Equal(2L, await ScalarLongAsync(verify, $"SELECT COUNT(*) FROM run_cards WHERE run_id = {result.BackupRunId}"));
     }
 

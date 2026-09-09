@@ -21,6 +21,7 @@ public sealed class DashboardUiContractTests
             "MainWindow.xaml"));
 
         Assert.Contains("PlaceholderText=\"{x:Bind ViewModel.CurrentBatchTimestamp, Mode=OneWay}\"", home);
+        Assert.DoesNotContain("ViewModel.PageStatus", home);
         Assert.DoesNotContain("Text=\"历史批次\"", home);
         Assert.Contains("Background=\"{ThemeResource ApplicationPageBackgroundThemeBrush}\"", mainWindow);
         Assert.DoesNotContain("PaneBackground=", mainWindow);

@@ -16,13 +16,16 @@ if ([version]$installed.Version -ge $targetVersion) {
     throw "Update version $targetVersion must be greater than installed version $($installed.Version)."
 }
 
+Stop-NativeDesktopProcess
+
+# Closing the WinUI window may persist the latest placement. Snapshot after the
+# graceful shutdown so the update guard detects external changes, not our own close.
 $settingsPath = Join-Path (Get-NativeUserDataPath) 'settings.json'
 $settingsHash = $null
 if (Test-Path -LiteralPath $settingsPath -PathType Leaf) {
     $settingsHash = (Get-FileHash -LiteralPath $settingsPath -Algorithm SHA256).Hash
 }
 
-Stop-NativeDesktopProcess
 $packageRoot = Resolve-NativePackageDirectory $PackageDirectory
 $certificatePath = Join-Path $packageRoot $manifest.CertificateFile
 $rootCertificatePath = $null

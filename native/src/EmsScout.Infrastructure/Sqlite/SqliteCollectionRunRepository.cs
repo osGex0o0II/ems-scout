@@ -316,13 +316,21 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
     {
         var snapshot = await LoadCardSignaturesAsync(connection, runId, snapshot: true, cancellationToken).ConfigureAwait(false);
         var current = await LoadCardSignaturesAsync(connection, runId, snapshot: false, cancellationToken).ConfigureAwait(false);
-        return snapshot
-            .Keys
-            .Intersect(current.Keys, StringComparer.OrdinalIgnoreCase)
-            .Count(key => !string.Equals(snapshot[key], current[key], StringComparison.Ordinal));
+        var changed = 0;
+        foreach (var key in snapshot.Keys.Intersect(current.Keys, StringComparer.OrdinalIgnoreCase))
+        {
+            var snapshotCounts = CountSignatures(snapshot[key]);
+            var currentCounts = CountSignatures(current[key]);
+            var exactMatches = snapshotCounts.Sum(pair => Math.Min(pair.Value, currentCounts.GetValueOrDefault(pair.Key)));
+            var remainingSnapshot = snapshot[key].Count - exactMatches;
+            var remainingCurrent = current[key].Count - exactMatches;
+            changed += Math.Min(remainingSnapshot, remainingCurrent);
+        }
+
+        return changed;
     }
 
-    private static async Task<Dictionary<string, string>> LoadCardSignaturesAsync(
+    private static async Task<Dictionary<string, List<string>>> LoadCardSignaturesAsync(
         SqliteConnection connection,
         long runId,
         bool snapshot,
@@ -331,33 +339,50 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         await using var command = connection.CreateCommand();
         command.CommandText = snapshot
             ? """
-              SELECT sa.building, c.name, c.switch, c.mode, c.indoor, c.set_temp, c.fan, c.indicator, c.comm
+              SELECT sa.building, sa.text, p.page_name, c.name, c.id,
+                     c.switch, c.mode, c.indoor, c.set_temp, c.fan, c.indicator, c.comm
               FROM run_cards c
               JOIN run_pages p ON p.id = c.run_page_id AND p.run_id = c.run_id
               JOIN run_sub_areas sa ON sa.id = p.run_sub_area_id AND sa.run_id = c.run_id
               WHERE c.run_id = $run_id
+              ORDER BY c.id
               """
             : """
-              SELECT sa.building, c.name, c.switch, c.mode, c.indoor, c.set_temp, c.fan, c.indicator, c.comm
+              SELECT sa.building, sa.text, p.page_name, c.name, c.id,
+                     c.switch, c.mode, c.indoor, c.set_temp, c.fan, c.indicator, c.comm
               FROM cards c
               JOIN pages p ON p.id = c.page_id
               JOIN sub_areas sa ON sa.id = p.sub_area_id
+              ORDER BY c.id
               """;
         command.Parameters.AddWithValue("$run_id", runId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var rows = new List<(string BaseKey, string Signature)>();
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             var building = reader.IsDBNull(0) ? string.Empty : reader.GetString(0);
-            var name = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
-            var key = $"{building}\u001F{name}";
-            var values = Enumerable.Range(2, 7)
+            var subArea = reader.IsDBNull(1) ? string.Empty : reader.GetString(1);
+            var page = reader.IsDBNull(2) ? string.Empty : reader.GetString(2);
+            var name = reader.IsDBNull(3) ? string.Empty : reader.GetString(3);
+            var baseKey = string.Join("\u001F", building, subArea, page, name);
+            var values = Enumerable.Range(5, 7)
                 .Select(index => reader.IsDBNull(index) ? string.Empty : reader.GetString(index));
-            result[key] = string.Join("\u001F", values);
+            rows.Add((baseKey, string.Join("\u001F", values)));
+        }
+
+        var result = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var group in rows.GroupBy(row => row.BaseKey, StringComparer.OrdinalIgnoreCase))
+        {
+            result[group.Key] = group.Select(row => row.Signature).ToList();
         }
 
         return result;
     }
+
+    private static Dictionary<string, int> CountSignatures(IEnumerable<string> signatures) =>
+        signatures
+            .GroupBy(signature => signature, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.Ordinal);
 
     private static async Task<string?> GetRestoreBlockingReasonAsync(
         SqliteConnection connection,
@@ -490,14 +515,15 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             insertRun.CommandText = """
                 INSERT INTO collection_runs
                     (run_key, started_at, completed_at, imported_at, status, scope, buildings,
-                     card_count, on_count, off_count, offline_count, unknown_count, note)
+                     card_count, on_count, off_count, offline_count, unknown_count, note,
+                     source, data_version, operator_name, restored_from_run_id)
                 SELECT $run_key, $now, $now, $now, 'backup', 'full', $buildings,
                        COUNT(*),
                        SUM(comm = '开机' OR switch = 'ON'),
                        SUM(comm = '关机' OR switch = 'OFF'),
                        SUM(comm = '离线'),
                        SUM(COALESCE(comm, '') NOT IN ('开机', '关机', '离线') AND COALESCE(switch, '') NOT IN ('ON', 'OFF')),
-                       $note
+                       $note, '手动恢复', $data_version, '本机', $restored_from_run_id
                 FROM cards
                 RETURNING id;
                 """;
@@ -505,6 +531,8 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             insertRun.Parameters.AddWithValue("$now", now);
             insertRun.Parameters.AddWithValue("$buildings", JsonSerializer.Serialize(buildings));
             insertRun.Parameters.AddWithValue("$note", $"恢复批次 #{targetRun.Id} 前自动备份");
+            insertRun.Parameters.AddWithValue("$data_version", targetRun.DataVersion);
+            insertRun.Parameters.AddWithValue("$restored_from_run_id", targetRun.Id);
             backupRunId = Convert.ToInt64(
                 await insertRun.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
                 System.Globalization.CultureInfo.InvariantCulture);

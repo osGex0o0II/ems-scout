@@ -27,18 +27,21 @@ public sealed partial class AuditPage : Page
 
     private async void RestoreRun_Click(object sender, RoutedEventArgs e)
     {
-        if (!ViewModel.CanRestoreSelectedRun || ViewModel.SelectedRun is null)
+        if (!ViewModel.CanRestoreSelectedRun || ViewModel.SelectedRun is null || ViewModel.SelectedComparison is null)
         {
             return;
         }
 
         var run = ViewModel.SelectedRun;
+        var comparison = ViewModel.SelectedComparison;
         var scopeText = run.Scope.Equals("partial", StringComparison.OrdinalIgnoreCase)
             ? $"只会替换 {string.Join("、", run.Buildings)} 的当前数据，其他楼栋保持不变。"
             : "将替换全部楼栋的当前数据。";
         var result = await ConfirmAsync(
             "恢复历史批次",
-            $"将把批次 #{run.Id} 恢复为当前数据，共 {run.CardCount:N0} 张卡片。\n\n{scopeText}\n恢复前会自动备份当前数据；备注和标签不会被删除。",
+            $"将把批次 #{run.Id} 恢复为当前数据，共 {run.CardCount:N0} 张卡片。\n\n" +
+            $"对比结果：历史 {comparison.SnapshotCardCount:N0} 张，当前 {comparison.CurrentCardCount:N0} 张，新增 {comparison.AddedCount:N0}，缺失 {comparison.MissingCount:N0}，字段差异 {comparison.ChangedCount:N0}。\n\n" +
+            $"{scopeText}\n恢复前会自动备份当前数据；备注和标签不会被删除。",
             "恢复");
         if (result)
         {

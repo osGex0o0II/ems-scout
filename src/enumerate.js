@@ -4,7 +4,7 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
-const { BLDG_META, checkCardQuality, getZone, assessBuildingIdentity, labelSamePageDuplicateCards, classifyPersistentDeviceAnomalyPage, normalizeKnownSourceDefects, classifyKnownMissingIndicatorPage, isAcceptedCaptureQualityReason } = require('./rules');
+const { BLDG_META, checkCardQuality, getZone, assessBuildingIdentity, labelSamePageDuplicateCards, classifyPersistentDeviceAnomalyPage, normalizeKnownSourceDefects, classifyKnownMissingIndicatorPage, isAcceptedCaptureQualityReason, isPlaceholderCardName } = require('./rules');
 const { validateEnumData, formatValidation } = require('./enum-validator');
 const { log: loggerLog, setLevel, setCategories, enableFileLog, close, LEVELS, CATEGORIES } = require('./logger');
 const { isAllowedEmsUrl, isAllowedCdpUrl, sanitizeUrlForDisplay } = require('./connection-policy');
@@ -49,6 +49,10 @@ const DIAGNOSE_INTERVAL = 5000; // ms
 const NETWORK_LOG_MAX = 500; // max network entries to keep in memory
 
 const W = { BM_CLICK: 500 };
+
+// Updated before each floor/tab so fatal errors identify the page that failed.
+let ACTIVE_CAPTURE_CONTEXT = 'startup';
+let ACTIVE_DIAG_INTERVAL = null;
 
 const BUILDINGS = [
   { menuMatch: '1号', building: '1号' },
@@ -119,6 +123,16 @@ function saveOutput(buildingResult) {
 
 // ===== Helpers =====
 function pause(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function evaluatePage(page, pageFunction, arg, description) {
+  try {
+    return await page.evaluate(pageFunction, arg);
+  } catch (error) {
+    const message = error && error.message ? error.message : String(error);
+    loggerLog(LEVELS.ERROR, 'CRASH', `PAGE_EVALUATE_FAILED ${ACTIVE_CAPTURE_CONTEXT} ${description}: ${message}`);
+    throw error;
+  }
+}
 
 // ===== Enhanced Quality Assessment =====
 function assessDataQuality(cards) {
@@ -233,13 +247,6 @@ async function qualityCheckWithProgressiveRetry(page, extractCards, description,
       return { data, qc: { ...qc, ok: true, deviceAnomaliesPreserved: true }, reason: 'device_anomalies_preserved', attempt: attempt + 1 };
     }
 
-    // Template values early exit: if template detected on first attempt, accept immediately
-    if (qc.uniformTemplate && attempt === 0) {
-      loggerLog(LEVELS.WARN, 'QUALITY', `${description} template values detected on first attempt, accepting as unconfirmed: ${qc.details}`);
-      data.qualityReason = 'template_values_unconfirmed';
-      return { data, qc: { ...qc, ok: true, templateValuesUnconfirmed: true }, reason: 'template_values_unconfirmed', attempt: attempt + 1 };
-    }
-
     loggerLog(LEVELS.DEBUG, 'QUALITY', `${description} attempt ${attempt + 1} failed: ${qc.details}`, { n: data.cards.length });
 
     if (attempt < maxAttempts - 1) {
@@ -256,36 +263,22 @@ async function adaptivePolling(page, extractCards, deadline, description) {
   const MIN_POLL_INTERVAL = 200;
   const MAX_POLL_INTERVAL = 3000;
   const QUALITY_IMPROVEMENT_THRESHOLD = 0.1;
-  const TEMPLATE_PAGE_CAP_MS = 8000; // Template pages get max 8s, not 45s
-
   let lastQualityScore = 0;
   let pollInterval = MIN_POLL_INTERVAL;
   let prevOfflineTemplate = { signature: '', rounds: 0 };
   let prevDeviceAnomaly = { signature: '', rounds: 0 };
-  let initialTemplateDetected = false;
-  let effectiveDeadline = deadline;
   let lastExtractedData = null;
-  let lastExtractedQc = null;
 
-  while (Date.now() - startTime < effectiveDeadline) {
+  while (Date.now() - startTime < deadline) {
     const data = await extractCards();
     const qc = checkCardQuality(data.cards, data);
     const quality = assessDataQuality(data.cards);
     lastExtractedData = data;
-    lastExtractedQc = qc;
     const offlineTemplate = isOfflineTemplateStable(data.cards, qc, prevOfflineTemplate, Date.now() - startTime);
     prevOfflineTemplate = { signature: offlineTemplate.signature, rounds: offlineTemplate.rounds };
     const deviceAnomaly = persistentDeviceAnomalyState(data.cards, data, prevDeviceAnomaly);
     prevDeviceAnomaly = { signature: deviceAnomaly.signature, rounds: deviceAnomaly.rounds };
     const knownMissingIndicator = classifyKnownMissingIndicatorPage(data.cards, data);
-
-    // Template page early cap: if first extraction shows template values,
-    // cap polling at TEMPLATE_PAGE_CAP_MS instead of full deadline (45s).
-    if (qc.uniformTemplate && !initialTemplateDetected) {
-      initialTemplateDetected = true;
-      effectiveDeadline = Math.min(deadline, startTime + TEMPLATE_PAGE_CAP_MS);
-      loggerLog(LEVELS.DEBUG, 'QUALITY', `${description} template detected, capping poll to ${TEMPLATE_PAGE_CAP_MS}ms`);
-    }
 
     if (isAcceptableCapture(data, qc, quality)) {
       loggerLog(LEVELS.DEBUG, 'QUALITY', `${description} OK after ${Date.now()-startTime}ms: ${qc.details}`);
@@ -317,7 +310,7 @@ async function adaptivePolling(page, extractCards, deadline, description) {
     // Accept only when communication state is complete; real temperature alone
     // is not enough because indicator images can lag behind SVG text.
     if (data && data.cards && data.cards.length > 0) {
-      const phCount = data.cards.filter(c => !c.name || c.name === '0-0001-KT').length;
+      const phCount = data.cards.filter(c => !c.name || isPlaceholderCardName(c)).length;
       // Non-template all-offline pages are a genuine comm state. Template-looking
       // offline pages require the stability window above before acceptance.
       if (phCount === 0 && data.cards.every(c => c.comm === '离线') && !qc.uniformTemplate) {
@@ -341,11 +334,8 @@ async function adaptivePolling(page, extractCards, deadline, description) {
   }
 
   log(`      ${description} timeout after ${Date.now()-startTime}ms`);
-  // If template was detected and we have data, accept with template_values_unconfirmed
-  if (initialTemplateDetected && lastExtractedData) {
-    lastExtractedData.qualityReason = 'template_values_unconfirmed';
-    log(`      ${description} accepting template data as template_values_unconfirmed`);
-    return { data: lastExtractedData, qc: lastExtractedQc, quality: null, reason: 'template_values_unconfirmed' };
+  if (lastExtractedData?.cards?.length) {
+    log(`      ${description} timeout with unaccepted data; quality gate will block this page`);
   }
   return { data: null, qc: null, quality: null, reason: 'timeout' };
 }
@@ -980,9 +970,9 @@ async function waitForReady(page, maxRetries) {
   maxRetries = maxRetries || 10;
   for (let i = 0; i < maxRetries; i++) {
     try {
-      const ok = await page.evaluate(() => window.__ems && window.__ems.isReady());
+      const ok = await evaluatePage(page, () => window.__ems && window.__ems.isReady(), undefined, 'isReady');
       if (ok) return true;
-      const hasHelper = await page.evaluate(() => !!window.__ems).catch(() => false);
+      const hasHelper = await evaluatePage(page, () => !!window.__ems, undefined, 'hasHelpers').catch(() => false);
       if (!hasHelper) {
         loggerLog(LEVELS.DEBUG, 'CRASH', `__ems missing in waitForReady — re-injecting`);
         await injectHelpers(page).catch(() => {});
@@ -999,16 +989,17 @@ async function waitForLoadedCards(page, opts = {}) {
   for (let i = 0; i < maxRetries; i++) {
     let result;
     try {
-      result = await page.evaluate(() => {
+      result = await evaluatePage(page, () => {
         if (!window.__ems || !window.__ems.extractCards) return { ok: false, helperMissing: true };
         const d = window.__ems.extractCards();
         if (!d.cards || d.cards.length === 0) return { ok: false, count: 0 };
-        const hasReal = d.cards.some(c => c.name && c.name !== '0-0001-KT');
+        const isPlaceholder = c => /^0-0001-KT(?:#\d+)?$/.test(String(c.name || '').trim());
+        const hasReal = d.cards.some(c => c.name && !isPlaceholder(c));
         const switchLoaded = d.cards.some(c => c.switch !== '-');
         const withComm = d.cards.filter(c => c.comm === '开机' || c.comm === '关机' || c.comm === '离线').length;
         const allOffline = d.cards.length >= 2 && d.cards.every(c => c.comm === '离线');
-        return { ok: hasReal, count: d.cards.length, real: d.cards.filter(c => c.name && c.name !== '0-0001-KT').length, switchLoaded, withComm, allOffline };
-      });
+        return { ok: hasReal, count: d.cards.length, real: d.cards.filter(c => c.name && !isPlaceholder(c)).length, switchLoaded, withComm, allOffline };
+      }, undefined, 'extractLoadedCards');
     } catch {
       await new Promise(r => setTimeout(r, waitMs));
       continue;
@@ -1061,8 +1052,9 @@ function pageFromData(pageName, data, extra = {}) {
     ? (knownMissingIndicator.intermittent ? 'known_intermittent_indicator_missing' : 'known_source_indicator_missing')
     : (extra.qualityReason || data.qualityReason ||
       (qc.ok ? 'quality_pass' :
-        (stableOfflineTemplate ? 'offline_template_stable' :
-          (persistentAnomaly.eligible ? 'device_anomalies_preserved' : ''))));
+        (qc.uniformTemplate ? 'template_values_unconfirmed' :
+          (stableOfflineTemplate ? 'offline_template_stable' :
+            (persistentAnomaly.eligible ? 'device_anomalies_preserved' : '')))));
   return {
     page: pageName,
     count: normalizedCards.length,
@@ -1123,7 +1115,7 @@ function auditCollectedOutput(output) {
 }
 
 async function readPageDataSignal(page) {
-  return page.evaluate(() => {
+  return evaluatePage(page, () => {
     const w = document.querySelector('.pi-graphics-configuration-svg-new');
     const vue = w && w.__vue__;
     if (vue) {
@@ -1138,7 +1130,7 @@ async function readPageDataSignal(page) {
       c.mode || '', c.fan || '', c.comm || '',
     ].join('|')).join('||');
     return { mode: 'svg', count: cards.length, signature };
-  }).catch(() => ({ mode: 'none', count: -1, signature: '' }));
+  }, undefined, 'readPageDataSignal').catch(() => ({ mode: 'none', count: -1, signature: '' }));
 }
 
 // Wait until Vue/WebSocket data or SVG card data is stable.
@@ -1203,8 +1195,9 @@ async function waitForSvgStable(page, opts = {}) {
   let prevSnapshot = '';
   let stableCount = 0;
   for (let i = 0; i < maxRetries; i++) {
-    const indHrefs = await page.evaluate(() => window.__ems.checkSvgIndicators()).catch(() => []);
-    const snapshot = [...new Set(indHrefs)].sort().map(h => h.slice(0,8)).join(',');
+    const indHrefs = await evaluatePage(page, () => window.__ems && window.__ems.checkSvgIndicators
+      ? window.__ems.checkSvgIndicators() : [], undefined, 'checkSvgIndicators').catch(() => []);
+    const snapshot = [...new Set(indHrefs)].sort().map(h => h.slice(0, 8)).join(',');
     if (snapshot && snapshot === prevSnapshot) {
       stableCount++;
       if (stableCount >= 2) {
@@ -1217,18 +1210,44 @@ async function waitForSvgStable(page, opts = {}) {
     prevSnapshot = snapshot;
     await pause(waitMs);
   }
-  log(`      SVG_TIMEOUT (groups: ${prevSnapshot || 'none'}) — proceeding`);
+  if (!prevSnapshot) {
+    loggerLog(LEVELS.WARN, 'CRASH', `SVG_EMPTY_RECOVERY ${ACTIVE_CAPTURE_CONTEXT}: retrying after empty SVG`);
+    await injectHelpers(page).catch(() => {});
+    for (let i = 0; i < 5; i++) {
+      const indHrefs = await evaluatePage(page, () => window.__ems && window.__ems.checkSvgIndicators
+        ? window.__ems.checkSvgIndicators() : [], undefined, 'checkSvgIndicators-recovery').catch(() => []);
+      const snapshot = [...new Set(indHrefs)].sort().map(h => h.slice(0, 8)).join(',');
+      if (snapshot) {
+        loggerLog(LEVELS.INFO, 'ENUM', `SVG_RECOVERED ${ACTIVE_CAPTURE_CONTEXT} after ${(i + 1) * 200}ms`);
+        return true;
+      }
+      await pause(200);
+    }
+  }
+  loggerLog(LEVELS.WARN, 'CRASH', `SVG_TIMEOUT ${ACTIVE_CAPTURE_CONTEXT} groups=${prevSnapshot || 'none'} — proceeding best-effort`);
   return false;
 }
 
 async function waitForCaptureReady(page, opts = {}) {
   const ready = await waitForReady(page, opts.readyRetries || 10);
   if (!ready) return { ok: false, ready: false, cards: false, ws: false, svg: false };
-  const [cards, ws, svg] = await Promise.all([
+  let [cards, ws, svg] = await Promise.all([
     waitForLoadedCards(page, opts.cards || {}),
     waitForDataReady(page, opts.ws || {}),
     waitForSvgStable(page, opts.svg || {}),
   ]);
+  if (!svg) {
+    loggerLog(LEVELS.WARN, 'CRASH', `CAPTURE_READY_RETRY ${ACTIVE_CAPTURE_CONTEXT}: SVG readiness failed`);
+    await injectHelpers(page).catch(() => {});
+    [cards, ws, svg] = await Promise.all([
+      waitForLoadedCards(page, { maxRetries: 4, waitMs: 250 }),
+      waitForDataReady(page, { maxRetries: 6, waitMs: 250 }),
+      waitForSvgStable(page, { maxRetries: 8, waitMs: 250 }),
+    ]);
+  }
+  if (!svg) {
+    loggerLog(LEVELS.ERROR, 'CRASH', `CAPTURE_READY_FAILED ${ACTIVE_CAPTURE_CONTEXT}: SVG unavailable after recovery`);
+  }
   return { ok: Boolean(cards && ws && svg), ready: true, cards, ws, svg };
 }
 
@@ -1312,58 +1331,30 @@ async function healthCheck(page) {
 }
 
 async function recoverFromCrash(page, buildingName, partialResult) {
-  log('!!! PAGE CRASHED — auto-reloading...');
+  log(`!!! PAGE HEALTH CHECK FAILED for ${buildingName} — preserving the current EMS page and retrying...`);
   if (partialResult) {
     saveOutput(partialResult);
     log(`  Saved ${partialResult.subAreas.length} sub-areas`);
   }
-  // Reload page programmatically
-  try { await page.evaluate(() => location.reload()); } catch {}
-  await pause(5000);
-  await injectHelpers(page);
-  if (await waitForReady(page)) {
-    log('  Recovered successfully, resuming...');
-    return true;
-  }
-  // Auto-reload failed — fallback to manual
-  log('  Auto-reload failed. Please refresh Edge manually, then press Enter');
-  await new Promise(resolve => { process.stdin.once('data', resolve); });
-  await pause(2000);
-  await injectHelpers(page);
-  return await waitForReady(page);
+  await injectHelpers(page).catch(() => {});
+  return await waitForReady(page, 5);
 }
 
 async function clickMenu(page, menuMatch) {
   await closeModals(page);
-  const menuRe = new RegExp('^' + menuMatch);
-  // Try Playwright locator first
-  const items = page.locator('.ivu-menu-item');
-  const count = await items.count();
-  for (let i = 0; i < count; i++) {
-    const txt = (await items.nth(i).textContent()) || '';
-    if (menuRe.test(txt.trim()) && /楼|空调|开闭所|服务/.test(txt)) {
-      try {
-        await items.nth(i).click({ force: true, timeout: 5000 });
-        return txt.trim();
-      } catch {
-        // Fallback: native DOM click via evaluate
-        const clicked = await page.evaluate((match) => {
-          const r = new RegExp('^' + match);
-          const all = document.querySelectorAll('.ivu-menu-item');
-          for (const el of all) {
-            const t = el.textContent.trim();
-            if (r.test(t) && /楼|空调|开闭所|服务/.test(t)) {
-              el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-              return t;
-            }
-          }
-          return null;
-        }, menuMatch);
-        if (clicked) return clicked;
+  // Use a DOM event so CDP enumeration does not synthesize real mouse input
+  // that can activate the user's Edge window while the task runs in background.
+  return await evaluatePage(page, (match) => {
+    const r = new RegExp('^' + match);
+    for (const el of document.querySelectorAll('.ivu-menu-item')) {
+      const t = (el.textContent || '').trim();
+      if (r.test(t) && /楼|空调|开闭所|服务/.test(t)) {
+        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        return t;
       }
     }
-  }
-  return null;
+    return null;
+  }, menuMatch, 'clickMenu').catch(() => null);
 }
 
 async function clickMenuReady(page, menuMatch, opts = {}) {
@@ -1759,11 +1750,11 @@ async function main() {
     catch (e) { log('Cannot connect to Edge CDP at', sanitizeUrlForDisplay(CDP_URL)); process.exit(1); }
     context = browser.contexts()[0];
     const pages = context.pages();
-    page = pages.find(p => isEmsPageUrl(p.url())) || pages[0];
-    log('Page:', page.url());
-    if (!isEmsPageUrl(page.url())) {
-      await page.goto(EMS_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    page = pages.find(p => isEmsPageUrl(p.url()));
+    if (!page) {
+      throw new Error(`未找到已打开的 EMS 页面，请先在当前 Edge 中打开并登录 ${sanitizeUrlForDisplay(EMS_URL)}`);
     }
+    log('Page:', page.url());
     await page.waitForLoadState('networkidle').catch(() => pause(3000));
     await ensureLoggedInOrExit(page);
   } else {
@@ -1800,6 +1791,7 @@ async function main() {
         loggerLog(LEVELS.WARN, 'CRASH', `DIAG ISSUES: ${diag.issues.join(', ')}`);
       }
     }, DIAGNOSE_INTERVAL);
+    ACTIVE_DIAG_INTERVAL = diagInterval;
     loggerLog(LEVELS.DEBUG, 'CRASH', 'Self-diagnose mode active');
   }
 
@@ -1863,7 +1855,8 @@ async function main() {
 
     if (diagInterval) clearInterval(diagInterval);
     await browser.close();
-    const hasRealVerifyCards = snapshot.cards.some(c => c.name && c.name !== '0-0001-KT');
+    ACTIVE_DIAG_INTERVAL = null;
+    const hasRealVerifyCards = snapshot.cards.some(c => c.name && !isPlaceholderCardName(c));
     const fatalVerifyIssue = (diag.issues || []).some(issue => /Page not ready|Shadow DOM missing|no cards extracted|placeholder/i.test(issue));
     if (fatalVerifyIssue || snapshot.cardCount <= 0 || !hasRealVerifyCards) {
       log('Verify failed: live EMS page is not healthy enough for collection.');
@@ -2187,7 +2180,7 @@ async function main() {
         }
       }
       const total = saRes.pages.reduce((s, p) => s + (p.cards ? p.cards.length : 0), 0);
-      const placeholder = saRes.pages.reduce((s, p) => s + (p.cards ? p.cards.filter(c => c.name === '0-0001-KT').length : 0), 0);
+      const placeholder = saRes.pages.reduce((s, p) => s + (p.cards ? p.cards.filter(c => isPlaceholderCardName(c)).length : 0), 0);
       log(`  Total: ${total} cards (placeholder ${placeholder})`);
       recaptureResult.targets.push({ ...t, result: saRes });
     }
@@ -2205,6 +2198,7 @@ async function main() {
     for (const issue of qualityGateIssues.slice(0, 20)) {
       loggerLog(LEVELS.ERROR, 'QUALITY', `RECAPTURE QUALITY GATE FAIL ${issue.building} F${issue.floor} ${issue.subArea} ${issue.page}: ${issue.details} reason=${issue.reason}`);
     }
+    ACTIVE_DIAG_INTERVAL = null;
     await browser.close();
     if (targetErrors.length || qualityGateIssues.length) {
       if (targetErrors.length) log(`Recapture target failures: ${targetErrors.length}`);
@@ -2280,6 +2274,7 @@ async function main() {
 
     for (let saIdx = 0; saIdx < subAreas.length; saIdx++) {
       const target = subAreas[saIdx];
+      ACTIVE_CAPTURE_CONTEXT = `${bldg.building} F${target.floor} ${target.text || ''}`.trim();
       const visitKey = target.floor + '|' + target.x + '|' + target.y;
       if (visited.has(visitKey)) continue;
       visited.add(visitKey);
@@ -2358,6 +2353,7 @@ async function main() {
       // Collect default view FIRST, then click sub-tabs
       // Default view is often the first tab (e.g. 塔楼), sub-tab is the alternate (裙楼)
       const collectPage = async (prefix) => {
+        ACTIVE_CAPTURE_CONTEXT = `${bldg.building} F${target.floor} ${target.text || ''} ${prefix || 'default'}`.trim();
         const btns = await page.evaluate(() => window.__ems.findPageBtns());
         const results = [];
 
@@ -2973,7 +2969,19 @@ async function main() {
   log(`Done. ${totalCards} cards, ${totalSubAreas} sub-areas across ${allResults.length} buildings`);
 
   close();
+  if (diagInterval) clearInterval(diagInterval);
+  ACTIVE_DIAG_INTERVAL = null;
   await browser.close();
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+main().catch(async e => {
+  if (ACTIVE_DIAG_INTERVAL) {
+    clearInterval(ACTIVE_DIAG_INTERVAL);
+    ACTIVE_DIAG_INTERVAL = null;
+  }
+  const detail = e && e.stack ? e.stack : String(e);
+  loggerLog(LEVELS.ERROR, 'CRASH', `RUN_FAILED context=${ACTIVE_CAPTURE_CONTEXT} ${detail}`);
+  close();
+  console.error(detail);
+  process.exitCode = 1;
+});

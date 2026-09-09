@@ -48,10 +48,10 @@ public sealed class DataViewModel(
     private DataFilterOption? _selectedSetTemperature;
     private DataFilterOption? _selectedRealtimeLock;
     private DataFilterOption? _selectedArea;
-    private DataFilterOption? _selectedAreaGroup;
     private string _deviceNameText = string.Empty;
     private bool _isInitializing;
     private DataSourceOption? _selectedDataSource;
+    private readonly Dictionary<long, string> _areaGroupFilterValues = [];
 
     public ObservableCollection<DataDeviceRow> Devices { get; } = [];
 
@@ -76,8 +76,6 @@ public sealed class DataViewModel(
     public ObservableCollection<DataFilterOption> RealtimeLockOptions { get; } = [];
 
     public ObservableCollection<DataFilterOption> AreaOptions { get; } = [];
-
-    public ObservableCollection<DataFilterOption> AreaGroupOptions { get; } = [];
 
     public ObservableCollection<DataSourceOption> DataSources { get; } = [];
 
@@ -323,13 +321,6 @@ public sealed class DataViewModel(
         set => SetProperty(ref _selectedArea, value);
     }
 
-    public DataFilterOption? SelectedAreaGroup
-    {
-        get => _selectedAreaGroup;
-        set => SetProperty(ref _selectedAreaGroup, value);
-    }
-
-
     public async Task InitializeAsync(DataNavigationRequest? navigationRequest = null, CancellationToken cancellationToken = default)
     {
         if (_isInitializing)
@@ -496,36 +487,29 @@ public sealed class DataViewModel(
         var selectedSetTemperature = SelectedSetTemperature?.Value ?? string.Empty;
         var selectedRealtimeLock = SelectedRealtimeLock?.Value ?? string.Empty;
         var selectedArea = SelectedArea?.Value ?? string.Empty;
-        var selectedAreaGroup = SelectedAreaGroup?.Value ?? string.Empty;
 
         var groupSet = await areaGroupRepository.LoadAsync(cancellationToken).ConfigureAwait(true);
         var options = await repository.LoadFilterOptionsAsync(
             BuildQuery(limit: 1, offset: 0),
             cancellationToken).ConfigureAwait(true);
-        ReplaceAreaGroupOptions(AreaGroupOptions, groupSet.Groups, selectedAreaGroup);
-        ReplaceOptions(BuildingOptions, DataFilterOption.All("全部楼栋"), options.Buildings.Select(DataFilterOption.From), selectedBuilding);
-        ReplaceOptions(CommunicationOptions, DataFilterOption.All("全部开关机状态"), options.CommunicationStates.Select(DataFilterOption.From), selectedCommunication);
-        ReplaceOptions(FloorOptions, DataFilterOption.All("全部楼层"), options.Floors.Select(DataFilterOption.From), selectedFloor);
-        ReplaceOptions(ZuoOptions, DataFilterOption.All("全部座号"), options.Zuos.Select(DataFilterOption.From), selectedZuo);
-        ReplaceOptions(PageNameOptions, DataFilterOption.All("全部页面"), options.PageNames.Select(DataFilterOption.From), selectedPageName);
-        ReplaceOptions(ModeOptions, DataFilterOption.All("全部模式"), options.Modes.Select(DataFilterOption.From), selectedMode);
-        ReplaceOptions(FanOptions, DataFilterOption.All("全部风速"), options.Fans.Select(DataFilterOption.From), selectedFan);
-        ReplaceOptions(SetTemperatureOptions, DataFilterOption.All("全部设置温度"), options.SetTemperatures.Select(DataFilterOption.From), selectedSetTemperature);
-        ReplaceOptions(
-            RealtimeLockOptions,
-            DataFilterOption.All("全部集控锁定状态"),
-            (options.RealtimeLocks ?? []).Select(DataFilterOption.From),
-            selectedRealtimeLock);
         ReplaceOptions(
             AreaOptions,
-            DataFilterOption.All("全部区域"),
-            [
-                new DataFilterOption("公区", "公区", -1),
-                new DataFilterOption("非公区", "非公区", -1),
-                new DataFilterOption("未匹配", "未匹配", -1),
-            ],
+            DataFilterOption.All("全部"),
+            BuildAreaOptions(groupSet.Groups),
             selectedArea);
-
+        ReplaceOptions(BuildingOptions, DataFilterOption.All("全部"), options.Buildings.Select(DataFilterOption.From), selectedBuilding);
+        ReplaceOptions(CommunicationOptions, DataFilterOption.All("全部"), options.CommunicationStates.Select(DataFilterOption.From), selectedCommunication);
+        ReplaceOptions(FloorOptions, DataFilterOption.All("全部"), options.Floors.Select(DataFilterOption.From), selectedFloor);
+        ReplaceOptions(ZuoOptions, DataFilterOption.All("全部"), options.Zuos.Select(DataFilterOption.From), selectedZuo);
+        ReplaceOptions(PageNameOptions, DataFilterOption.All("全部"), options.PageNames.Select(DataFilterOption.From), selectedPageName);
+        ReplaceOptions(ModeOptions, DataFilterOption.All("全部"), options.Modes.Select(DataFilterOption.From), selectedMode);
+        ReplaceOptions(FanOptions, DataFilterOption.All("全部"), options.Fans.Select(DataFilterOption.From), selectedFan);
+        ReplaceOptions(SetTemperatureOptions, DataFilterOption.All("全部"), options.SetTemperatures.Select(DataFilterOption.From), selectedSetTemperature);
+        ReplaceOptions(
+            RealtimeLockOptions,
+            DataFilterOption.All("全部"),
+            (options.RealtimeLocks ?? []).Select(DataFilterOption.From),
+            selectedRealtimeLock);
         SelectedBuilding = SelectOption(BuildingOptions, selectedBuilding) ?? BuildingOptions.FirstOrDefault();
         SelectedCommunication = SelectOption(CommunicationOptions, selectedCommunication) ?? CommunicationOptions.FirstOrDefault();
         SelectedFloor = SelectOption(FloorOptions, selectedFloor) ?? FloorOptions.FirstOrDefault();
@@ -536,7 +520,6 @@ public sealed class DataViewModel(
         SelectedSetTemperature = SelectOption(SetTemperatureOptions, selectedSetTemperature) ?? SetTemperatureOptions.FirstOrDefault();
         SelectedRealtimeLock = SelectOption(RealtimeLockOptions, selectedRealtimeLock) ?? RealtimeLockOptions.FirstOrDefault();
         SelectedArea = SelectOption(AreaOptions, selectedArea) ?? AreaOptions.FirstOrDefault();
-        SelectedAreaGroup = SelectAreaGroupOption(selectedAreaGroup);
         CoerceZuoSelectionForBuilding();
     }
 
@@ -710,7 +693,6 @@ public sealed class DataViewModel(
         SelectedSetTemperature = SetTemperatureOptions.FirstOrDefault();
         SelectedRealtimeLock = RealtimeLockOptions.FirstOrDefault();
         SelectedArea = AreaOptions.FirstOrDefault();
-        SelectedAreaGroup = AreaGroupOptions.FirstOrDefault();
         await ApplyFiltersAsync(cancellationToken).ConfigureAwait(true);
     }
 
@@ -853,6 +835,7 @@ public sealed class DataViewModel(
 
     private DeviceQuery BuildQuery(int limit, int offset)
     {
+        var areaFilter = BuildAreaQuery(SelectedArea?.Value);
         return new DeviceQuery(
             Building: EmptyToNull(SelectedBuilding?.Value),
             CommunicationState: EmptyToNull(SelectedCommunication?.Value),
@@ -864,8 +847,8 @@ public sealed class DataViewModel(
             Fan: EmptyToNull(SelectedFan?.Value),
             SetTemperature: EmptyToNull(SelectedSetTemperature?.Value),
             RealtimeLock: EmptyToNull(SelectedRealtimeLock?.Value),
-            AreaType: EmptyToNull(SelectedArea?.Value),
-            MonitorGroupIds: EmptyToNull(SelectedAreaGroup?.Value),
+            AreaType: areaFilter.AreaType,
+            MonitorGroupIds: areaFilter.MonitorGroupIds,
             Limit: limit,
             Offset: offset,
             RunId: SelectedDataSource?.RunId);
@@ -897,10 +880,9 @@ public sealed class DataViewModel(
         DeviceNameText = request.SearchText;
         SelectedBuilding = SelectOption(BuildingOptions, request.Building) ?? SelectedBuilding;
         SelectedCommunication = SelectOption(CommunicationOptions, request.CommunicationState) ?? SelectedCommunication;
-        SelectedArea = SelectOption(AreaOptions, request.AreaType) ?? SelectedArea;
-        SelectedAreaGroup = request.AreaGroupId is null
-            ? AreaGroupOptions.FirstOrDefault()
-            : SelectAreaGroupOption(request.AreaGroupId.Value.ToString(CultureInfo.InvariantCulture));
+        SelectedArea = request.AreaGroupId is null
+            ? SelectAreaOption(request.AreaType) ?? SelectedArea
+            : SelectAreaOptionForGroupId(request.AreaGroupId.Value) ?? SelectedArea;
         SelectedFloor = SelectOption(FloorOptions, request.Floor) ?? FloorOptions.FirstOrDefault();
         SelectedPageName = SelectOption(PageNameOptions, request.PageName) ?? PageNameOptions.FirstOrDefault();
         SelectedZuo = SelectOption(ZuoOptions, request.Zuo) ?? ZuoOptions.FirstOrDefault();
@@ -917,17 +899,35 @@ public sealed class DataViewModel(
         return options.FirstOrDefault(option => string.Equals(option.Value, value, StringComparison.OrdinalIgnoreCase));
     }
 
-    private DataFilterOption? SelectAreaGroupOption(string value)
+    private DataFilterOption? SelectAreaOptionForGroupId(long groupId)
     {
-        var selected = SelectOption(AreaGroupOptions, value);
-        if (selected is not null || string.IsNullOrWhiteSpace(value))
-        {
-            return selected;
-        }
+        return _areaGroupFilterValues.TryGetValue(groupId, out var value)
+            ? SelectOption(AreaOptions, value)
+            : AreaOptions.FirstOrDefault();
+    }
 
-        var unavailable = new DataFilterOption(value, $"区域组 {value}（不可用）", 0);
-        AreaGroupOptions.Add(unavailable);
-        return unavailable;
+    private DataFilterOption? SelectAreaOption(string value)
+    {
+        var query = BuildAreaQuery(value);
+        var optionValue = query.AreaType switch
+        {
+            "公区" => "public",
+            "非公区" => "private",
+            _ => value,
+        };
+        return SelectOption(AreaOptions, optionValue);
+    }
+
+    private static (string? AreaType, string? MonitorGroupIds) BuildAreaQuery(string? value)
+    {
+        return value?.Trim() switch
+        {
+            "public" or "公区" => ("公区", null),
+            "private" or "非公区" => ("非公区", null),
+            var group when group?.StartsWith("group:", StringComparison.OrdinalIgnoreCase) == true
+                => (null, EmptyToNull(group["group:".Length..])),
+            _ => (null, null),
+        };
     }
 
     private void CoerceZuoSelectionForBuilding()
@@ -971,31 +971,36 @@ public sealed class DataViewModel(
         }
     }
 
-    private static void ReplaceAreaGroupOptions(
-        ObservableCollection<DataFilterOption> target,
-        IEnumerable<AreaGroupRecord> groups,
-        string selectedValue)
+    private IEnumerable<DataFilterOption> BuildAreaOptions(IEnumerable<AreaGroupRecord> groups)
     {
-        var rows = groups
-            .Where(group => group.Enabled && group.GroupKind.Equals("custom", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(group => group.Name, StringComparer.CurrentCultureIgnoreCase)
-            .Select(group => new DataFilterOption(
-                group.Id.ToString(CultureInfo.InvariantCulture),
-                group.Name,
-                -1))
-            .ToList();
-        if (!string.IsNullOrWhiteSpace(selectedValue) &&
-            rows.All(option => !string.Equals(option.Value, selectedValue, StringComparison.OrdinalIgnoreCase)))
+        _areaGroupFilterValues.Clear();
+        var rows = new List<DataFilterOption>();
+        foreach (var group in groups.Where(group => group.Enabled).OrderBy(group => group.Name, StringComparer.CurrentCultureIgnoreCase))
         {
-            rows.Add(new DataFilterOption(selectedValue, $"区域组 {selectedValue}（不可用）", 0));
+            var value = group.GroupKind.Equals("system", StringComparison.OrdinalIgnoreCase) &&
+                        group.SystemKey.Equals("public", StringComparison.OrdinalIgnoreCase)
+                ? "public"
+                : group.GroupKind.Equals("system", StringComparison.OrdinalIgnoreCase) &&
+                  group.SystemKey.Equals("non_public", StringComparison.OrdinalIgnoreCase)
+                    ? "private"
+                    : group.GroupKind.Equals("custom", StringComparison.OrdinalIgnoreCase)
+                        ? $"group:{group.Id.ToString(CultureInfo.InvariantCulture)}"
+                        : null;
+            if (value is null || rows.Any(option => option.Value.Equals(value, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            _areaGroupFilterValues[group.Id] = value;
+            rows.Add(new DataFilterOption(value, value switch
+            {
+                "public" => "公区",
+                "private" => "非公区",
+                _ => group.Name,
+            }, -1));
         }
 
-        target.Clear();
-        target.Add(DataFilterOption.All("全部区域组"));
-        foreach (var row in rows)
-        {
-            target.Add(row);
-        }
+        return rows;
     }
 
 }

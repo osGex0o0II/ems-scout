@@ -1,10 +1,14 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EmsScout.Application.Settings;
+using Microsoft.UI.Dispatching;
+using Microsoft.Win32;
 using Windows.ApplicationModel;
 using Windows.ApplicationModel.DataTransfer;
 
@@ -22,6 +26,8 @@ public sealed partial class DiagnosticsViewModel(
     private const int PreviewMaxLines = 160;
     private static readonly Regex NativeExportFileNamePattern =
         new(@"^数据管理筛选结果_\d{8}_\d{6}\.xlsx$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private readonly DispatcherQueue _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
+    private DispatcherQueueTimer? _systemClockTimer;
 
     [ObservableProperty]
     public partial string StatusText { get; private set; } = "诊断信息尚未加载";
@@ -33,10 +39,30 @@ public sealed partial class DiagnosticsViewModel(
     public partial string PreviewText { get; private set; } = "从左侧日志列表选择一个文件后显示末尾内容。";
 
     [ObservableProperty]
+    public partial string CurrentSystemTime { get; private set; } = FormatSystemTime(DateTime.Now);
+
+    [ObservableProperty]
+    public partial string SystemLanguage { get; private set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string SystemTimeZone { get; private set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string DeviceName { get; private set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string WindowsVersion { get; private set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string ProcessorAndMemory { get; private set; } = string.Empty;
+
+    [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(OpenSelectedLogCommand))]
     public partial DiagnosticFileRow? SelectedLog { get; set; }
 
     public ObservableCollection<DiagnosticInfoRow> AppRows { get; } = [];
+
+    public ObservableCollection<DiagnosticInfoRow> DeviceRows { get; } = [];
 
     public ObservableCollection<DiagnosticInfoRow> PathRows { get; } = [];
 
@@ -57,12 +83,25 @@ public sealed partial class DiagnosticsViewModel(
     public void Load()
     {
         Refresh();
+        StartSystemClock();
+    }
+
+    public void StopSystemClock()
+    {
+        if (_systemClockTimer is null)
+        {
+            return;
+        }
+
+        _systemClockTimer.Stop();
+        _systemClockTimer = null;
     }
 
     [RelayCommand]
     private void Refresh()
     {
         AppRows.Clear();
+        DeviceRows.Clear();
         PathRows.Clear();
         WorkflowRows.Clear();
         LogFiles.Clear();
@@ -77,8 +116,111 @@ public sealed partial class DiagnosticsViewModel(
         AppRows.Add(new DiagnosticInfoRow("构建时间", buildTime, "当前运行文件时间"));
         AppRows.Add(new DiagnosticInfoRow("运行环境", $".NET {Environment.Version}", "WinUI 3 / Windows App SDK"));
 
+        SystemLanguage = FormatCulture(CultureInfo.CurrentUICulture);
+        SystemTimeZone = FormatTimeZone(TimeZoneInfo.Local);
+        DeviceName = Environment.MachineName;
+        WindowsVersion = GetWindowsVersion();
+        ProcessorAndMemory = GetProcessorAndMemory();
+        DeviceRows.Add(new DiagnosticInfoRow("系统语言", SystemLanguage));
+        DeviceRows.Add(new DiagnosticInfoRow("系统时区", SystemTimeZone));
+        DeviceRows.Add(new DiagnosticInfoRow("设备名称", DeviceName));
+        DeviceRows.Add(new DiagnosticInfoRow("Windows 版本", WindowsVersion));
+        DeviceRows.Add(new DiagnosticInfoRow("处理器与内存", ProcessorAndMemory));
+
         StatusText = "软件信息已加载";
     }
+
+    private void StartSystemClock()
+    {
+        if (_systemClockTimer is not null)
+        {
+            return;
+        }
+
+        _systemClockTimer = _dispatcherQueue.CreateTimer();
+        _systemClockTimer.Interval = TimeSpan.FromSeconds(1);
+        _systemClockTimer.Tick += (_, _) => CurrentSystemTime = FormatSystemTime(DateTime.Now);
+        _systemClockTimer.Start();
+    }
+
+    private static string FormatCulture(CultureInfo culture)
+    {
+        return string.IsNullOrWhiteSpace(culture.Name)
+            ? culture.DisplayName
+            : $"{culture.Name} · {culture.DisplayName}";
+    }
+
+    private static string FormatTimeZone(TimeZoneInfo timeZone)
+    {
+        var offset = timeZone.GetUtcOffset(DateTimeOffset.Now);
+        var sign = offset < TimeSpan.Zero ? "-" : "+";
+        var standardName = string.IsNullOrWhiteSpace(timeZone.StandardName)
+            ? timeZone.Id
+            : timeZone.StandardName;
+        return $"UTC{sign}{offset.Duration():hh\\:mm} · {standardName}";
+    }
+
+    private static string GetWindowsVersion()
+    {
+        using var key = Registry.LocalMachine.OpenSubKey(
+            @"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
+        var productName = key?.GetValue("ProductName") as string;
+        var displayVersion = key?.GetValue("DisplayVersion") as string;
+        var currentBuild = key?.GetValue("CurrentBuild")?.ToString();
+        var ubr = key?.GetValue("UBR")?.ToString();
+        var build = string.IsNullOrWhiteSpace(currentBuild)
+            ? string.Empty
+            : $"{currentBuild}{(string.IsNullOrWhiteSpace(ubr) ? string.Empty : $".{ubr}")}";
+
+        var parts = new[] { productName, displayVersion, string.IsNullOrWhiteSpace(build) ? null : $"10.0.{build}" }
+            .Where(value => !string.IsNullOrWhiteSpace(value));
+        return string.Join(" · ", parts);
+    }
+
+    private static string GetProcessorAndMemory()
+    {
+        using var key = Registry.LocalMachine.OpenSubKey(
+            @"HARDWARE\DESCRIPTION\System\CentralProcessor\0");
+        var processor = (key?.GetValue("ProcessorNameString") as string)?.Trim();
+        processor = string.IsNullOrWhiteSpace(processor) ? "未知处理器" : processor;
+        processor = Regex.Replace(processor, @"\s+w/.*$", string.Empty, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant).Trim();
+
+        var memory = GetPhysicalMemoryLabel();
+        return $"{processor} · {memory}";
+    }
+
+    private static string GetPhysicalMemoryLabel()
+    {
+        var status = new MemoryStatusEx { Length = (uint)Marshal.SizeOf<MemoryStatusEx>() };
+        if (!GlobalMemoryStatusEx(ref status))
+        {
+            return "内存未知";
+        }
+
+        var gigabytes = Math.Max(1, (int)Math.Round(
+            status.TotalPhysicalMemory / Math.Pow(1024, 3),
+            MidpointRounding.AwayFromZero));
+        return $"{gigabytes} GB";
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GlobalMemoryStatusEx(ref MemoryStatusEx buffer);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MemoryStatusEx
+    {
+        public uint Length;
+        public uint MemoryLoad;
+        public ulong TotalPhysicalMemory;
+        public ulong AvailablePhysicalMemory;
+        public ulong TotalPageFile;
+        public ulong AvailablePageFile;
+        public ulong TotalVirtual;
+        public ulong AvailableVirtual;
+        public ulong AvailableExtendedVirtual;
+    }
+
+    private static string FormatSystemTime(DateTime value) => value.ToString("yyyy-MM-dd HH:mm:ss");
 
     [RelayCommand]
     private void OpenRepository()
@@ -108,6 +250,8 @@ public sealed partial class DiagnosticsViewModel(
     private void CopyDiagnostics()
     {
         var lines = AppRows.Select(row => $"{row.Label}: {row.Value}（{row.Detail}）").ToList();
+        lines.Add($"当前系统时间: {CurrentSystemTime}");
+        lines.AddRange(DeviceRows.Select(row => $"{row.Label}: {row.Value}"));
         lines.Add($"仓库: {RepositoryUrl}");
         CopyToClipboard(string.Join(Environment.NewLine, lines), "诊断信息已复制");
     }

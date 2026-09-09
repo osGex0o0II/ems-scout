@@ -1225,7 +1225,8 @@ async function main() {
     fs.writeFileSync(jsonPath, JSON.stringify(result, null, 2), 'utf8');
   }
 
-  let result = { summary: summarize(rows, startedAt), rows };
+  const capturedAt = new Date().toISOString();
+  let result = { capturedAt, summary: summarize(rows, startedAt), rows };
   if (failedTargets) {
     const mergedRows = failedTargets.source.rows || [];
     const index = new Map(mergedRows.map((row, idx) => [rowKey(row), idx]));
@@ -1237,6 +1238,7 @@ async function main() {
       replaced++;
     }
     result = {
+      capturedAt,
       summary: summarize(mergedRows, startedAt),
       recapture: {
         source: path.resolve(FAILED_FROM),

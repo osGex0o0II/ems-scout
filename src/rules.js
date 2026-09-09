@@ -122,6 +122,13 @@ function sourceCardName(cardOrName) {
   return String(value || '').trim().replace(/#\d+$/, '');
 }
 
+function isPlaceholderCardName(cardOrName) {
+  const value = cardOrName && typeof cardOrName === 'object'
+    ? (cardOrName.name || cardOrName.sourceName)
+    : cardOrName;
+  return /^0-0001-KT(?:#\d+)?$/.test(String(value || '').trim());
+}
+
 function labelSamePageDuplicateCards(cards = []) {
   const output = Array.isArray(cards) ? cards.map(card => ({ ...card })) : [];
   const groups = new Map();
@@ -179,7 +186,7 @@ function checkCardQuality(cards, meta = {}) {
   const rawCount = Number(meta.rawCount ?? meta.raw_count ?? n) || n;
   const uniqueCount = Number(meta.uniqueCount ?? meta.unique_count ?? n) || n;
   const duplicateCollapse = rawCount >= 3 && uniqueCount <= Math.max(1, Math.floor(rawCount * 0.5));
-  const placeholderNames = cards.filter(c => !c.name || c.name === '0-0001-KT').length;
+  const placeholderNames = cards.filter(c => !c.name || isPlaceholderCardName(c)).length;
   const switchLoaded = cards.filter(c => c.switch !== '-').length;
   const withMode = cards.filter(c => c.mode !== '-').length;
   const withRealIndoor = cards.filter(c => c.indoor !== '-' && parseFloat(c.indoor) > 0).length;
@@ -288,7 +295,7 @@ function classifyPersistentDeviceAnomalyPage(cards, meta = {}) {
   const n = cards.length;
   const qc = checkCardQuality(cards, meta);
   const names = cards.map(c => String(c.name || '').trim());
-  const namesComplete = names.every(name => name && name !== '0-0001-KT');
+  const namesComplete = names.every(name => name && !isPlaceholderCardName(name));
   const namesUnique = new Set(names).size === n;
   const commComplete = cards.every(c => c.comm === '开机' || c.comm === '关机' || c.comm === '离线');
   const indicatorsComplete = cards.every(c => Boolean(String(c.indicator || '').trim()));
@@ -382,7 +389,7 @@ function classifyKnownMissingIndicatorPage(cards, meta = {}) {
     .every(card =>
       Boolean(card.indicator) &&
       (card.comm === '开机' || card.comm === '关机' || card.comm === '离线'));
-  const namesComplete = names.every(name => name && name !== '0-0001-KT');
+  const namesComplete = names.every(name => name && !isPlaceholderCardName(name));
   const namesUnique = new Set(names).size === normalized.length;
   const eligible =
     (exactKnownSet || (exactIntermittentSet && intermittentFieldsComplete)) &&
@@ -407,7 +414,6 @@ const ACCEPTED_CAPTURE_QUALITY_REASONS = new Set([
   'device_anomalies_preserved',
   'known_source_indicator_missing',
   'known_intermittent_indicator_missing',
-  'template_values_unconfirmed',
 ]);
 
 function isAcceptedCaptureQualityReason(value) {
@@ -427,6 +433,7 @@ module.exports = {
   assessBuildingIdentity,
   sourceCardName,
   labelSamePageDuplicateCards,
+  isPlaceholderCardName,
   isPublic,
   classifyAreaType,
   checkCardQuality,

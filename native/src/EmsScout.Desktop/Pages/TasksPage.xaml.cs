@@ -44,10 +44,13 @@ public sealed partial class TasksPage : Page
             }
             _loaded = true;
         }
+
+        ViewModel.StartEnvironmentMonitoring();
     }
 
     private void Page_Unloaded(object sender, RoutedEventArgs e)
     {
+        ViewModel.StopEnvironmentMonitoring();
         DetachLogs();
     }
 

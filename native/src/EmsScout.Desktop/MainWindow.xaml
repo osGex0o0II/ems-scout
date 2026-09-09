@@ -6,7 +6,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:local="using:EmsScout.Desktop"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-    Title="EMS 空调控制台"
+    Title="EMS Scout"
     mc:Ignorable="d">
     <Grid x:Name="RootGrid" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
         <Grid.RowDefinitions>
@@ -19,10 +19,20 @@
             Height="40"
             Padding="16,0,140,0"
             Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
-            <TextBlock
+            <StackPanel
                 VerticalAlignment="Center"
-                FontWeight="SemiBold"
-                Text="EMS 空调控制台" />
+                Orientation="Horizontal"
+                Spacing="8">
+                <Image
+                    Width="20"
+                    Height="20"
+                    Source="ms-appx:///Assets/EmsScoutLogo.png"
+                    Stretch="Uniform" />
+                <TextBlock
+                    VerticalAlignment="Center"
+                    FontWeight="SemiBold"
+                    Text="EMS Scout" />
+            </StackPanel>
         </Grid>
 
         <NavigationView

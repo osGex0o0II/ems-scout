@@ -3,6 +3,22 @@ namespace EmsScout.Tests;
 public sealed class DataManagementUiContractTests
 {
     [Fact]
+    public void CurrentDataSourceUsesCurrentInventoryInsteadOfHistorySnapshot()
+    {
+        var root = LocateRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(
+            root,
+            "native",
+            "src",
+            "EmsScout.Desktop",
+            "ViewModels",
+            "DataSourceOption.cs"));
+
+        Assert.Contains("RunId = null", source);
+        Assert.Contains("IsCurrent = true", source);
+    }
+
+    [Fact]
     public void DataPageUsesUserFacingFilterContractWithoutLegacyHints()
     {
         var root = LocateRepositoryRoot();
@@ -18,9 +34,9 @@ public sealed class DataManagementUiContractTests
         Assert.DoesNotContain("Header=\"环境温度(℃)\"", xaml);
         Assert.DoesNotContain("Header=\"设置温度条件\"", xaml);
         Assert.DoesNotContain("Header=\"环境温度条件\"", xaml);
-        Assert.Contains("Header=\"区域组\"", xaml);
+        Assert.DoesNotContain("Header=\"区域组\"", xaml);
         Assert.Contains("Header=\"开关机状态\"", xaml);
-        Assert.Contains("ViewModel.AreaGroupOptions", xaml);
+        Assert.Contains("ViewModel.AreaOptions", xaml);
         Assert.Contains("Header=\"设置温度(℃)\"", xaml);
         Assert.Contains("Header=\"页面\"", xaml);
         Assert.Contains("位置定位", xaml);
@@ -273,7 +289,6 @@ public sealed class DataManagementUiContractTests
         var xamlPath = Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml");
         var xaml = File.ReadAllText(xamlPath);
 
-        Assert.True(IndexOf(xaml, "Header=\"区域组\"") < IndexOf(xaml, "Header=\"楼栋\""));
         Assert.True(IndexOf(xaml, "Header=\"楼栋\"") < IndexOf(xaml, "Header=\"座号\""));
         Assert.True(IndexOf(xaml, "Header=\"座号\"") < IndexOf(xaml, "Header=\"楼层\""));
         Assert.True(IndexOf(xaml, "Header=\"楼层\"") < IndexOf(xaml, "Header=\"页面\""));
@@ -287,18 +302,22 @@ public sealed class DataManagementUiContractTests
     }
 
     [Fact]
-    public void DataViewModelExposesUnmatchedAreaOption()
+    public void DataViewModelBuildsUnifiedAreaOptionsFromEnabledGroups()
     {
         var root = LocateRepositoryRoot();
         var viewModelPath = Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs");
         var source = File.ReadAllText(viewModelPath);
 
-        Assert.Contains("new DataFilterOption(\"公区\", \"公区\", -1)", source);
-        Assert.Contains("new DataFilterOption(\"非公区\", \"非公区\", -1)", source);
-        Assert.Contains("new DataFilterOption(\"未匹配\", \"未匹配\", -1)", source);
-        Assert.Contains("DataFilterOption.All(\"全部开关机状态\")", source);
-        Assert.Contains("DataFilterOption.All(\"全部设置温度\")", source);
-        Assert.Contains("DataFilterOption.All(\"全部集控锁定状态\")", source);
+        Assert.Contains("groupSet.Groups", source);
+        Assert.Contains("SystemKey.Equals(\"public\"", source);
+        Assert.Contains("SystemKey.Equals(\"non_public\"", source);
+        Assert.Contains("$\"group:{group.Id.ToString", source);
+        Assert.Equal(10, source.Split("DataFilterOption.All(\"全部\")", StringSplitOptions.None).Length - 1);
+        Assert.DoesNotContain("DataFilterOption.All(\"全部区域组\")", source);
+        Assert.DoesNotContain("DataFilterOption.All(\"全部楼栋\")", source);
+        Assert.DoesNotContain("DataFilterOption.All(\"全部开关机状态\")", source);
+        Assert.DoesNotContain("DataFilterOption.All(\"全部设置温度\")", source);
+        Assert.DoesNotContain("DataFilterOption.All(\"全部集控锁定状态\")", source);
         Assert.DoesNotContain("new DataFilterOption(\"无实时数据\", \"无实时数据\", -1)", source);
     }
 
@@ -367,13 +386,13 @@ public sealed class DataManagementUiContractTests
         var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs"));
         var navigation = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Services", "INavigationService.cs"));
 
-        Assert.Contains("Header=\"区域组\"", xaml);
-        Assert.Contains("ViewModel.AreaGroupOptions", xaml);
-        Assert.Contains("ViewModel.SelectedAreaGroup", xaml);
+        Assert.DoesNotContain("Header=\"区域组\"", xaml);
+        Assert.Contains("ViewModel.AreaOptions", xaml);
+        Assert.Contains("ViewModel.SelectedArea", xaml);
         Assert.Contains("IAreaGroupRepository areaGroupRepository", viewModel);
-        Assert.Contains("DataFilterOption.All(\"全部区域组\")", viewModel);
-        Assert.Contains("SelectAreaGroupOption(request.AreaGroupId.Value", viewModel);
-        Assert.Contains("SelectedAreaGroup = AreaGroupOptions.FirstOrDefault()", viewModel);
+        Assert.Contains("DataFilterOption.All(\"全部\")", viewModel);
+        Assert.Contains("SelectAreaOptionForGroupId(request.AreaGroupId.Value", viewModel);
+        Assert.DoesNotContain("SelectedAreaGroup", viewModel);
         Assert.Contains("long? AreaGroupId = null", navigation);
     }
 
@@ -386,13 +405,13 @@ public sealed class DataManagementUiContractTests
         var initialize = source[
             source.IndexOf("public async Task InitializeAsync", StringComparison.Ordinal)..source.IndexOf("public async Task RefreshAsync", StringComparison.Ordinal)];
         var replaceAreaGroups = source[
-            source.IndexOf("private static void ReplaceAreaGroupOptions", StringComparison.Ordinal)..];
+            source.IndexOf("private IEnumerable<DataFilterOption> BuildAreaOptions", StringComparison.Ordinal)..];
 
         Assert.True(
             initialize.IndexOf("ApplyNavigationRequest(navigationRequest)", StringComparison.Ordinal) <
             initialize.IndexOf("ReloadFilterOptionsAsync(cancellationToken)", StringComparison.Ordinal));
         Assert.DoesNotContain("group.Total", replaceAreaGroups);
-        Assert.Contains("group.Name,\n                -1", replaceAreaGroups.Replace("\r\n", "\n", StringComparison.Ordinal));
+        Assert.Contains("group.Name", replaceAreaGroups);
     }
 
     [Fact]
@@ -416,8 +435,9 @@ public sealed class DataManagementUiContractTests
         Assert.Contains("Fan: EmptyToNull(SelectedFan?.Value)", buildQuery);
         Assert.Contains("SetTemperature: EmptyToNull(SelectedSetTemperature?.Value)", buildQuery);
         Assert.Contains("RealtimeLock: EmptyToNull(SelectedRealtimeLock?.Value)", buildQuery);
-        Assert.Contains("MonitorGroupIds: EmptyToNull(SelectedAreaGroup?.Value)", buildQuery);
-        Assert.Contains("AreaType: EmptyToNull(SelectedArea?.Value)", buildQuery);
+        Assert.Contains("var areaFilter = BuildAreaQuery(SelectedArea?.Value)", buildQuery);
+        Assert.Contains("MonitorGroupIds: areaFilter.MonitorGroupIds", buildQuery);
+        Assert.Contains("AreaType: areaFilter.AreaType", buildQuery);
         Assert.Contains("Limit: limit", buildQuery);
         Assert.Contains("Offset: offset", buildQuery);
         Assert.Contains("RunId: SelectedDataSource?.RunId", buildQuery);
@@ -474,9 +494,9 @@ public sealed class DataManagementUiContractTests
         Assert.Contains("selectedBuilding", source);
         Assert.Contains("RealtimeLockOptions", source);
         Assert.Contains("selectedRealtimeLock", source);
-        Assert.Contains("ReplaceAreaGroupOptions", source);
-        Assert.Contains("区域组 {selectedValue}（不可用）", source);
-        Assert.Contains("SelectedAreaGroup = SelectAreaGroupOption(selectedAreaGroup)", source);
+        Assert.DoesNotContain("ReplaceAreaGroupOptions", source);
+        Assert.DoesNotContain("SelectedAreaGroup", source);
+        Assert.Contains("BuildAreaOptions", source);
     }
 
     [Fact]
@@ -571,7 +591,7 @@ public sealed class DataManagementUiContractTests
 
         Assert.Equal("开启", validCurrent.RealtimeLockText);
         Assert.Equal("未知", invalid.RealtimeLockText);
-        Assert.Equal("未知", stale.RealtimeLockText);
+        Assert.Equal("关闭", stale.RealtimeLockText);
         Assert.False(invalid.RealtimeLocked);
         Assert.False(stale.RealtimeLocked);
     }
