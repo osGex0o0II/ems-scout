@@ -84,12 +84,7 @@ public sealed record DeviceRecord(
 
     private bool IsRealtimeLockUsable()
     {
-        if (Realtime is null || !Realtime.LockStateValid)
-        {
-            return false;
-        }
-
-        return CollectedAt is null || Realtime.SourceUpdatedAt >= CollectedAt.Value;
+        return Realtime is not null && Realtime.LockStateValid;
     }
 
     public string TemperatureText => string.IsNullOrWhiteSpace(IndoorTemperature)

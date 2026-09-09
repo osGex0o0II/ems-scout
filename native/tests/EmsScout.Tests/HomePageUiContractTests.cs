@@ -101,6 +101,7 @@ public sealed class HomePageUiContractTests
         Assert.Contains("LatestBatch_Click", codeBehind);
         Assert.Contains("UseLatestDataSourceAsync", codeBehind);
         Assert.Contains("HistoricalDataSources", viewModel);
+        Assert.DoesNotContain("PageStatus", xaml);
     }
 
     [Fact]
@@ -133,6 +134,7 @@ public sealed class HomePageUiContractTests
         Assert.Contains("yyyy-MM-dd HH:mm:ss", dataSource);
         Assert.DoesNotContain("历史 #", dataSource);
         Assert.DoesNotContain("最新采集数据", dataSource);
+        Assert.DoesNotContain("当前 SQLite 数据", dataSource);
     }
 
     [Fact]

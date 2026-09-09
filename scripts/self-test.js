@@ -40,6 +40,7 @@ function testRules() {
   }));
   const notReady34 = loaded34.map(c => ({ ...c, switch: '-', comm: '' }));
   const placeholder = loaded34.map(c => ({ ...c, name: '0-0001-KT' }));
+  const labeledPlaceholder = loaded34.map((c, i) => ({ ...c, name: `0-0001-KT#${i + 1}` }));
   const realMixed = loaded34.map((c, i) => ({
     ...c,
     indoor: String(25 + (i % 3)),
@@ -85,6 +86,7 @@ function testRules() {
   assert(!checkCardQuality(loaded34).ok, '3/4号默认值统一时应触发模板检测');
   assert(!checkCardQuality(notReady34).ok, '3/4号默认值且 comm/switch 未完整时应失败');
   assert(!checkCardQuality(placeholder).ok, '0-0001-KT 占位符应失败');
+  assert(!checkCardQuality(labeledPlaceholder).ok, '带编号后缀的占位符也应失败');
   assert(checkCardQuality(realMixed).ok, '非模板真实页且通讯完整时应通过');
   assert(!checkCardQuality(missingComm).ok, '任一卡缺通讯/indicator 时应失败');
   assert(!checkCardQuality(invalidTemp).ok, '异常温度和缺失模式/风速应失败');
@@ -95,6 +97,7 @@ function testRules() {
   assert(isAcceptedCaptureQualityReason('device_anomalies_preserved'), '稳定的有界设备异常应通过最终采集门槛');
   assert(isAcceptedCaptureQualityReason('known_source_indicator_missing'), '精确登记的 EMS indicator 缺失设备应通过最终采集门槛');
   assert(isAcceptedCaptureQualityReason('known_intermittent_indicator_missing'), '间歇性 indicator 缺失设备应作为待复核结果保留');
+  assert(!isAcceptedCaptureQualityReason('template_values_unconfirmed'), '默认模板值不得作为最终采集结果放行');
   assert(!isAcceptedCaptureQualityReason(''), '缺少质量原因的页面必须继续阻断');
   assert(classifyPersistentDeviceAnomalyPage(invalidTemp).eligible, '20 张卡中 1 张稳定设备异常应可进入保留候选');
   assert(!classifyPersistentDeviceAnomalyPage(missingComm).eligible, '通讯未解析时不得按设备异常放行');

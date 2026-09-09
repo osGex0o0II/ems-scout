@@ -735,7 +735,8 @@ async function main() {
   process.stdout.write('\n');
 
   await restoreBatchSubscription(page);
-  const result = { summary: summarize(rows, startedAt), rows };
+  const capturedAt = new Date().toISOString();
+  const result = { capturedAt, summary: summarize(rows, startedAt), rows };
   fs.writeFileSync(jsonPath, JSON.stringify(result, null, 2), 'utf8');
   if (OVERWRITE_LATEST && MAX_DEVICES === 0) fs.writeFileSync(latestPath, JSON.stringify(result, null, 2), 'utf8');
   ndjson.end();

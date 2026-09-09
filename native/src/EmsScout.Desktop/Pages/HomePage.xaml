@@ -19,7 +19,6 @@
                 </Grid.ColumnDefinitions>
                 <StackPanel Spacing="3">
                     <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="EMS 运维工作台" />
-                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.PageStatus, Mode=OneWay}" />
                 </StackPanel>
                 <Grid
                     x:Name="HeaderActions"

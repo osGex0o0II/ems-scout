@@ -11,7 +11,6 @@
     <Grid Padding="{StaticResource PagePadding}" RowSpacing="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -21,23 +20,11 @@
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel Spacing="3">
-                <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="审计中心" />
+                <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="历史数据管理" />
                 <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
             </StackPanel>
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
-                <Button Command="{x:Bind ViewModel.RunQualityAuditCommand}" Style="{StaticResource ToolbarButtonStyle}">
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon FontSize="14" Glyph="&#xE9D9;" />
-                        <TextBlock Text="运行基础审计" />
-                    </StackPanel>
-                </Button>
-                <Button Command="{x:Bind ViewModel.RunRealtimeAuditCommand}" Style="{StaticResource ToolbarButtonStyle}">
-                    <StackPanel Orientation="Horizontal" Spacing="6">
-                        <FontIcon FontSize="14" Glyph="&#xE8B3;" />
-                        <TextBlock Text="运行实时审计" />
-                    </StackPanel>
-                </Button>
-                <Button Command="{x:Bind ViewModel.RefreshCommand}" Style="{StaticResource PrimaryToolbarButtonStyle}">
+                <Button AutomationProperties.Name="刷新历史数据" Command="{x:Bind ViewModel.RefreshCommand}" Style="{StaticResource PrimaryToolbarButtonStyle}">
                     <StackPanel Orientation="Horizontal" Spacing="6">
                         <FontIcon FontSize="14" Glyph="&#xE72C;" />
                         <TextBlock Text="刷新" />
@@ -52,398 +39,430 @@
             </StackPanel>
         </Grid>
 
-        <GridView
-            Grid.Row="1"
-            MaxHeight="112"
-            IsItemClickEnabled="False"
-            ItemsSource="{x:Bind ViewModel.Facets, Mode=OneWay}"
-            SelectionMode="None"
-            ScrollViewer.HorizontalScrollBarVisibility="Auto"
-            ScrollViewer.VerticalScrollBarVisibility="Disabled">
-            <GridView.ItemsPanel>
-                <ItemsPanelTemplate>
-                    <ItemsStackPanel Orientation="Horizontal" />
-                </ItemsPanelTemplate>
-            </GridView.ItemsPanel>
-            <GridView.ItemContainerStyle>
-                <Style TargetType="GridViewItem">
-                    <Setter Property="MinWidth" Value="156" />
-                    <Setter Property="MinHeight" Value="88" />
-                </Style>
-            </GridView.ItemContainerStyle>
-            <GridView.ItemTemplate>
-                <DataTemplate>
-                    <Border Style="{StaticResource MetricCardStyle}">
-                        <StackPanel Spacing="3">
-                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding Label}" />
-                            <TextBlock FontSize="23" FontWeight="SemiBold" Text="{Binding Value}" />
-                            <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{Binding Detail}" />
-                        </StackPanel>
-                    </Border>
-                </DataTemplate>
-            </GridView.ItemTemplate>
-        </GridView>
-
-        <Grid Grid.Row="2" ColumnSpacing="14">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="1.05*" MinWidth="460" />
-                <ColumnDefinition Width="1.35*" MinWidth="540" />
-            </Grid.ColumnDefinitions>
-
-            <ScrollViewer VerticalScrollBarVisibility="Auto">
-                <StackPanel Spacing="12">
-                    <Border Style="{StaticResource WorkbenchCardStyle}">
-                        <Grid RowSpacing="8">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="*" />
-                            </Grid.RowDefinitions>
-                            <StackPanel Spacing="2">
-                                <TextBlock Style="{StaticResource SectionTitleStyle}" Text="基础质量审计" />
-                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.QualityStatusText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
-                                <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.QualitySummaryText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
-                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind ViewModel.QualityGeneratedText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
-                            </StackPanel>
-                            <ListView
-                                Grid.Row="2"
-                                MaxHeight="190"
-                                ItemsSource="{x:Bind ViewModel.QualityIssues, Mode=OneWay}"
-                                SelectionMode="None">
-                                <ListView.Header>
-                                    <Grid Padding="0,0,0,6" ColumnSpacing="10">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="132" />
-                                            <ColumnDefinition Width="72" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock FontWeight="SemiBold" Text="级别 / 编码" />
-                                        <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="数量" />
-                                        <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="问题" />
-                                    </Grid>
-                                </ListView.Header>
-                                <ListView.ItemTemplate>
-                                    <DataTemplate>
-                                        <Grid Padding="0,5" ColumnSpacing="10">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="132" />
-                                                <ColumnDefinition Width="72" />
-                                                <ColumnDefinition Width="*" />
-                                            </Grid.ColumnDefinitions>
-                                            <StackPanel Spacing="1">
-                                                <TextBlock FontWeight="SemiBold" Text="{Binding Severity}" />
-                                                <TextBlock
-                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                                    Text="{Binding Code}"
-                                                    TextTrimming="CharacterEllipsis" />
-                                            </StackPanel>
-                                            <TextBlock Grid.Column="1" Text="{Binding CountText}" />
-                                            <TextBlock Grid.Column="2" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding Message}" TextWrapping="WrapWholeWords" />
-                                        </Grid>
-                                    </DataTemplate>
-                                </ListView.ItemTemplate>
-                            </ListView>
-                        </Grid>
-                    </Border>
-
-                    <Border Style="{StaticResource WorkbenchCardStyle}">
-                        <Grid RowSpacing="8">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="*" />
-                            </Grid.RowDefinitions>
-                            <StackPanel Spacing="2">
-                                <TextBlock Style="{StaticResource SectionTitleStyle}" Text="实时点位审计" />
-                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.RealtimeQualityStatusText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
-                                <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.RealtimeQualitySummaryText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
-                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind ViewModel.RealtimeQualityGeneratedText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
-                            </StackPanel>
-                            <ItemsControl Grid.Row="1" ItemsSource="{x:Bind ViewModel.RealtimeQualityCategories, Mode=OneWay}">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <ItemsWrapGrid Orientation="Horizontal" />
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border
-                                            MinWidth="112"
-                                            Margin="0,0,6,4"
-                                            Padding="8,5"
-                                            Background="{ThemeResource ControlFillColorDefaultBrush}"
-                                            CornerRadius="6">
-                                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding Label}" />
-                                                <TextBlock FontWeight="SemiBold" Text="{Binding CountText}" />
-                                            </StackPanel>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                            <ListView
-                                Grid.Row="2"
-                                MaxHeight="220"
-                                ItemsSource="{x:Bind ViewModel.RealtimeQualityBuildings, Mode=OneWay}"
-                                SelectionMode="None">
-                                <ListView.Header>
-                                    <Grid Padding="0,0,0,6" ColumnSpacing="10">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="64" />
-                                            <ColumnDefinition Width="82" />
-                                            <ColumnDefinition Width="82" />
-                                            <ColumnDefinition Width="82" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock FontWeight="SemiBold" Text="楼栋" />
-                                        <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="行数" />
-                                        <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="采集错" />
-                                        <TextBlock Grid.Column="3" FontWeight="SemiBold" Text="异常" />
-                                        <TextBlock Grid.Column="4" FontWeight="SemiBold" Text="主要类别" />
-                                    </Grid>
-                                </ListView.Header>
-                                <ListView.ItemTemplate>
-                                    <DataTemplate>
-                                        <Grid Padding="0,5" ColumnSpacing="10">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="64" />
-                                                <ColumnDefinition Width="82" />
-                                                <ColumnDefinition Width="82" />
-                                                <ColumnDefinition Width="82" />
-                                                <ColumnDefinition Width="*" />
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock FontWeight="SemiBold" Text="{Binding Building}" />
-                                            <TextBlock Grid.Column="1" Text="{Binding RowsText}" />
-                                            <TextBlock Grid.Column="2" Text="{Binding CollectionErrorsText}" />
-                                            <TextBlock Grid.Column="3" Text="{Binding DeviceAnomalyRowsText}" />
-                                            <TextBlock Grid.Column="4" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding MainCategoryText}" TextWrapping="WrapWholeWords" />
-                                        </Grid>
-                                    </DataTemplate>
-                                </ListView.ItemTemplate>
-                            </ListView>
-                        </Grid>
-                    </Border>
-                </StackPanel>
-            </ScrollViewer>
-
-            <Grid Grid.Column="1" RowSpacing="12">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="1.2*" />
-                    <RowDefinition Height="0.95*" />
-                </Grid.RowDefinitions>
-
-                <Border Style="{StaticResource WorkbenchCardStyle}">
-                    <Grid RowSpacing="8">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
-                        </Grid.RowDefinitions>
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Spacing="2">
-                                <TextBlock Style="{StaticResource SectionTitleStyle}" Text="实时对账" />
-                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.ReconciliationStatusText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
-                            </StackPanel>
-                            <Button
-                                Grid.Column="1"
-                                Command="{x:Bind ViewModel.OpenReconciliationItemCommand}"
-                                Style="{StaticResource ToolbarButtonStyle}">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <FontIcon FontSize="14" Glyph="&#xE8A5;" />
-                                    <TextBlock Text="定位数据" />
-                                </StackPanel>
-                            </Button>
-                        </Grid>
-
-                        <Grid Grid.Row="1" ColumnSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="118" />
-                                <ColumnDefinition Width="132" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <ComboBox
-                                DisplayMemberPath="Label"
-                                ItemsSource="{x:Bind ViewModel.ReconciliationBuildingOptions, Mode=OneWay}"
-                                SelectedItem="{x:Bind ViewModel.SelectedReconciliationBuilding, Mode=TwoWay}" />
-                            <ComboBox
-                                Grid.Column="1"
-                                DisplayMemberPath="Label"
-                                ItemsSource="{x:Bind ViewModel.ReconciliationTypeOptions, Mode=OneWay}"
-                                SelectedItem="{x:Bind ViewModel.SelectedReconciliationType, Mode=TwoWay}" />
-                            <TextBox
-                                Grid.Column="2"
-                                PlaceholderText="设备名 / DevId / 证据"
-                                Text="{x:Bind ViewModel.ReconciliationSearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                            <Button Grid.Column="3" Command="{x:Bind ViewModel.ApplyReconciliationFilterCommand}" Style="{StaticResource PrimaryToolbarButtonStyle}" Content="筛选" />
-                        </Grid>
-
-                        <StackPanel Grid.Row="2" Spacing="4">
-                            <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.ReconciliationSummaryText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
-                            <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind ViewModel.ReconciliationGeneratedText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
-                            <ItemsControl ItemsSource="{x:Bind ViewModel.ReconciliationTypeCounts, Mode=OneWay}">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <ItemsWrapGrid Orientation="Horizontal" />
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Border
-                                            MinWidth="96"
-                                            Margin="0,0,6,4"
-                                            Padding="8,5"
-                                            Background="{ThemeResource ControlFillColorDefaultBrush}"
-                                            CornerRadius="6">
-                                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding Label}" />
-                                                <TextBlock FontWeight="SemiBold" Text="{Binding CountText}" />
-                                            </StackPanel>
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </StackPanel>
-
-                        <Grid Grid.Row="3" ColumnSpacing="10">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="1.05*" />
-                                <ColumnDefinition Width="0.95*" />
-                            </Grid.ColumnDefinitions>
-                            <ListView
-                                ItemsSource="{x:Bind ViewModel.ReconciliationItems, Mode=OneWay}"
-                                SelectedItem="{x:Bind ViewModel.SelectedReconciliationItem, Mode=TwoWay}"
-                                SelectionMode="Single">
-                                <ListView.ItemTemplate>
-                                    <DataTemplate>
-                                        <Grid Padding="0,5" ColumnSpacing="10">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="78" />
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="52" />
-                                            </Grid.ColumnDefinitions>
-                                            <StackPanel Spacing="2">
-                                                <TextBlock FontWeight="SemiBold" Text="{Binding TypeLabel}" TextWrapping="WrapWholeWords" />
-                                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{Binding Severity}" />
-                                            </StackPanel>
-                                            <StackPanel Grid.Column="1" Spacing="2">
-                                                <TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
-                                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding Building}" />
-                                            </StackPanel>
-                                            <TextBlock Grid.Column="2" HorizontalAlignment="Right" Text="{Binding ConfidenceText}" />
-                                        </Grid>
-                                    </DataTemplate>
-                                </ListView.ItemTemplate>
-                            </ListView>
-
-                            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
-                                <StackPanel Spacing="7">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedReconciliationItem.Name, Mode=OneWay, FallbackValue=未选择}" TextWrapping="WrapWholeWords" />
-                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.SelectedReconciliationItem.Location, Mode=OneWay, FallbackValue=--}" TextWrapping="WrapWholeWords" />
-                                    </StackPanel>
-                                    <Grid ColumnSpacing="8">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="DevId" />
-                                        <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.SelectedReconciliationItem.DevId, Mode=OneWay, FallbackValue=--}" TextTrimming="CharacterEllipsis" />
-                                    </Grid>
-                                    <TextBlock FontWeight="SemiBold" Text="归因" />
-                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.SelectedReconciliationItem.Reason, Mode=OneWay, FallbackValue=--}" TextWrapping="WrapWholeWords" />
-                                    <Expander HorizontalContentAlignment="Stretch">
-                                        <Expander.Header>
-                                            <TextBlock FontWeight="SemiBold" Text="证据与规则" />
-                                        </Expander.Header>
-                                        <StackPanel Spacing="6">
-                                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.SelectedReconciliationItem.RuleDescription, Mode=OneWay, FallbackValue=--}" TextWrapping="WrapWholeWords" />
-                                            <TextBlock Text="{x:Bind ViewModel.SelectedReconciliationItem.EvidenceSummary, Mode=OneWay, FallbackValue=--}" TextWrapping="WrapWholeWords" />
-                                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.SelectedReconciliationItem.DecisionPathText, Mode=OneWay, FallbackValue=--}" TextWrapping="WrapWholeWords" />
-                                        </StackPanel>
-                                    </Expander>
-                                </StackPanel>
-                            </ScrollViewer>
-                        </Grid>
-                    </Grid>
-                </Border>
-
-                <Border Grid.Row="1" Style="{StaticResource WorkbenchCardStyle}">
-                    <Grid RowSpacing="8">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
-                        <StackPanel Spacing="2">
-                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="历史批次" />
-                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.RunsStatusText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
-                        </StackPanel>
-                        <ListView
-                            Grid.Row="1"
-                            ItemsSource="{x:Bind ViewModel.Runs, Mode=OneWay}"
-                            SelectedItem="{x:Bind ViewModel.SelectedRun, Mode=TwoWay}"
-                            SelectionMode="Single">
-                            <ListView.Header>
-                                <Grid Padding="0,0,0,6" ColumnSpacing="12">
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <Pivot x:Name="WorkspacePivot" SelectedIndex="0">
+                <PivotItem Header="历史数据">
+                    <StackPanel Padding="0,8,0,20" Spacing="12">
+                        <Border Padding="16" Style="{StaticResource WorkbenchCardStyle}">
+                            <StackPanel Spacing="10">
+                                <Grid ColumnSpacing="8" RowSpacing="6">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
                                     <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="1.25*" />
-                                        <ColumnDefinition Width="0.8*" />
-                                        <ColumnDefinition Width="0.8*" />
-                                        <ColumnDefinition Width="0.8*" />
-                                        <ColumnDefinition Width="1.4*" />
+                                        <ColumnDefinition Width="1.1*" />
+                                        <ColumnDefinition Width="1.1*" />
+                                        <ColumnDefinition Width="1.1*" />
+                                        <ColumnDefinition Width="2*" />
+                                        <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock FontWeight="SemiBold" Text="完成时间 / 批次" />
-                                    <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="范围" />
-                                    <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="卡片数" />
-                                    <TextBlock Grid.Column="3" FontWeight="SemiBold" Text="状态" />
-                                    <TextBlock Grid.Column="4" FontWeight="SemiBold" Text="备注" />
+                                    <ComboBox DisplayMemberPath="Label" Header="楼栋" ItemsSource="{x:Bind ViewModel.HistoryBuildingOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedHistoryBuilding, Mode=TwoWay}" />
+                                    <ComboBox Grid.Column="1" DisplayMemberPath="Label" Header="数据来源" ItemsSource="{x:Bind ViewModel.HistorySourceOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedHistorySource, Mode=TwoWay}" />
+                                    <ComboBox Grid.Column="2" DisplayMemberPath="Label" Header="批次状态" ItemsSource="{x:Bind ViewModel.HistoryStatusOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedHistoryStatus, Mode=TwoWay}" />
+                                    <TextBox Grid.Column="3" Header="关键字" PlaceholderText="批次号、备注、版本" Text="{x:Bind ViewModel.HistoryKeyword, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <Button Grid.Column="4" Grid.RowSpan="2" AutomationProperties.Name="查询历史批次" Command="{x:Bind ViewModel.ApplyHistoryFilterCommand}" Style="{StaticResource PrimaryToolbarButtonStyle}" VerticalAlignment="Bottom" Content="查询" />
+                                    <TextBox Grid.Row="1" Header="开始日期" PlaceholderText="yyyy-MM-dd" Text="{x:Bind ViewModel.HistoryFromText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBox Grid.Row="1" Grid.Column="1" Header="结束日期" PlaceholderText="yyyy-MM-dd" Text="{x:Bind ViewModel.HistoryToText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                 </Grid>
-                            </ListView.Header>
-                            <ListView.ItemTemplate>
-                                <DataTemplate>
-                                    <Grid Padding="0,5" ColumnSpacing="12">
+                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind ViewModel.LastRefreshedText, Mode=OneWay}" />
+                            </StackPanel>
+                        </Border>
+
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Border Style="{StaticResource MetricCardStyle}">
+                                <StackPanel Spacing="3">
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="历史批次" />
+                                    <TextBlock FontSize="23" FontWeight="SemiBold" Text="{x:Bind ViewModel.HistoryBatchCountText, Mode=OneWay}" />
+                                    <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="已完成" />
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Column="1" Style="{StaticResource MetricCardStyle}">
+                                <StackPanel Spacing="3">
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="当前版本" />
+                                    <TextBlock FontSize="19" FontWeight="SemiBold" Text="{x:Bind ViewModel.CurrentVersionText, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="最新完成批次" />
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Column="2" Style="{StaticResource MetricCardStyle}">
+                                <StackPanel Spacing="3">
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="最近采集" />
+                                    <TextBlock FontSize="16" FontWeight="SemiBold" Text="{x:Bind ViewModel.LatestCollectedText, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="完成时间" />
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Column="3" Style="{StaticResource MetricCardStyle}">
+                                <StackPanel Spacing="3">
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="异常批次" />
+                                    <TextBlock FontSize="23" FontWeight="SemiBold" Text="{x:Bind ViewModel.AnomalyBatchCountText, Mode=OneWay}" />
+                                    <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="需复核" />
+                                </StackPanel>
+                            </Border>
+                            <Border Grid.Column="4" Style="{StaticResource MetricCardStyle}">
+                                <StackPanel Spacing="3">
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="可恢复批次" />
+                                    <TextBlock FontSize="23" FontWeight="SemiBold" Text="{x:Bind ViewModel.RecoverableBatchCountText, Mode=OneWay}" />
+                                    <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="需先对比" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+
+                        <Border Padding="16" Style="{StaticResource WorkbenchCardStyle}">
+                            <Grid RowSpacing="10">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="2">
+                                        <TextBlock Style="{StaticResource SectionTitleStyle}" Text="批次列表" />
+                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.RunsStatusText, Mode=OneWay}" />
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Command="{x:Bind ViewModel.LoadSelectedComparisonCommand}" Style="{StaticResource ToolbarButtonStyle}" Content="刷新对比" />
+                                </Grid>
+                                <ListView Grid.Row="1" MaxHeight="360" ItemsSource="{x:Bind ViewModel.FilteredRuns, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedRun, Mode=TwoWay}" SelectionMode="Single">
+                                    <ListView.Header>
+                                        <Grid Padding="0,0,0,6" ColumnSpacing="10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="1.35*" />
+                                                <ColumnDefinition Width="0.7*" />
+                                                <ColumnDefinition Width="0.75*" />
+                                                <ColumnDefinition Width="0.8*" />
+                                                <ColumnDefinition Width="0.9*" />
+                                                <ColumnDefinition Width="1.2*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock FontWeight="SemiBold" Text="完成时间 / 批次" />
+                                            <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="范围" />
+                                            <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="卡片数" />
+                                            <TextBlock Grid.Column="3" FontWeight="SemiBold" Text="来源" />
+                                            <TextBlock Grid.Column="4" FontWeight="SemiBold" Text="版本" />
+                                            <TextBlock Grid.Column="5" FontWeight="SemiBold" Text="状态" />
+                                        </Grid>
+                                    </ListView.Header>
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Padding="0,7" ColumnSpacing="10">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="1.35*" />
+                                                    <ColumnDefinition Width="0.7*" />
+                                                    <ColumnDefinition Width="0.75*" />
+                                                    <ColumnDefinition Width="0.8*" />
+                                                    <ColumnDefinition Width="0.9*" />
+                                                    <ColumnDefinition Width="1.2*" />
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Spacing="2">
+                                                    <TextBlock FontWeight="SemiBold" Text="{Binding CompletedAt}" />
+                                                    <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{Binding RunKey}" TextTrimming="CharacterEllipsis" />
+                                                </StackPanel>
+                                                <TextBlock Grid.Column="1" Text="{Binding ScopeLabel}" TextWrapping="WrapWholeWords" />
+                                                <TextBlock Grid.Column="2" Text="{Binding CountLabel}" />
+                                                <TextBlock Grid.Column="3" Text="{Binding SourceLabel}" TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Grid.Column="4" Text="{Binding VersionLabel}" />
+                                                <StackPanel Grid.Column="5" Spacing="2">
+                                                    <TextBlock FontWeight="SemiBold" Text="{Binding StateLabel}" />
+                                                    <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{Binding CurrentLabel}" />
+                                                </StackPanel>
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
+                                <Border Grid.Row="2" Padding="12" Background="{ThemeResource SubtleFillColorSecondaryBrush}" CornerRadius="6">
+                                    <Grid ColumnSpacing="16">
                                         <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="1.25*" />
-                                            <ColumnDefinition Width="0.8*" />
-                                            <ColumnDefinition Width="0.8*" />
+                                            <ColumnDefinition Width="1.35*" />
+                                            <ColumnDefinition Width="0.7*" />
+                                            <ColumnDefinition Width="0.75*" />
                                             <ColumnDefinition Width="0.8*" />
                                             <ColumnDefinition Width="1.4*" />
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Spacing="2">
-                                            <TextBlock FontWeight="SemiBold" Text="{Binding CompletedAt}" />
-                                            <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{Binding RunKey}" />
+                                            <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedRunDetail.CurrentLabel, Mode=OneWay, FallbackValue=未选择批次}" />
+                                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.SelectedRunDetail.RunKey, Mode=OneWay, FallbackValue=请选择列表中的批次}" />
                                         </StackPanel>
-                                        <TextBlock Grid.Column="1" Text="{Binding ScopeLabel}" TextWrapping="WrapWholeWords" />
-                                        <TextBlock Grid.Column="2" Text="{Binding CountLabel}" />
-                                        <TextBlock Grid.Column="3" Text="{Binding StateLabel}" />
-                                        <TextBlock Grid.Column="4" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding Note}" TextWrapping="WrapWholeWords" />
+                                        <StackPanel Grid.Column="1" Spacing="2">
+                                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="范围" />
+                                            <TextBlock Text="{x:Bind ViewModel.SelectedRunDetail.ScopeLabel, Mode=OneWay, FallbackValue=--}" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="2" Spacing="2">
+                                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="楼栋" />
+                                            <TextBlock Text="{x:Bind ViewModel.SelectedRunDetail.BuildingCountText, Mode=OneWay, FallbackValue=--}" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="3" Spacing="2">
+                                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="卡片" />
+                                            <TextBlock Text="{x:Bind ViewModel.SelectedRunDetail.CardCountText, Mode=OneWay, FallbackValue=--}" />
+                                        </StackPanel>
+                                        <StackPanel Grid.Column="4" Spacing="2">
+                                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="采集状态" />
+                                            <TextBlock Text="{x:Bind ViewModel.SelectedRunDetail.StatusSummary, Mode=OneWay, FallbackValue=--}" TextWrapping="WrapWholeWords" />
+                                        </StackPanel>
                                     </Grid>
-                                </DataTemplate>
-                            </ListView.ItemTemplate>
-                        </ListView>
-                        <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
-                            <Button Command="{x:Bind ViewModel.MarkRunAnomalyCommand}" Style="{StaticResource ToolbarButtonStyle}" Content="标记异常" />
-                            <Button Command="{x:Bind ViewModel.ClearRunAnomalyCommand}" Style="{StaticResource ToolbarButtonStyle}" Content="取消异常" />
-                            <Button
-                                Click="RestoreRun_Click"
-                                IsEnabled="{x:Bind ViewModel.CanRestoreSelectedRun, Mode=OneWay}"
-                                Style="{StaticResource ToolbarButtonStyle}"
-                                Content="恢复为当前数据" />
-                            <Button
-                                Click="DeleteRun_Click"
-                                IsEnabled="{x:Bind ViewModel.CanDeleteSelectedRun, Mode=OneWay}"
-                                Style="{StaticResource ToolbarButtonStyle}"
-                                Content="删除批次" />
-                        </StackPanel>
-                    </Grid>
-                </Border>
-            </Grid>
-        </Grid>
+                                </Border>
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+                </PivotItem>
+
+                <PivotItem Header="数据对比">
+                    <StackPanel Padding="0,8,0,20" Spacing="12">
+                        <Border Padding="18" Style="{StaticResource WorkbenchCardStyle}">
+                            <StackPanel Spacing="10">
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Spacing="3">
+                                        <TextBlock Style="{StaticResource SectionTitleStyle}" Text="版本对比与恢复" />
+                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.ComparisonStatusText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
+                                    </StackPanel>
+                                    <Button Grid.Column="1" Command="{x:Bind ViewModel.LoadSelectedComparisonCommand}" Style="{StaticResource ToolbarButtonStyle}" Content="重新对比" />
+                                </Grid>
+                                <ComboBox
+                                    Width="460"
+                                    AutomationProperties.Name="选择对比批次"
+                                    DisplayMemberPath="Summary"
+                                    Header="对比批次"
+                                    ItemsSource="{x:Bind ViewModel.FilteredRuns, Mode=OneWay}"
+                                    SelectedItem="{x:Bind ViewModel.SelectedRun, Mode=TwoWay}"
+                                    PlaceholderText="没有可用历史批次" />
+                                <Grid ColumnSpacing="10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Border Style="{StaticResource MetricCardStyle}">
+                                        <StackPanel Spacing="3">
+                                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="历史卡片" />
+                                            <TextBlock FontSize="22" FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedComparison.SnapshotCardCount, Mode=OneWay, FallbackValue=--}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Grid.Column="1" Style="{StaticResource MetricCardStyle}">
+                                        <StackPanel Spacing="3">
+                                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="当前卡片" />
+                                            <TextBlock FontSize="22" FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedComparison.CurrentCardCount, Mode=OneWay, FallbackValue=--}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Grid.Column="2" Style="{StaticResource MetricCardStyle}">
+                                        <StackPanel Spacing="3">
+                                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="新增 / 缺失" />
+                                            <TextBlock FontSize="18" FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedComparison.AddedCount, Mode=OneWay, FallbackValue=--}" />
+                                            <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind ViewModel.SelectedComparison.MissingCount, Mode=OneWay, FallbackValue=--}" />
+                                        </StackPanel>
+                                    </Border>
+                                    <Border Grid.Column="3" Style="{StaticResource MetricCardStyle}">
+                                        <StackPanel Spacing="3">
+                                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="字段差异" />
+                                            <TextBlock FontSize="22" FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedComparison.ChangedCount, Mode=OneWay, FallbackValue=--}" />
+                                        </StackPanel>
+                                    </Border>
+                                </Grid>
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.SelectedComparison.BlockingReason, Mode=OneWay, FallbackValue=请选择批次并完成对比}" TextWrapping="WrapWholeWords" />
+                            </StackPanel>
+                        </Border>
+                        <Border Padding="18" Style="{StaticResource WorkbenchCardStyle}">
+                            <Grid RowSpacing="10">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <TextBlock Style="{StaticResource SectionTitleStyle}" Text="按楼栋差异" />
+                                <ListView Grid.Row="1" MaxHeight="300" ItemsSource="{x:Bind ViewModel.SelectedBuildingDifferences, Mode=OneWay}" SelectionMode="None">
+                                    <ListView.Header>
+                                        <Grid Padding="0,0,0,6" ColumnSpacing="12">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock FontWeight="SemiBold" Text="楼栋" />
+                                            <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="历史" />
+                                            <TextBlock Grid.Column="2" FontWeight="SemiBold" Text="当前" />
+                                            <TextBlock Grid.Column="3" FontWeight="SemiBold" Text="新增" />
+                                            <TextBlock Grid.Column="4" FontWeight="SemiBold" Text="缺失" />
+                                        </Grid>
+                                    </ListView.Header>
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Padding="0,6" ColumnSpacing="12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock FontWeight="SemiBold" Text="{Binding Building}" />
+                                                <TextBlock Grid.Column="1" Text="{Binding SnapshotCountText}" />
+                                                <TextBlock Grid.Column="2" Text="{Binding CurrentCountText}" />
+                                                <TextBlock Grid.Column="3" Text="{Binding AddedCountText}" />
+                                                <TextBlock Grid.Column="4" Text="{Binding MissingCountText}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
+                                <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
+                                    <Button AutomationProperties.Name="恢复对比批次" Click="RestoreRun_Click" IsEnabled="{x:Bind ViewModel.CanRestoreSelectedRun, Mode=OneWay}" Style="{StaticResource PrimaryToolbarButtonStyle}">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <FontIcon FontSize="14" Glyph="&#xE777;" />
+                                            <TextBlock Text="确认恢复为当前数据" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Click="DeleteRun_Click" IsEnabled="{x:Bind ViewModel.CanDeleteSelectedRun, Mode=OneWay}" Style="{StaticResource ToolbarButtonStyle}" Content="删除批次" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </StackPanel>
+                </PivotItem>
+
+                <PivotItem Header="质量审计">
+                    <StackPanel Padding="0,8,0,20" Spacing="12">
+                        <Border Padding="18" Style="{StaticResource WorkbenchCardStyle}">
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Spacing="2">
+                                    <TextBlock Style="{StaticResource SectionTitleStyle}" Text="质量审计" />
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="针对选中批次或当前数据生成审计结果。" />
+                                </StackPanel>
+                                <Button Grid.Column="1" Command="{x:Bind ViewModel.RunQualityAuditCommand}" Style="{StaticResource ToolbarButtonStyle}" Content="运行基础审计" />
+                                <Button Grid.Column="2" Command="{x:Bind ViewModel.RunRealtimeAuditCommand}" Style="{StaticResource ToolbarButtonStyle}" Content="运行实时审计" />
+                            </Grid>
+                        </Border>
+
+                        <Border Padding="18" Style="{StaticResource WorkbenchCardStyle}">
+                            <StackPanel Spacing="8">
+                                <TextBlock Style="{StaticResource SectionTitleStyle}" Text="基础质量审计" />
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.QualityStatusText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
+                                <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.QualitySummaryText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
+                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind ViewModel.QualityGeneratedText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
+                                <ListView MaxHeight="260" ItemsSource="{x:Bind ViewModel.QualityIssues, Mode=OneWay}" SelectionMode="None">
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Padding="0,5" ColumnSpacing="12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="130" />
+                                                    <ColumnDefinition Width="72" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Spacing="1">
+                                                    <TextBlock FontWeight="SemiBold" Text="{Binding Severity}" />
+                                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding Code}" TextTrimming="CharacterEllipsis" />
+                                                </StackPanel>
+                                                <TextBlock Grid.Column="1" Text="{Binding CountText}" />
+                                                <TextBlock Grid.Column="2" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding Message}" TextWrapping="WrapWholeWords" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Padding="18" Style="{StaticResource WorkbenchCardStyle}">
+                            <StackPanel Spacing="8">
+                                <TextBlock Style="{StaticResource SectionTitleStyle}" Text="实时点位审计" />
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.RealtimeQualityStatusText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
+                                <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.RealtimeQualitySummaryText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
+                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind ViewModel.RealtimeQualityGeneratedText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
+                                <ItemsControl ItemsSource="{x:Bind ViewModel.RealtimeQualityCategories, Mode=OneWay}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <ItemsWrapGrid Orientation="Horizontal" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Margin="0,0,6,4" Padding="8,5" Background="{ThemeResource ControlFillColorDefaultBrush}" CornerRadius="6">
+                                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding Label}" />
+                                                    <TextBlock FontWeight="SemiBold" Text="{Binding CountText}" />
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                                <ListView MaxHeight="260" ItemsSource="{x:Bind ViewModel.RealtimeQualityBuildings, Mode=OneWay}" SelectionMode="None">
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Padding="0,5" ColumnSpacing="12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="70" />
+                                                    <ColumnDefinition Width="90" />
+                                                    <ColumnDefinition Width="90" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock FontWeight="SemiBold" Text="{Binding Building}" />
+                                                <TextBlock Grid.Column="1" Text="{Binding RowsText}" />
+                                                <TextBlock Grid.Column="2" Text="{Binding CollectionErrorsText}" />
+                                                <TextBlock Grid.Column="3" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding MainCategoryText}" TextWrapping="WrapWholeWords" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Padding="18" Style="{StaticResource WorkbenchCardStyle}">
+                            <StackPanel Spacing="8">
+                                <TextBlock Style="{StaticResource SectionTitleStyle}" Text="实时对账" />
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.ReconciliationStatusText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="140" />
+                                        <ColumnDefinition Width="140" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox DisplayMemberPath="Label" ItemsSource="{x:Bind ViewModel.ReconciliationBuildingOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedReconciliationBuilding, Mode=TwoWay}" />
+                                    <ComboBox Grid.Column="1" DisplayMemberPath="Label" ItemsSource="{x:Bind ViewModel.ReconciliationTypeOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedReconciliationType, Mode=TwoWay}" />
+                                    <TextBox Grid.Column="2" PlaceholderText="设备名 / DevId / 证据" Text="{x:Bind ViewModel.ReconciliationSearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <Button Grid.Column="3" Command="{x:Bind ViewModel.ApplyReconciliationFilterCommand}" Style="{StaticResource PrimaryToolbarButtonStyle}" Content="筛选" />
+                                </Grid>
+                                <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.ReconciliationSummaryText, Mode=OneWay}" TextWrapping="WrapWholeWords" />
+                                <ListView MaxHeight="300" ItemsSource="{x:Bind ViewModel.ReconciliationItems, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedReconciliationItem, Mode=TwoWay}" SelectionMode="Single">
+                                    <ListView.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Padding="0,5" ColumnSpacing="12">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="120" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="70" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock FontWeight="SemiBold" Text="{Binding TypeLabel}" TextWrapping="WrapWholeWords" />
+                                                <StackPanel Grid.Column="1" Spacing="2">
+                                                    <TextBlock FontWeight="SemiBold" Text="{Binding Name}" TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding Building}" />
+                                                </StackPanel>
+                                                <TextBlock Grid.Column="2" HorizontalAlignment="Right" Text="{Binding ConfidenceText}" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListView.ItemTemplate>
+                                </ListView>
+                                <Button Command="{x:Bind ViewModel.OpenReconciliationItemCommand}" Style="{StaticResource ToolbarButtonStyle}" Content="定位选中数据" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </PivotItem>
+            </Pivot>
+        </ScrollViewer>
     </Grid>
 </Page>

@@ -91,6 +91,22 @@ public sealed class DataPageCrashRegressionTests
     }
 
     [Fact]
+    public void TasksPageMonitorsAndStopsTheBrowserLoginState()
+    {
+        var root = LocateRepositoryRoot();
+        var page = File.ReadAllText(
+            Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "TasksPage.xaml.cs"));
+        var viewModel = File.ReadAllText(
+            Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "CollectionTaskViewModel.cs"));
+
+        Assert.Contains("StartEnvironmentMonitoring", page, StringComparison.Ordinal);
+        Assert.Contains("StopEnvironmentMonitoring", page, StringComparison.Ordinal);
+        Assert.Contains("ClientWebSocket", viewModel, StringComparison.Ordinal);
+        Assert.Contains("LoginVerified", viewModel, StringComparison.Ordinal);
+        Assert.Contains("!cdpStatus.LoginVerified", viewModel, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AppRedirectsSecondActivationToTheTrayResidentInstance()
     {
         var root = LocateRepositoryRoot();

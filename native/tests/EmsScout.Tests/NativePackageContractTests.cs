@@ -33,6 +33,19 @@ public sealed class NativePackageContractTests
         Assert.Contains("Set-NativeWorkspaceMarker", update, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void UpdateSnapshotsSettingsAfterGracefulShutdown()
+    {
+        var root = LocateRepositoryRoot();
+        var update = File.ReadAllText(Path.Combine(root, "scripts", "native-update.ps1"));
+
+        var stopIndex = update.IndexOf("Stop-NativeDesktopProcess", StringComparison.Ordinal);
+        var hashIndex = update.IndexOf("$settingsHash =", StringComparison.Ordinal);
+
+        Assert.True(stopIndex >= 0);
+        Assert.True(hashIndex > stopIndex, "The settings hash must be captured after the app saves its placement on shutdown.");
+    }
+
     private static string LocateRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

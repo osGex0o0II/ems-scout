@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Net.Http;
+using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -52,8 +53,12 @@ public sealed partial class CollectionTaskViewModel(
     private bool _emsUrlReady;
     private bool _cdpReachable;
     private int _emsPageCount;
+    private bool _emsLoggedIn;
+    private bool _emsLoginVerified;
     private readonly DispatcherQueue _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
     private DispatcherQueueTimer? _progressTimer;
+    private DispatcherQueueTimer? _environmentMonitorTimer;
+    private bool _environmentMonitorInFlight;
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(StartCommand))]
@@ -886,9 +891,7 @@ public sealed partial class CollectionTaskViewModel(
             _databaseReady = dbPath;
             _jsonReady = jsonPath;
             _emsUrlReady = Uri.TryCreate(settings.EmsUrl, UriKind.Absolute, out _);
-            _cdpReachable = cdpStatus.IsReachable;
-            IsCollectionBrowserConnected = _cdpReachable;
-            _emsPageCount = cdpStatus.EmsPageCount;
+            ApplyBrowserStatus(cdpStatus);
 
             PreflightChecks.Clear();
             PreflightChecks.Add(!_nodeReady
@@ -911,9 +914,11 @@ public sealed partial class CollectionTaskViewModel(
                 ? PreflightCheckRow.Ok("采集浏览器", cdpStatus.Detail)
                 : PreflightCheckRow.Warning("采集浏览器", "尚未启动，请点击“打开采集浏览器”"));
             PreflightChecks.Add(_emsUrlReady
-                ? cdpStatus.EmsPageCount > 0
-                    ? PreflightCheckRow.Ok("EMS 页面", cdpStatus.LoginDetail)
-                    : PreflightCheckRow.Unknown("EMS 页面", cdpStatus.LoginDetail)
+                ? cdpStatus.EmsPageCount > 0 && cdpStatus.LoginVerified && cdpStatus.IsLoggedIn
+                    ? PreflightCheckRow.Ok("EMS 登录态", cdpStatus.LoginDetail)
+                    : cdpStatus.EmsPageCount > 0
+                        ? PreflightCheckRow.Warning("EMS 登录态", cdpStatus.LoginDetail)
+                        : PreflightCheckRow.Unknown("EMS 页面", cdpStatus.LoginDetail)
                 : PreflightCheckRow.Warning("EMS 页面", "系统设置中的 EMS 地址无效"));
             EnvironmentText = $"Node {nodeVersion}；依赖 {nodeDependencies}；浏览器 {cdpStatus.Detail}";
             CollectionBrowserActionText = "打开采集浏览器";
@@ -931,6 +936,8 @@ public sealed partial class CollectionTaskViewModel(
             _environmentChecked = true;
             IsEnvironmentReady = false;
             IsCollectionBrowserConnected = false;
+            _emsLoggedIn = false;
+            _emsLoginVerified = false;
             ReadinessTitle = "采集环境检查失败";
             ReadinessDetail = ex.Message;
             ReadinessGlyph = "\uE7BA";
@@ -994,6 +1001,10 @@ public sealed partial class CollectionTaskViewModel(
             {
                 missing.Add("已打开的 EMS 页面");
             }
+            else if (!_emsLoginVerified || !_emsLoggedIn)
+            {
+                missing.Add("EMS 登录态");
+            }
         }
 
         IsEnvironmentReady = missing.Count == 0;
@@ -1002,7 +1013,9 @@ public sealed partial class CollectionTaskViewModel(
             : usesBrowser && !_cdpReachable
                 ? "请先打开采集浏览器"
                 : usesBrowser && _emsPageCount == 0
-                    ? "请先登录 EMS"
+                    ? "请先打开 EMS 页面"
+                    : usesBrowser && (!_emsLoginVerified || !_emsLoggedIn)
+                        ? "请先登录 EMS"
                     : "需要完成采集准备";
         ReadinessGlyph = IsEnvironmentReady ? "\uE930" : "\uE7BA";
         ReadinessDetail = IsEnvironmentReady
@@ -1010,7 +1023,9 @@ public sealed partial class CollectionTaskViewModel(
             : usesBrowser && !_cdpReachable
                 ? "请先打开采集浏览器并登录 EMS"
                 : usesBrowser && _emsPageCount == 0
-                    ? "已连接浏览器，请在 EMS 页面完成登录"
+                    ? "已连接浏览器，请先打开 EMS 页面"
+                    : usesBrowser && (!_emsLoginVerified || !_emsLoggedIn)
+                        ? "已发现 EMS 页面，但尚未检测到登录后的 EMS 业务界面"
                     : "待处理：" + string.Join("、", missing.Distinct());
         StartCommand.NotifyCanExecuteChanged();
     }
@@ -1092,7 +1107,10 @@ public sealed partial class CollectionTaskViewModel(
         if (runEnumeration)
         {
             var cdpStatus = await CheckEdgeCdpAsync(settings.EdgeCdpPort, settings.EmsUrl).ConfigureAwait(true);
-            if (!cdpStatus.IsReachable || cdpStatus.EmsPageCount == 0)
+            if (!cdpStatus.IsReachable ||
+                cdpStatus.EmsPageCount == 0 ||
+                !cdpStatus.LoginVerified ||
+                !cdpStatus.IsLoggedIn)
             {
                 StatusText = "采集启动已阻止：未发现可采集 EMS 页面";
                 AddLog(StatusText);
@@ -1862,6 +1880,92 @@ public sealed partial class CollectionTaskViewModel(
         return string.IsNullOrWhiteSpace(value) ? null : value.Replace(" ", " · ", StringComparison.Ordinal);
     }
 
+    public void StartEnvironmentMonitoring()
+    {
+        if (_environmentMonitorTimer is null)
+        {
+            _environmentMonitorTimer = _dispatcherQueue.CreateTimer();
+            _environmentMonitorTimer.Interval = TimeSpan.FromSeconds(3);
+            _environmentMonitorTimer.Tick += async (_, _) => await MonitorEnvironmentAsync();
+        }
+
+        _environmentMonitorTimer.Start();
+    }
+
+    public void StopEnvironmentMonitoring()
+    {
+        _environmentMonitorTimer?.Stop();
+    }
+
+    private async Task MonitorEnvironmentAsync()
+    {
+        if (_environmentMonitorInFlight || IsRunning || IsCheckingEnvironment || !_environmentChecked)
+        {
+            return;
+        }
+
+        _environmentMonitorInFlight = true;
+        try
+        {
+            var settings = settingsService.Load();
+            var cdpStatus = await CheckEdgeCdpAsync(settings.EdgeCdpPort, settings.EmsUrl).ConfigureAwait(true);
+            ApplyBrowserStatus(cdpStatus);
+            UpdateEnvironmentReadiness();
+        }
+        catch
+        {
+            ApplyBrowserStatus(new EdgeCdpCheckResult(
+                IsReachable: false,
+                EmsPageCount: 0,
+                IsLoggedIn: false,
+                LoginVerified: false,
+                Detail: "CDP 未就绪",
+                LoginDetail: "CDP 未就绪，无法核实 EMS 登录态"));
+            UpdateEnvironmentReadiness();
+        }
+        finally
+        {
+            _environmentMonitorInFlight = false;
+        }
+    }
+
+    private void ApplyBrowserStatus(EdgeCdpCheckResult cdpStatus)
+    {
+        _cdpReachable = cdpStatus.IsReachable;
+        IsCollectionBrowserConnected = _cdpReachable;
+        _emsPageCount = cdpStatus.EmsPageCount;
+        _emsLoggedIn = cdpStatus.IsLoggedIn;
+        _emsLoginVerified = cdpStatus.LoginVerified;
+
+        var browserIndex = PreflightChecks
+            .Select((check, index) => (check, index))
+            .Where(item => item.check.Title is "采集浏览器" or "Edge CDP")
+            .Select(item => item.index)
+            .DefaultIfEmpty(-1)
+            .First();
+        if (browserIndex >= 0 && browserIndex < PreflightChecks.Count)
+        {
+            PreflightChecks[browserIndex] = cdpStatus.IsReachable
+                ? PreflightCheckRow.Ok("采集浏览器", cdpStatus.Detail)
+                : PreflightCheckRow.Warning("采集浏览器", cdpStatus.Detail);
+        }
+
+        var loginIndex = PreflightChecks
+            .Select((check, index) => (check, index))
+            .Where(item => item.check.Title is "EMS 登录态" or "EMS 页面")
+            .Select(item => item.index)
+            .DefaultIfEmpty(-1)
+            .First();
+        if (loginIndex >= 0 && loginIndex < PreflightChecks.Count)
+        {
+            PreflightChecks[loginIndex] = cdpStatus.EmsPageCount == 0
+                ? PreflightCheckRow.Unknown("EMS 页面", cdpStatus.LoginDetail)
+                : cdpStatus.LoginVerified && cdpStatus.IsLoggedIn
+                    ? PreflightCheckRow.Ok("EMS 登录态", cdpStatus.LoginDetail)
+                    : PreflightCheckRow.Warning("EMS 登录态", cdpStatus.LoginDetail);
+        }
+    }
+
     private void EnsureProgressTimer()
     {
         if (_progressTimer is not null)
@@ -2411,7 +2515,13 @@ public sealed partial class CollectionTaskViewModel(
             using var response = await client.GetAsync($"http://127.0.0.1:{port}/json/version").ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
             {
-                return new EdgeCdpCheckResult(false, 0, $"{port} 未就绪", "CDP 未就绪，无法核实 EMS 页面");
+                return new EdgeCdpCheckResult(
+                    IsReachable: false,
+                    EmsPageCount: 0,
+                    IsLoggedIn: false,
+                    LoginVerified: false,
+                    Detail: $"{port} 未就绪",
+                    LoginDetail: "CDP 未就绪，无法核实 EMS 页面");
             }
 
             try
@@ -2419,7 +2529,13 @@ public sealed partial class CollectionTaskViewModel(
                 using var pagesResponse = await client.GetAsync($"http://127.0.0.1:{port}/json/list").ConfigureAwait(false);
                 if (!pagesResponse.IsSuccessStatusCode)
                 {
-                    return new EdgeCdpCheckResult(true, 0, $"{port} 可访问；页面列表读取失败", "只能证明 CDP 可达，不能证明 EMS 已登录");
+                    return new EdgeCdpCheckResult(
+                        IsReachable: true,
+                        EmsPageCount: 0,
+                        IsLoggedIn: false,
+                        LoginVerified: false,
+                        Detail: $"{port} 可访问；页面列表读取失败",
+                        LoginDetail: "只能证明 CDP 可达，不能证明 EMS 已登录");
                 }
 
                 await using var stream = await pagesResponse.Content.ReadAsStreamAsync().ConfigureAwait(false);
@@ -2433,24 +2549,126 @@ public sealed partial class CollectionTaskViewModel(
                     .ToList();
                 if (emsPages.Count == 0)
                 {
-                    return new EdgeCdpCheckResult(true, 0, $"{port} 可访问；未发现 EMS 标签页", "未发现 EMS 页面；请先在 Edge 中打开并登录 EMS");
+                    return new EdgeCdpCheckResult(
+                        IsReachable: true,
+                        EmsPageCount: 0,
+                        IsLoggedIn: false,
+                        LoginVerified: false,
+                        Detail: $"{port} 可访问；未发现 EMS 标签页",
+                        LoginDetail: "未发现 EMS 页面；请先在 Edge 中打开并登录 EMS");
                 }
 
                 var first = emsPages[0];
+                var loginState = await CheckEmsLoginAsync(first.WebSocketDebuggerUrl).ConfigureAwait(false);
+                var loginDetail = loginState switch
+                {
+                    true => $"发现 EMS 页面：{ValueOrDash(first.Title)}；已检测到登录后的业务界面",
+                    false => $"发现 EMS 页面：{ValueOrDash(first.Title)}；未检测到登录后的业务界面",
+                    _ => $"发现 EMS 页面：{ValueOrDash(first.Title)}；无法读取页面登录态",
+                };
                 return new EdgeCdpCheckResult(
-                    true,
-                    emsPages.Count,
-                    $"{port} 可访问；发现 {emsPages.Count} 个 EMS 标签页",
-                    $"发现 EMS 页面：{ValueOrDash(first.Title)}。开始采集时会自动检查登录状态");
+                    IsReachable: true,
+                    EmsPageCount: emsPages.Count,
+                    IsLoggedIn: loginState == true,
+                    LoginVerified: loginState.HasValue,
+                    Detail: $"{port} 可访问；发现 {emsPages.Count} 个 EMS 标签页",
+                    LoginDetail: loginDetail);
             }
             catch
             {
-                return new EdgeCdpCheckResult(true, 0, $"{port} 可访问；页面列表读取失败", "只能证明 CDP 可达，不能证明 EMS 已登录");
+                return new EdgeCdpCheckResult(
+                    IsReachable: true,
+                    EmsPageCount: 0,
+                    IsLoggedIn: false,
+                    LoginVerified: false,
+                    Detail: $"{port} 可访问；页面列表读取失败",
+                    LoginDetail: "只能证明 CDP 可达，不能证明 EMS 已登录");
             }
         }
         catch
         {
-            return new EdgeCdpCheckResult(false, 0, $"{port} 未就绪", "CDP 未就绪，无法核实 EMS 页面");
+            return new EdgeCdpCheckResult(
+                IsReachable: false,
+                EmsPageCount: 0,
+                IsLoggedIn: false,
+                LoginVerified: false,
+                Detail: $"{port} 未就绪",
+                LoginDetail: "CDP 未就绪，无法核实 EMS 页面");
+        }
+    }
+
+    private static async Task<bool?> CheckEmsLoginAsync(string websocketDebuggerUrl)
+    {
+        if (string.IsNullOrWhiteSpace(websocketDebuggerUrl))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var socket = new ClientWebSocket();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+            await socket.ConnectAsync(new Uri(websocketDebuggerUrl), timeout.Token).ConfigureAwait(false);
+
+            const string expression = "(() => { const body = document.body?.innerText || ''; return !document.querySelector('input[type=\\\"password\\\"]') && /[1-6]号/.test(body) && body.includes('空调') && !!document.querySelector('.pi-svg-container, .ivu-menu, .pi-menu, .pi-app'); })()";
+            var request = JsonSerializer.Serialize(new
+            {
+                id = 1,
+                method = "Runtime.evaluate",
+                @params = new
+                {
+                    expression,
+                    returnByValue = true,
+                    awaitPromise = true,
+                },
+            });
+            var bytes = Encoding.UTF8.GetBytes(request);
+            await socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, timeout.Token).ConfigureAwait(false);
+
+            using var document = await ReadWebSocketJsonAsync(socket, timeout.Token).ConfigureAwait(false);
+            if (document is null ||
+                !document.RootElement.TryGetProperty("result", out var result) ||
+                !result.TryGetProperty("result", out var evaluation) ||
+                !evaluation.TryGetProperty("value", out var value) ||
+                value.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+            {
+                return null;
+            }
+
+            return value.GetBoolean();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static async Task<JsonDocument?> ReadWebSocketJsonAsync(ClientWebSocket socket, CancellationToken cancellationToken)
+    {
+        var buffer = new byte[8192];
+        while (true)
+        {
+            using var content = new MemoryStream();
+            WebSocketReceiveResult result;
+            do
+            {
+                result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), cancellationToken).ConfigureAwait(false);
+                if (result.MessageType == WebSocketMessageType.Close)
+                {
+                    return null;
+                }
+
+                content.Write(buffer, 0, result.Count);
+            }
+            while (!result.EndOfMessage);
+
+            var document = JsonDocument.Parse(content.ToArray());
+            if (document.RootElement.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.Number && id.GetInt32() == 1)
+            {
+                return document;
+            }
+
+            document.Dispose();
         }
     }
 
@@ -2458,7 +2676,10 @@ public sealed partial class CollectionTaskViewModel(
     {
         return new CdpPageInfo(
             Url: element.TryGetProperty("url", out var url) ? url.GetString() ?? string.Empty : string.Empty,
-            Title: element.TryGetProperty("title", out var title) ? title.GetString() ?? string.Empty : string.Empty);
+            Title: element.TryGetProperty("title", out var title) ? title.GetString() ?? string.Empty : string.Empty,
+            WebSocketDebuggerUrl: element.TryGetProperty("webSocketDebuggerUrl", out var websocket)
+                ? websocket.GetString() ?? string.Empty
+                : string.Empty);
     }
 
     private static bool IsLikelyEmsPage(string pageUrl, string emsUrl)
@@ -2500,10 +2721,12 @@ public sealed partial class CollectionTaskViewModel(
     private sealed record EdgeCdpCheckResult(
         bool IsReachable,
         int EmsPageCount,
+        bool IsLoggedIn,
+        bool LoginVerified,
         string Detail,
         string LoginDetail);
 
-    private sealed record CdpPageInfo(string Url, string Title);
+    private sealed record CdpPageInfo(string Url, string Title, string WebSocketDebuggerUrl);
 }
 
 public sealed record ReconciliationFilterOption(string Value, string Label);

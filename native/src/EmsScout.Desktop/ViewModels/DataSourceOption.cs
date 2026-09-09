@@ -5,11 +5,17 @@ namespace EmsScout.Desktop.ViewModels;
 public sealed class DataSourceOption
 {
     public DataSourceOption(CollectionRunRecord run)
+        : this(run, isCurrent: false)
+    {
+    }
+
+    private DataSourceOption(CollectionRunRecord run, bool isCurrent)
     {
         Value = run.Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
         Label = FormatDateTime(run.CompletedAt);
         Detail = $"{run.ScopeLabel} · {run.CountLabel}";
         RunId = run.Id;
+        IsCurrent = isCurrent;
     }
 
     private DataSourceOption(string label, string detail)
@@ -23,9 +29,11 @@ public sealed class DataSourceOption
 
     public static DataSourceOption Current(CollectionRunRecord? latestRun)
     {
-        var label = latestRun is null ? "当前 SQLite 数据" : FormatDateTime(latestRun.CompletedAt);
-        var detail = latestRun is null ? "当前数据" : "当前 SQLite 数据";
-        return new DataSourceOption(label, detail);
+        return latestRun is null
+            ? new DataSourceOption("暂无采集时间", "暂无批次")
+            : new DataSourceOption(
+                FormatDateTime(latestRun.CompletedAt),
+                $"{latestRun.ScopeLabel} · {latestRun.CountLabel}");
     }
 
     public string Value { get; }

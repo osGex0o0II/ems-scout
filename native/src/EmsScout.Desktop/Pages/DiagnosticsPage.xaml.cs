@@ -20,6 +20,11 @@ public sealed partial class DiagnosticsPage : Page
         ViewModel.Load();
     }
 
+    private void Page_Unloaded(object sender, RoutedEventArgs e)
+    {
+        ViewModel.StopSystemClock();
+    }
+
     private void OpenRecentExport_Click(object sender, RoutedEventArgs e)
     {
         if (sender is Button { Tag: DiagnosticFileRow row })

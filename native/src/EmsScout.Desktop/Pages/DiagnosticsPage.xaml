@@ -6,6 +6,7 @@
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     Loaded="Page_Loaded"
+    Unloaded="Page_Unloaded"
     mc:Ignorable="d">
 
     <ScrollViewer
@@ -14,12 +15,12 @@
         VerticalScrollBarVisibility="Auto">
         <StackPanel Padding="{StaticResource PagePadding}" Spacing="16">
             <StackPanel Spacing="3">
-                <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="关于 EMS 空调控制台" />
-                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="应用身份、版本与支持信息" />
+                <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="关于 EMS Scout" />
             </StackPanel>
 
             <Grid HorizontalAlignment="Stretch" MaxWidth="960" RowSpacing="16">
                 <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
@@ -42,16 +43,16 @@
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                             BorderThickness="1"
                             CornerRadius="8">
-                            <FontIcon
+                            <Image
+                                Width="46"
+                                Height="46"
                                 HorizontalAlignment="Center"
                                 VerticalAlignment="Center"
-                                FontSize="30"
-                                Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                                Glyph="&#xE946;" />
+                                Source="ms-appx:///Assets/EmsScoutLogo.png"
+                                Stretch="Uniform" />
                         </Border>
                         <StackPanel Grid.Column="1" Spacing="4" VerticalAlignment="Center">
-                            <TextBlock FontSize="26" FontWeight="SemiBold" Text="EMS 空调控制台" />
-                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="空调设备采集与数据管理工具" />
+                            <TextBlock FontSize="26" FontWeight="SemiBold" Text="EMS Scout" />
                             <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind ViewModel.AuthorText, Mode=OneWay}" />
                             <TextBlock
                                 Foreground="{ThemeResource TextFillColorTertiaryBrush}"
@@ -90,7 +91,6 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
                                 <TextBlock Style="{StaticResource SectionTitleStyle}" Text="应用信息" />
-                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="用于反馈问题和核对运行环境。" />
                             </StackPanel>
                             <Button
                                 Grid.Column="1"
@@ -114,12 +114,42 @@
                                         <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding Label}" />
                                         <StackPanel Grid.Column="1" Spacing="1">
                                             <TextBlock FontWeight="SemiBold" Text="{Binding Value}" TextWrapping="WrapWholeWords" />
-                                            <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{Binding Detail}" TextWrapping="WrapWholeWords" />
                                         </StackPanel>
                                     </Grid>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Row="2" Style="{StaticResource WorkbenchCardStyle}">
+                    <StackPanel Spacing="14">
+                        <TextBlock Style="{StaticResource SectionTitleStyle}" Text="设备信息" />
+                        <Grid ColumnSpacing="16" RowSpacing="10">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="96" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="96" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="当前时间" />
+                            <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="{x:Bind ViewModel.CurrentSystemTime, Mode=OneWay}" />
+                            <TextBlock Grid.Column="2" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="系统语言" />
+                            <TextBlock Grid.Column="3" FontWeight="SemiBold" Text="{x:Bind ViewModel.SystemLanguage, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Grid.Row="1" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="系统时区" />
+                            <TextBlock Grid.Row="1" Grid.Column="1" FontWeight="SemiBold" Text="{x:Bind ViewModel.SystemTimeZone, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Grid.Row="1" Grid.Column="2" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="设备名称" />
+                            <TextBlock Grid.Row="1" Grid.Column="3" FontWeight="SemiBold" Text="{x:Bind ViewModel.DeviceName, Mode=OneWay}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Grid.Row="2" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="Windows 版本" />
+                            <TextBlock Grid.Row="2" Grid.Column="1" FontWeight="SemiBold" Text="{x:Bind ViewModel.WindowsVersion, Mode=OneWay}" TextWrapping="WrapWholeWords" />
+                            <TextBlock Grid.Row="2" Grid.Column="2" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="处理器与内存" />
+                            <TextBlock Grid.Row="2" Grid.Column="3" FontWeight="SemiBold" Text="{x:Bind ViewModel.ProcessorAndMemory, Mode=OneWay}" TextWrapping="WrapWholeWords" />
+                        </Grid>
                     </StackPanel>
                 </Border>
             </Grid>

@@ -18,6 +18,8 @@ Data Management filtered Excel export is the only user-facing export path. Legac
 
 The Overview workbench uses one current `DeviceRecord` snapshot for fleet, building, and custom-area-group summaries. Custom area groups show their public-area device totals and separate running, stopped, offline, and unknown counts; selecting a group opens its Group Settings detail.
 
+Audit Center now opens a history-first workspace. History batches support date, building, source, status, and keyword filtering; select one to inspect its metadata and compare it with current SQLite data by building. Restore requires a completed comparison and confirmation; it automatically creates a linked `手动恢复` backup without deleting current annotations. Legacy databases receive additive batch metadata columns when history is first loaded.
+
 ## Run
 
 Use the packaged Windows App SDK launch path:
@@ -46,6 +48,8 @@ can trust the signer in the machine certificate stores. The installer fails fast
 equal or lower versions and verifies the user settings hash. Uninstall removes the app registration and desktop shortcut
 but preserves `%LOCALAPPDATA%\EMS Scout`, repository `out`, and `data`; `-PurgeData` requires typing `PURGE` and is the
 only path that removes the user-data directory.
+
+The update script closes the running app before taking the settings integrity snapshot because closing the main window can persist its latest placement. This prevents a normal shutdown write from being reported as an update failure.
 
 ## Validate
 

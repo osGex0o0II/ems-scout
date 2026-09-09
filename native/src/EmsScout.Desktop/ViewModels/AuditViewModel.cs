@@ -31,6 +31,7 @@ public sealed partial class AuditViewModel(
     [NotifyCanExecuteChangedFor(nameof(ClearRunAnomalyCommand))]
     [NotifyCanExecuteChangedFor(nameof(RestoreRunCommand))]
     [NotifyCanExecuteChangedFor(nameof(DeleteRunCommand))]
+    [NotifyCanExecuteChangedFor(nameof(LoadSelectedComparisonCommand))]
     [NotifyPropertyChangedFor(nameof(CanDeleteSelectedRun))]
     [NotifyPropertyChangedFor(nameof(CanRestoreSelectedRun))]
     public partial bool IsBusy { get; private set; }
@@ -82,6 +83,55 @@ public sealed partial class AuditViewModel(
     public partial string RunsStatusText { get; private set; } = "尚未读取历史批次";
 
     [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(ApplyHistoryFilterCommand))]
+    public partial string HistoryKeyword { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string HistoryFromText { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string HistoryToText { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial ReconciliationFilterOption? SelectedHistoryBuilding { get; set; }
+
+    [ObservableProperty]
+    public partial ReconciliationFilterOption? SelectedHistorySource { get; set; }
+
+    [ObservableProperty]
+    public partial ReconciliationFilterOption? SelectedHistoryStatus { get; set; }
+
+    [ObservableProperty]
+    public partial string LastRefreshedText { get; private set; } = "尚未刷新";
+
+    [ObservableProperty]
+    public partial string HistoryBatchCountText { get; private set; } = "0";
+
+    [ObservableProperty]
+    public partial string CurrentVersionText { get; private set; } = "--";
+
+    [ObservableProperty]
+    public partial string LatestCollectedText { get; private set; } = "--";
+
+    [ObservableProperty]
+    public partial string AnomalyBatchCountText { get; private set; } = "0";
+
+    [ObservableProperty]
+    public partial string RecoverableBatchCountText { get; private set; } = "0";
+
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(RestoreRunCommand))]
+    public partial CollectionRunDetail? SelectedRunDetail { get; private set; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CanRestoreSelectedRun))]
+    [NotifyCanExecuteChangedFor(nameof(RestoreRunCommand))]
+    public partial CollectionRunComparison? SelectedComparison { get; private set; }
+
+    [ObservableProperty]
+    public partial string ComparisonStatusText { get; private set; } = "选择历史批次后加载版本对比";
+
+    [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(MarkRunAnomalyCommand))]
     [NotifyCanExecuteChangedFor(nameof(ClearRunAnomalyCommand))]
     [NotifyCanExecuteChangedFor(nameof(RestoreRunCommand))]
@@ -92,7 +142,12 @@ public sealed partial class AuditViewModel(
 
     partial void OnSelectedRunChanged(CollectionRunRow? value)
     {
+        CancelComparisonLoad();
+        SelectedRunDetail = value is null ? null : new CollectionRunDetail(value.Record, value.IsCurrent);
+        SelectedComparison = null;
+        ComparisonStatusText = value is null ? "选择历史批次后加载版本对比" : "正在加载版本对比";
         _ = RefreshQualityAsync(CancellationToken.None);
+        _ = LoadSelectedComparisonAsync();
     }
 
     public ObservableCollection<DataFacetItem> Facets { get; } = [];
@@ -131,6 +186,36 @@ public sealed partial class AuditViewModel(
 
     public ObservableCollection<CollectionRunRow> Runs { get; } = [];
 
+    public ObservableCollection<CollectionRunRow> FilteredRuns { get; } = [];
+
+    public ObservableCollection<CollectionRunBuildingDifferenceRow> SelectedBuildingDifferences { get; } = [];
+
+    public ObservableCollection<ReconciliationFilterOption> HistoryBuildingOptions { get; } =
+    [
+        new(string.Empty, "全部楼栋"),
+        new("1号", "1号"), new("2号", "2号"), new("3号", "3号"),
+        new("4号", "4号"), new("5号", "5号"), new("6号", "6号"),
+    ];
+
+    public ObservableCollection<ReconciliationFilterOption> HistorySourceOptions { get; } =
+    [
+        new(string.Empty, "全部来源"),
+        new("采集导入", "采集导入"),
+        new("手动恢复", "手动恢复"),
+    ];
+
+    public ObservableCollection<ReconciliationFilterOption> HistoryStatusOptions { get; } =
+    [
+        new(string.Empty, "全部状态"),
+        new("completed", "已完成"),
+        new("backup", "恢复备份"),
+        new("failed", "失败"),
+        new("stopped", "已停止"),
+    ];
+
+    private IReadOnlyList<CollectionRunRecord> _allRuns = [];
+    private CancellationTokenSource? _comparisonCancellation;
+
     public bool CanDeleteSelectedRun => CanDeleteRun();
 
     public bool CanRestoreSelectedRun => CanRestoreRun();
@@ -139,6 +224,9 @@ public sealed partial class AuditViewModel(
     {
         SelectedReconciliationBuilding ??= ReconciliationBuildingOptions.FirstOrDefault();
         SelectedReconciliationType ??= ReconciliationTypeOptions.FirstOrDefault();
+        SelectedHistoryBuilding ??= HistoryBuildingOptions.FirstOrDefault();
+        SelectedHistorySource ??= HistorySourceOptions.FirstOrDefault();
+        SelectedHistoryStatus ??= HistoryStatusOptions.FirstOrDefault();
         await RefreshAsync(cancellationToken).ConfigureAwait(true);
     }
 
@@ -156,6 +244,7 @@ public sealed partial class AuditViewModel(
             await RefreshRealtimeQualityAsync(cancellationToken).ConfigureAwait(true);
             await RefreshReconciliationAsync(cancellationToken).ConfigureAwait(true);
             RefreshFacets();
+            LastRefreshedText = $"最后更新 {DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss}";
             StatusText = "审计中心已刷新";
         }
         finally
@@ -387,15 +476,20 @@ public sealed partial class AuditViewModel(
         {
             var runs = await collectionRunRepository.ListAsync(80, cancellationToken).ConfigureAwait(true);
             var selectedId = SelectedRun?.Id;
+            _allRuns = runs;
+            var catalog = CollectionDataSourceCatalog.Build(runs);
             Runs.Clear();
             foreach (var run in runs)
             {
-                Runs.Add(new CollectionRunRow(run));
+                Runs.Add(new CollectionRunRow(run, catalog.CurrentRun?.Id == run.Id));
             }
 
+            ApplyHistoryFilterInternal(updateSelection: false);
+            UpdateHistorySummary(catalog.CurrentRun);
+
             SelectedRun = selectedId.HasValue
-                ? Runs.FirstOrDefault(run => run.Id == selectedId.Value)
-                : null;
+                ? FilteredRuns.FirstOrDefault(run => run.Id == selectedId.Value) ?? PreferredComparisonRun()
+                : PreferredComparisonRun();
             RunsStatusText = Runs.Count == 0
                 ? "暂无历史批次"
                 : $"已读取 {Runs.Count:N0} 个历史批次";
@@ -405,7 +499,126 @@ public sealed partial class AuditViewModel(
             Runs.Clear();
             SelectedRun = null;
             RunsStatusText = "历史批次读取失败：" + ex.Message;
+            _allRuns = [];
+            FilteredRuns.Clear();
+            UpdateHistorySummary(null);
         }
+    }
+
+    [RelayCommand]
+    private void ApplyHistoryFilter()
+    {
+        ApplyHistoryFilterInternal();
+        StatusText = $"历史批次筛选已更新，共 {FilteredRuns.Count:N0} 条";
+    }
+
+    private void ApplyHistoryFilterInternal(bool updateSelection = true)
+    {
+        var filter = new CollectionRunFilter(
+            From: ParseFilterDate(HistoryFromText, endOfDay: false),
+            To: ParseFilterDate(HistoryToText, endOfDay: true),
+            Building: EmptyToNull(SelectedHistoryBuilding?.Value),
+            Source: EmptyToNull(SelectedHistorySource?.Value),
+            Status: EmptyToNull(SelectedHistoryStatus?.Value),
+            Keyword: EmptyToNull(HistoryKeyword));
+        var catalog = CollectionDataSourceCatalog.Build(_allRuns);
+        FilteredRuns.Clear();
+        foreach (var run in _allRuns.Where(filter.Matches))
+        {
+            FilteredRuns.Add(new CollectionRunRow(run, catalog.CurrentRun?.Id == run.Id));
+        }
+
+        if (updateSelection)
+        {
+            var selectedId = SelectedRun?.Id;
+            SelectedRun = selectedId.HasValue
+                ? FilteredRuns.FirstOrDefault(run => run.Id == selectedId.Value) ?? PreferredComparisonRun()
+                : PreferredComparisonRun();
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanLoadSelectedComparison))]
+    private async Task LoadSelectedComparisonAsync()
+    {
+        if (SelectedRun is null)
+        {
+            return;
+        }
+
+        CancelComparisonLoad();
+        var runId = SelectedRun.Id;
+        var cancellation = new CancellationTokenSource();
+        _comparisonCancellation = cancellation;
+        try
+        {
+            ComparisonStatusText = $"正在比较批次 #{runId} 与当前数据";
+            var comparison = await collectionRunRepository
+                .CompareCurrentAsync(runId, cancellation.Token)
+                .ConfigureAwait(true);
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (SelectedRun?.Id != runId)
+            {
+                return;
+            }
+
+            SelectedComparison = comparison;
+            SelectedBuildingDifferences.Clear();
+            foreach (var difference in comparison.BuildingDifferences)
+            {
+                SelectedBuildingDifferences.Add(new CollectionRunBuildingDifferenceRow(difference));
+            }
+
+            ComparisonStatusText = comparison.IsRestorable
+                ? "对比完成，可以进行恢复前确认"
+                : comparison.BlockingReason ?? "该批次当前不可恢复";
+        }
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            if (SelectedRun?.Id != runId)
+            {
+                return;
+            }
+
+            SelectedComparison = null;
+            SelectedBuildingDifferences.Clear();
+            ComparisonStatusText = "版本对比失败：" + ex.Message;
+        }
+        finally
+        {
+            if (ReferenceEquals(_comparisonCancellation, cancellation))
+            {
+                _comparisonCancellation = null;
+            }
+
+            cancellation.Dispose();
+        }
+    }
+
+    private bool CanLoadSelectedComparison() => SelectedRun is not null && !IsBusy;
+
+    private CollectionRunRow? PreferredComparisonRun() =>
+        FilteredRuns.FirstOrDefault(run => !run.IsCurrent) ?? FilteredRuns.FirstOrDefault();
+
+    private void CancelComparisonLoad()
+    {
+        _comparisonCancellation?.Cancel();
+        _comparisonCancellation = null;
+    }
+
+    private void UpdateHistorySummary(CollectionRunRecord? currentRun)
+    {
+        var completed = _allRuns.Where(run => run.Status.Equals("completed", StringComparison.OrdinalIgnoreCase)).ToArray();
+        HistoryBatchCountText = completed.Length.ToString("N0");
+        CurrentVersionText = currentRun is null
+            ? "--"
+            : $"#{currentRun.Id} · {CollectionRunMetadata.From(currentRun).DataVersion}";
+        LatestCollectedText = currentRun is null ? "--" : FormatDateTime(currentRun.CompletedAt);
+        AnomalyBatchCountText = _allRuns.Count(run => run.IsAnomaly).ToString("N0");
+        RecoverableBatchCountText = completed.Count(run => !run.IsAnomaly).ToString("N0");
     }
 
     private bool CanOpenReconciliationItem() => SelectedReconciliationItem is not null && !IsBusy;
@@ -459,7 +672,11 @@ public sealed partial class AuditViewModel(
         RefreshFacets();
     }
 
-    private bool CanRestoreRun() => SelectedRun is { IsAnomaly: false } && !IsBusy;
+    private bool CanRestoreRun() => SelectedRun is { IsAnomaly: false } &&
+        !SelectedRun.IsCurrent &&
+        SelectedComparison is { IsRestorable: true } comparison &&
+        comparison.RunId == SelectedRun.Id &&
+        !IsBusy;
 
     [RelayCommand(CanExecute = nameof(CanRestoreRun))]
     public async Task RestoreRunAsync()
@@ -563,6 +780,21 @@ public sealed partial class AuditViewModel(
     private static string? EmptyToNull(string? value)
     {
         return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static DateTimeOffset? ParseFilterDate(string? value, bool endOfDay)
+    {
+        if (string.IsNullOrWhiteSpace(value) || !DateTimeOffset.TryParse(value.Trim(), out var parsed))
+        {
+            return null;
+        }
+
+        if (endOfDay && value.Trim().Length <= 10)
+        {
+            return parsed.Date.AddDays(1).AddTicks(-1);
+        }
+
+        return parsed;
     }
 
     private static string FormatDateTime(string value)

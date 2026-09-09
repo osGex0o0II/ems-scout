@@ -23,9 +23,14 @@ public sealed class DashboardOverviewService(
         var summary = BuildSummary(inventoryRows);
         var areaGroupsTask = LoadAreaGroupsAsync(inventoryRows, cancellationToken);
         var areaGroupContext = await areaGroupsTask.ConfigureAwait(false);
-        var totalMetricDetail = runId is null
-            ? "当前 SQLite 数据库存量口径"
-            : $"历史批次 #{runId.Value}库存口径";
+        var collectedAt = inventoryRows
+            .Where(device => device.CollectedAt is not null)
+            .Select(device => device.CollectedAt!.Value)
+            .ToArray();
+        var sourceUpdatedAt = collectedAt.Length == 0 ? null as DateTimeOffset? : collectedAt.Max();
+        var totalMetricDetail = sourceUpdatedAt.HasValue
+            ? sourceUpdatedAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+            : "暂无采集时间";
 
         var metrics = new[]
         {
@@ -36,11 +41,6 @@ public sealed class DashboardOverviewService(
             new OverviewMetric("未知", summary.Unknown.ToString("N0"), "需排查状态映射", summary.Unknown > 0 ? OverviewMetricKind.Warning : OverviewMetricKind.Success, CommunicationState: "未知"),
         };
 
-        var collectedAt = inventoryRows
-            .Where(device => device.CollectedAt is not null)
-            .Select(device => device.CollectedAt!.Value)
-            .ToArray();
-        var sourceUpdatedAt = collectedAt.Length == 0 ? null as DateTimeOffset? : collectedAt.Max();
         return new DashboardOverview(
             "SQLite 采集库 + 实时详情",
             sourceUpdatedAt,

@@ -32,7 +32,7 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
                 continue;
             }
 
-            var updatedAt = new DateTimeOffset(File.GetLastWriteTime(file));
+            var updatedAt = ReadSourceUpdatedAt(document.RootElement, file);
             var sourceFile = Path.GetRelativePath(rootPath, file);
             var index = 0;
             foreach (var row in jsonRows.EnumerateArray())
@@ -44,6 +44,42 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
         }
 
         return new RealtimeDetailSet(rows);
+    }
+
+    private static DateTimeOffset ReadSourceUpdatedAt(JsonElement root, string file)
+    {
+        foreach (var propertyName in new[] { "capturedAt", "completedAt", "collectedAt", "updatedAt" })
+        {
+            if (TryReadTimestamp(root, propertyName, out var timestamp))
+            {
+                return timestamp;
+            }
+        }
+
+        if (root.TryGetProperty("summary", out var summary) && summary.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var propertyName in new[] { "capturedAt", "completedAt", "generatedAt" })
+            {
+                if (TryReadTimestamp(summary, propertyName, out var timestamp))
+                {
+                    return timestamp;
+                }
+            }
+        }
+
+        return new DateTimeOffset(File.GetLastWriteTimeUtc(file), TimeSpan.Zero);
+    }
+
+    private static bool TryReadTimestamp(JsonElement element, string propertyName, out DateTimeOffset timestamp)
+    {
+        timestamp = default;
+        if (!element.TryGetProperty(propertyName, out var value) ||
+            value.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        return DateTimeOffset.TryParse(value.GetString(), out timestamp);
     }
 
     private string LatestRealtimeFile(string building)
