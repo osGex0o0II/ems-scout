@@ -67,6 +67,14 @@ public partial class App : Microsoft.UI.Xaml.Application
         }
 
         _mainInstance.Activated += MainInstance_Activated;
+        try
+        {
+            await Services.GetRequiredService<SqliteSchemaMigrator>().MigrateAsync();
+        }
+        catch (Exception exception)
+        {
+            Debug.WriteLine("SQLite schema migration was skipped: " + exception.Message);
+        }
         _window = new MainWindow();
         _window.Activate();
         if (_window is MainWindow mainWindow)
@@ -106,6 +114,8 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton(provider => new AppDataPathService(
             workspaceRoot,
             provider.GetRequiredService<AppSettingsService>()));
+        services.AddSingleton(provider => new SqliteSchemaMigrator(
+            () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
         services.AddSingleton<AppUiSettingsService>();
         services.AddSingleton<StartupTaskService>();
         services.AddSingleton<SendToShortcutService>();
@@ -114,12 +124,15 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<IRealtimeDetailSource>(provider => new RealtimeLatestJsonSource(
             workspaceRoot,
             () => provider.GetRequiredService<AppDataPathService>().DataDirectory));
+        services.AddSingleton<IRealtimeSnapshotStore>(provider => new SqliteRealtimeSnapshotStore(
+            () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
         services.AddSingleton<IDeviceWatchRepository>(provider => new SqliteDeviceWatchRepository(
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
         services.AddSingleton<IDeviceReadRepository>(provider => new SqliteDeviceReadRepository(
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath,
             provider.GetRequiredService<IRealtimeDetailSource>(),
-            provider.GetRequiredService<IDeviceWatchRepository>()));
+            provider.GetRequiredService<IDeviceWatchRepository>(),
+            provider.GetRequiredService<IRealtimeSnapshotStore>()));
         services.AddSingleton<IDeviceExportService>(provider => new SqliteDeviceExportService(
             provider.GetRequiredService<IDeviceReadRepository>()));
         services.AddSingleton<IDeviceAnnotationService>(provider => new SqliteDeviceAnnotationService(

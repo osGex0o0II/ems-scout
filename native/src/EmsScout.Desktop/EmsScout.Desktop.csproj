@@ -32,6 +32,7 @@
     <Content Include="Assets\AppIcon.ico" />
     <Content Include="Assets\EmsScoutLogo.png" />
     <Content Include="Assets\Wide310x150Logo.scale-200.png" />
+    <Content Include="$(NativeNodeRuntimePath)" Link="Sidecar\runtime\node.exe" Condition="'$(NativeNodeRuntimePath)' != '' and Exists('$(NativeNodeRuntimePath)')" />
   </ItemGroup>
 
   <ItemGroup>

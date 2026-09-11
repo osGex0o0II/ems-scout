@@ -6,33 +6,57 @@ public static class DeviceQuerySpecification
 {
     public static bool MatchesScope(DeviceRecord row, DeviceQuery query)
     {
-        return MatchesBuilding(row, query.Building) &&
-               MatchesCommunication(row, query.CommunicationState) &&
-               MatchesFloor(row, query.Floor) &&
-               MatchesSubArea(row, query.SubArea) &&
-               MatchesPageName(row, query.PageName) &&
-               MatchesDeviceName(row, query.DeviceName) &&
-               MatchesZuo(row, query.Zuo) &&
-               MatchesTag(row, query.Tag) &&
+        return MatchesScope(row, query, null);
+    }
+
+    public static bool MatchesResult(DeviceRecord row, DeviceQuery query)
+    {
+        return MatchesResult(row, query, null);
+    }
+
+    public static bool MatchesResultExcept(
+        DeviceRecord row,
+        DeviceQuery query,
+        DeviceFilterFacet excludedFacet)
+    {
+        return MatchesResult(row, query, excludedFacet);
+    }
+
+    private static bool MatchesScope(
+        DeviceRecord row,
+        DeviceQuery query,
+        DeviceFilterFacet? excludedFacet)
+    {
+        return (excludedFacet == DeviceFilterFacet.Building || MatchesBuilding(row, query.Building)) &&
+               (excludedFacet == DeviceFilterFacet.CommunicationState || MatchesCommunication(row, query.CommunicationState)) &&
+               (excludedFacet == DeviceFilterFacet.Floor || MatchesFloor(row, query.Floor)) &&
+               (excludedFacet == DeviceFilterFacet.SubArea || MatchesSubArea(row, query.SubArea)) &&
+               (excludedFacet == DeviceFilterFacet.PageName || MatchesPageName(row, query.PageName)) &&
+               (excludedFacet == DeviceFilterFacet.DeviceName || MatchesDeviceName(row, query.DeviceName)) &&
+               (excludedFacet == DeviceFilterFacet.Zuo || MatchesZuo(row, query.Zuo)) &&
+               (excludedFacet == DeviceFilterFacet.Tag || MatchesTag(row, query.Tag)) &&
                MatchesRealtimeMatch(row, query.RealtimeMatch) &&
                MatchesRealtimePoints(row, query.RealtimePoints) &&
                MatchesWatch(row, query.WatchState) &&
                MatchesSearch(row, query.SearchText);
     }
 
-    public static bool MatchesResult(DeviceRecord row, DeviceQuery query)
+    private static bool MatchesResult(
+        DeviceRecord row,
+        DeviceQuery query,
+        DeviceFilterFacet? excludedFacet)
     {
-        return MatchesScope(row, query) &&
+        return MatchesScope(row, query, excludedFacet) &&
                MatchesArea(row, query.AreaType) &&
-               MatchesExactText(row.Mode, query.Mode) &&
-               MatchesExactText(row.Fan, query.Fan) &&
-               MatchesExactText(row.SetTemperature, query.SetTemperature) &&
-               MatchesExactText(row.IndoorTemperature, query.IndoorTemperature) &&
-               MatchesRealtimeField(row, query.RealtimePower, detail => detail.PowerState) &&
-               MatchesRealtimeField(row, query.RealtimeMode, detail => detail.Mode) &&
-               MatchesRealtimeField(row, query.RealtimeFan, detail => detail.Fan) &&
-               MatchesRealtimeLock(row, query.RealtimeLock) &&
-               MatchesRealtimeField(row, query.RealtimeSystemType, detail => detail.Field("系统类型")) &&
+               (excludedFacet == DeviceFilterFacet.Mode || MatchesOperatingValue(row, row.Mode, query.Mode)) &&
+               (excludedFacet == DeviceFilterFacet.Fan || MatchesOperatingValue(row, row.Fan, query.Fan)) &&
+               (excludedFacet == DeviceFilterFacet.SetTemperature || MatchesOperatingValue(row, row.SetTemperature, query.SetTemperature)) &&
+               (excludedFacet == DeviceFilterFacet.IndoorTemperature || MatchesOperatingValue(row, row.IndoorTemperature, query.IndoorTemperature)) &&
+               (excludedFacet == DeviceFilterFacet.RealtimePower || MatchesRealtimeField(row, query.RealtimePower, detail => detail.PowerState)) &&
+               (excludedFacet == DeviceFilterFacet.RealtimeMode || MatchesRealtimeField(row, query.RealtimeMode, detail => detail.Mode)) &&
+               (excludedFacet == DeviceFilterFacet.RealtimeFan || MatchesRealtimeField(row, query.RealtimeFan, detail => detail.Fan)) &&
+               (excludedFacet == DeviceFilterFacet.RealtimeLock || MatchesRealtimeLock(row, query.RealtimeLock)) &&
+               (excludedFacet == DeviceFilterFacet.RealtimeSystemType || MatchesRealtimeField(row, query.RealtimeSystemType, detail => detail.Field("系统类型"))) &&
                MatchesRealtimeText(row, query.RealtimeModbus, detail => detail.ModbusAddress) &&
                DeviceHealthRules.MatchesQuickFilter(row, query.QuickFilter);
     }
@@ -94,6 +118,12 @@ public static class DeviceQuerySpecification
         return allowed.Count == 0 || allowed.Contains(actual ?? string.Empty);
     }
 
+    private static bool MatchesOperatingValue(DeviceRecord row, string actual, string? expected)
+    {
+        return string.IsNullOrWhiteSpace(expected) ||
+               row.CommunicationState != DeviceCommunicationState.Offline && MatchesExactText(actual, expected);
+    }
+
     private static bool MatchesTag(DeviceRecord row, string? tag)
     {
         return string.IsNullOrWhiteSpace(tag) ||
@@ -105,9 +135,9 @@ public static class DeviceQuerySpecification
         return realtimeMatch?.Trim() switch
         {
             null or "" or "all" => true,
-            "matched" => row.Realtime is not null,
-            "missing" => row.Realtime is null,
-            "invalid" => row.Realtime?.IsInvalid == true,
+            "matched" => row.CommunicationState != DeviceCommunicationState.Offline && row.Realtime is not null,
+            "missing" => row.CommunicationState != DeviceCommunicationState.Offline && row.Realtime is null,
+            "invalid" => row.CommunicationState != DeviceCommunicationState.Offline && row.Realtime?.IsInvalid == true,
             "manual" => row.HasManualOverride,
             "virtual" => row.IsVirtual,
             _ => true,
@@ -119,9 +149,9 @@ public static class DeviceQuerySpecification
         return realtimePoints?.Trim() switch
         {
             null or "" or "all" => true,
-            "complete" => row.RealtimePointsComplete,
-            "incomplete" => row.Realtime is null || !row.RealtimePointsComplete,
-            "missing" => row.Realtime is null,
+            "complete" => row.CommunicationState != DeviceCommunicationState.Offline && row.RealtimePointsComplete,
+            "incomplete" => row.CommunicationState != DeviceCommunicationState.Offline && (row.Realtime is null || !row.RealtimePointsComplete),
+            "missing" => row.CommunicationState != DeviceCommunicationState.Offline && row.Realtime is null,
             _ => true,
         };
     }
@@ -161,6 +191,11 @@ public static class DeviceQuerySpecification
             return true;
         }
 
+        if (row.CommunicationState == DeviceCommunicationState.Offline)
+        {
+            return false;
+        }
+
         if (string.Equals(expected.Trim(), "无实时数据", StringComparison.OrdinalIgnoreCase))
         {
             return row.Realtime is null;
@@ -173,6 +208,7 @@ public static class DeviceQuerySpecification
     private static bool MatchesRealtimeLock(DeviceRecord row, string? expected)
     {
         return string.IsNullOrWhiteSpace(expected) ||
+               row.CommunicationState != DeviceCommunicationState.Offline &&
                string.Equals(row.RealtimeLockText, expected.Trim(), StringComparison.OrdinalIgnoreCase);
     }
 
@@ -184,6 +220,11 @@ public static class DeviceQuerySpecification
         if (string.IsNullOrWhiteSpace(expected))
         {
             return true;
+        }
+
+        if (row.CommunicationState == DeviceCommunicationState.Offline)
+        {
+            return false;
         }
 
         return row.Realtime is not null &&

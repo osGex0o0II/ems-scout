@@ -29,6 +29,9 @@ const SKIP_INVENTORY = process.argv.includes('--skip-inventory');
 const PREPARE_PAGE = !process.argv.includes('--no-prepare-page');
 const SKIP_AUDIT = process.argv.includes('--skip-audit');
 const LOG_FILE = process.argv.includes('--log-file') || process.argv.some(a => a.startsWith('--log-file='));
+const RUN_ID = Number(
+  ((process.argv.find(a => a.startsWith('--run-id=')) || '').split('=').slice(1).join('=') ||
+    process.env.EMS_RUN_ID || 0));
 installRealtimeLog({ prefix: 'realtime_all_batch' });
 
 const USE_MANAGED_BROWSER = BROWSER_MODE !== 'cdp';
@@ -334,6 +337,7 @@ async function main() {
       `--reopen-every=${REOPEN_EVERY}`,
       `--timeout=${TIMEOUT_MS}`,
       ...(MAX_DEVICES > 0 ? [`--max-devices=${MAX_DEVICES}`] : []),
+      ...(RUN_ID > 0 ? [`--run-id=${RUN_ID}`] : []),
       ...(WRITE_LATEST ? ['--write-latest'] : []),
     ], {
       EMS_OVERALL_TOTAL: String(_overallTotal || 0),
@@ -397,6 +401,7 @@ async function main() {
     const outPath = path.join(OUT_DIR, `realtime_all_buildings_batch_summary_${timestamp()}.json`);
     const summary = {
     createdAt: new Date().toISOString(),
+    runId: RUN_ID > 0 ? RUN_ID : null,
     wallElapsedMs: Date.now() - startedAt,
     options: {
       buildings: BUILDINGS,

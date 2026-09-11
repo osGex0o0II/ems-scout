@@ -1,10 +1,34 @@
 namespace EmsScout.Application.Devices;
 
-public sealed class RealtimeDetailSet(IReadOnlyList<RealtimeDetailRecord> rows)
+public enum RealtimeDetailAvailability
+{
+    Available,
+    MissingSnapshot,
+    Unavailable,
+}
+
+public sealed class RealtimeDetailSet(
+    IReadOnlyList<RealtimeDetailRecord> rows,
+    RealtimeDetailAvailability availability = RealtimeDetailAvailability.Available,
+    string? statusText = null,
+    long? sourceRunId = null)
 {
     private readonly Dictionary<string, int> _exactUsage = [];
 
     public IReadOnlyList<RealtimeDetailRecord> Rows { get; } = rows;
+
+    public RealtimeDetailAvailability Availability { get; } = availability;
+
+    public long? SourceRunId { get; } = sourceRunId;
+
+    public string StatusText { get; } = statusText ?? (availability switch
+    {
+        RealtimeDetailAvailability.MissingSnapshot => "该批次未保存实时详情快照，集控锁定状态不可用",
+        RealtimeDetailAvailability.Unavailable => "实时详情暂不可用",
+        _ => string.Empty,
+    });
+
+    public bool IsAvailable => Availability == RealtimeDetailAvailability.Available;
 
     public Dictionary<string, List<RealtimeDetailRecord>> ByExactKey { get; } = BuildIndex(rows, row => RealtimeKeyBuilder.ExactKey(row));
 

@@ -48,19 +48,16 @@ public sealed class DataPageCrashRegressionTests
     }
 
     [Fact]
-    public void TasksPageDefersLogAutoScrollUntilThePageIsLoaded()
+    public void TasksPageDoesNotOwnDiagnosticLogControls()
     {
         var root = LocateRepositoryRoot();
         var source = File.ReadAllText(
             Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "TasksPage.xaml.cs"));
 
-        var handlerStart = source.IndexOf("private void Logs_CollectionChanged", StringComparison.Ordinal);
-        var handlerEnd = source.IndexOf("private void AttachLogs", handlerStart, StringComparison.Ordinal);
-
-        Assert.True(handlerStart >= 0 && handlerEnd > handlerStart);
-        var handler = source[handlerStart..handlerEnd];
-        Assert.Contains("IsLoaded", handler, StringComparison.Ordinal);
-        Assert.Contains("TryEnqueue", handler, StringComparison.Ordinal);
+        Assert.DoesNotContain("Logs_CollectionChanged", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("AttachLogs", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("CopyLogs_Click", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("ClearLogs_Click", source, StringComparison.Ordinal);
     }
 
     [Fact]

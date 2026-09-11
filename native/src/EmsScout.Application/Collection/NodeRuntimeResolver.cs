@@ -12,6 +12,8 @@ public static class NodeRuntimeResolver
 
         var candidates = new[]
         {
+            Path.Combine(AppContext.BaseDirectory, "Sidecar", "runtime", "node.exe"),
+            Path.Combine(AppContext.BaseDirectory, "runtime", "node.exe"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "nodejs", "node.exe"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "nodejs", "node.exe"),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "nodejs", "node.exe"),

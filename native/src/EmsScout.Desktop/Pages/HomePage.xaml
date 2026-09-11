@@ -18,7 +18,7 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel Spacing="3">
-                    <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="EMS 运维工作台" />
+                    <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="EMS Scout" />
                 </StackPanel>
                 <Grid
                     x:Name="HeaderActions"
@@ -27,7 +27,7 @@
                     ColumnSpacing="6">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="36" />
-                        <ColumnDefinition Width="240" />
+                        <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="36" />
                     </Grid.ColumnDefinitions>
@@ -61,15 +61,20 @@
                     </Button>
                     <ComboBox
                         Grid.Column="1"
-                        Width="240"
                         AutomationProperties.Name="数据批次时间"
+                        HorizontalAlignment="Left"
                         VerticalContentAlignment="Center"
-                        DisplayMemberPath="DisplayLabel"
                         ItemsSource="{x:Bind ViewModel.HistoricalDataSources, Mode=OneWay}"
                         PlaceholderText="{x:Bind ViewModel.CurrentBatchTimestamp, Mode=OneWay}"
                         SelectedItem="{x:Bind ViewModel.SelectedDataSource, Mode=TwoWay}"
                         IsEnabled="{x:Bind ViewModel.CanChangeDataSource, Mode=OneWay}"
-                        SelectionChanged="DataSource_SelectionChanged" />
+                        SelectionChanged="DataSource_SelectionChanged">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding DisplayLabel}" TextTrimming="CharacterEllipsis" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
                     <ProgressRing
                         Grid.Column="2"
                         Width="16"
@@ -134,7 +139,6 @@
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind Label}" />
                                 <TextBlock Grid.Row="1" FontSize="26" FontWeight="SemiBold" Text="{x:Bind Value}" />
@@ -144,7 +148,6 @@
                                     Text="{x:Bind Detail}"
                                     TextTrimming="CharacterEllipsis"
                                     ToolTipService.ToolTip="{x:Bind Detail}" />
-                                <TextBlock Grid.Row="3" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" Text="{x:Bind ActionText}" />
                             </Grid>
                         </Border>
                     </DataTemplate>
@@ -173,10 +176,6 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel Spacing="2">
                                 <TextBlock Style="{StaticResource SectionTitleStyle}" Text="我的区域组" />
-                                <TextBlock
-                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                    Text="{x:Bind ViewModel.AreaGroupsStatus, Mode=OneWay}"
-                                    TextWrapping="WrapWholeWords" />
                             </StackPanel>
                             <Button
                                 Grid.Column="1"

@@ -341,8 +341,12 @@ public sealed partial class AuditViewModel(
             QualityIssues.Clear();
             if (report is null)
             {
-                QualityStatusText = "未找到质量审计文件";
-                QualitySummaryText = "采集或手动运行质量审计后显示结果";
+                QualityStatusText = SelectedRun is null
+                    ? "未找到质量审计文件"
+                    : $"批次 #{SelectedRun.Id} 没有质量报告";
+                QualitySummaryText = SelectedRun is null
+                    ? "采集或手动运行质量审计后显示结果"
+                    : "该批次没有可关联的质量审计结果，请针对该批次重新运行质量审计";
                 QualityGeneratedText = "--";
                 return;
             }

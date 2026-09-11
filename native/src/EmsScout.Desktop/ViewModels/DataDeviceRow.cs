@@ -1,5 +1,6 @@
 using System.Globalization;
 using EmsScout.Application.Devices;
+using EmsScout.Domain;
 using Microsoft.UI.Xaml.Media;
 using Windows.UI;
 
@@ -77,7 +78,9 @@ public sealed class DataDeviceRow(
         ? Math.Max(0, temperatureWarningThreshold)
         : 2.0;
 
-    public double? TemperatureDifference { get; } = ParseTemperatureDifference(record.IndoorTemperature, record.SetTemperature);
+    public double? TemperatureDifference { get; } = record.CommunicationState != DeviceCommunicationState.Offline
+        ? ParseTemperatureDifference(record.IndoorTemperature, record.SetTemperature)
+        : null;
 
     public bool IsTemperatureWarning => TemperatureDifference is double difference && difference > TemperatureWarningThreshold;
 

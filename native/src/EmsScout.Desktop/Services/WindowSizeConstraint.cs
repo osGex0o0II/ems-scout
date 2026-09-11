@@ -9,10 +9,11 @@ namespace EmsScout.Desktop.Services;
 
 public static class WindowSizeConstraint
 {
+    public const int CurrentPlacementVersion = 2;
     public const int MinimumClientWidth = 1040;
     public const int MinimumClientHeight = 680;
-    public const int InitialClientWidth = 1160;
-    public const int InitialClientHeight = 760;
+    public const int InitialClientWidth = MinimumClientWidth;
+    public const int InitialClientHeight = MinimumClientHeight;
     private const double InitialWidthWorkAreaRatio = 0.82;
     private const double InitialHeightWorkAreaRatio = 0.86;
 
@@ -50,12 +51,14 @@ public static class WindowSizeConstraint
         var size = window.AppWindow.Size;
         return new WindowPlacementState
         {
+            PlacementVersion = CurrentPlacementVersion,
             Left = position.X,
             Top = position.Y,
             Width = size.Width,
             Height = size.Height,
         };
     }
+
 
     public static void Restore(Window window, WindowPlacementState placement)
     {

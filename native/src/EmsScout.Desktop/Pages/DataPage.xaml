@@ -20,10 +20,7 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
-            <StackPanel Spacing="3">
-                <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="数据管理" />
-                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.StatusText, Mode=OneWay}" />
-            </StackPanel>
+            <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="数据管理" />
             <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8" VerticalAlignment="Top">
                 <Button
                     Width="32"
@@ -53,9 +50,9 @@
                     </Grid>
                 </Button>
                 <ComboBox
-                    Width="320"
                     MaxDropDownHeight="420"
                     AutomationProperties.Name="选择数据批次"
+                    HorizontalAlignment="Left"
                     VerticalContentAlignment="Center"
                     ItemsSource="{x:Bind ViewModel.DataSources, Mode=OneWay}"
                     SelectedItem="{x:Bind ViewModel.SelectedDataSource, Mode=TwoWay}"
@@ -103,10 +100,7 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <StackPanel Spacing="2">
-                        <TextBlock Style="{StaticResource SectionTitleStyle}" Text="筛选条件" />
-                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="筛选和 Excel 导出使用同一组条件。" />
-                    </StackPanel>
+                    <TextBlock Style="{StaticResource SectionTitleStyle}" Text="筛选条件" />
                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6">
                         <Button Click="ApplyFilters_Click" Style="{StaticResource PrimaryToolbarButtonStyle}" IsEnabled="{x:Bind ViewModel.CanRunDataAction, Mode=OneWay}">
                             <StackPanel Orientation="Horizontal" Spacing="6">
@@ -190,6 +184,7 @@
                     </VisualStateManager.VisualStateGroups>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
                     <Grid Padding="10,6" ColumnSpacing="8">
@@ -227,9 +222,16 @@
                             </Button>
                         </StackPanel>
                     </Grid>
+                    <TextBlock
+                        Grid.Row="1"
+                        Margin="10,0,10,6"
+                        Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                        Text="{x:Bind ViewModel.DataStatusText, Mode=OneWay}"
+                        TextWrapping="WrapWholeWords"
+                        Visibility="{x:Bind ViewModel.DataStatusVisibility, Mode=OneWay}" />
                     <ListView
                         x:Name="CompactDataList"
-                        Grid.Row="1"
+                        Grid.Row="2"
                         ItemsSource="{x:Bind ViewModel.Devices, Mode=OneWay}"
                         SelectedItem="{x:Bind ViewModel.SelectedDevice, Mode=TwoWay}"
                         SelectionChanged="DeviceList_SelectionChanged"
@@ -319,7 +321,7 @@
                     </ListView>
                     <ListView
                         x:Name="WideDataList"
-                        Grid.Row="1"
+                        Grid.Row="2"
                         Visibility="Collapsed"
                         ItemsSource="{x:Bind ViewModel.Devices, Mode=OneWay}"
                         SelectedItem="{x:Bind ViewModel.SelectedDevice, Mode=TwoWay}"

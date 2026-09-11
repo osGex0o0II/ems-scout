@@ -37,6 +37,15 @@ public sealed partial class SettingsViewModel(AppSettingsService settingsService
     public partial bool SaveNdjsonLog { get; set; }
 
     [ObservableProperty]
+    public partial double RealtimeBatchSize { get; set; } = 20;
+
+    [ObservableProperty]
+    public partial double RealtimeReopenEvery { get; set; } = 3;
+
+    [ObservableProperty]
+    public partial double RealtimeTimeoutMs { get; set; } = 15000;
+
+    [ObservableProperty]
     public partial int ThemeIndex { get; set; }
 
     [ObservableProperty]
@@ -85,6 +94,12 @@ public sealed partial class SettingsViewModel(AppSettingsService settingsService
         new("琥珀", Color.FromArgb(255, 217, 119, 6)),
         new("深黄", Color.FromArgb(255, 180, 83, 9)),
     ];
+
+    public IReadOnlyList<double> RealtimeBatchSizeOptions { get; } = [10, 20, 50, 100];
+
+    public IReadOnlyList<double> RealtimeReopenEveryOptions { get; } = [0, 1, 3, 5, 10];
+
+    public IReadOnlyList<double> RealtimeTimeoutOptions { get; } = [5000, 10000, 15000, 30000, 60000];
 
     [ObservableProperty]
     public partial ColorPresetOption? SelectedOfflineStatusColor { get; set; }
@@ -148,6 +163,9 @@ public sealed partial class SettingsViewModel(AppSettingsService settingsService
             _ => 1,
         };
         SaveNdjsonLog = settings.SaveNdjsonLog;
+        RealtimeBatchSize = settings.RealtimeBatchSize;
+        RealtimeReopenEvery = settings.RealtimeReopenEvery;
+        RealtimeTimeoutMs = settings.RealtimeTimeoutMs;
         ThemeIndex = settings.Theme.ToLowerInvariant() switch
         {
             "light" => 1,
@@ -190,6 +208,9 @@ public sealed partial class SettingsViewModel(AppSettingsService settingsService
                 _ => "INFO",
             },
             SaveNdjsonLog = SaveNdjsonLog,
+            RealtimeBatchSize = ClampToInt(RealtimeBatchSize, 1, 100),
+            RealtimeReopenEvery = ClampToInt(RealtimeReopenEvery, 0, 50),
+            RealtimeTimeoutMs = ClampToInt(RealtimeTimeoutMs, 3000, 120000),
             Theme = ThemeIndex switch
             {
                 1 => "light",
@@ -240,6 +261,13 @@ public sealed partial class SettingsViewModel(AppSettingsService settingsService
 
     private static string ToHex(Color color) =>
         $"#{color.A:X2}{color.R:X2}{color.G:X2}{color.B:X2}";
+
+    private static int ClampToInt(double value, int minimum, int maximum)
+    {
+        return double.IsFinite(value)
+            ? Math.Clamp(Convert.ToInt32(Math.Round(value)), minimum, maximum)
+            : minimum;
+    }
 
     partial void OnSelectedOfflineStatusColorChanged(ColorPresetOption? value)
     {

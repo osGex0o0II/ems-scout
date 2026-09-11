@@ -35,7 +35,8 @@ public sealed record DeviceRecord(
     bool IsVirtual = false,
     DeviceWatchState? Watch = null,
     string? PageSection = null,
-    DateTimeOffset? CollectedAt = null)
+    DateTimeOffset? CollectedAt = null,
+    string? RealtimeUnavailableReason = null)
 {
     public string Location => $"{Building} / {FloorLabel} / {SubArea}";
 
@@ -68,8 +69,12 @@ public sealed record DeviceRecord(
         ? "未知"
         : CommunicationText;
 
-    public string RealtimeLockText => Realtime is null
+    public string RealtimeLockText => CommunicationState == DeviceCommunicationState.Offline
         ? "无实时数据"
+        : Realtime is null && !string.IsNullOrWhiteSpace(RealtimeUnavailableReason)
+            ? RealtimeUnavailableReason
+            : Realtime is null
+                ? "无实时数据"
         : IsRealtimeLockUsable() ? Realtime.LockState : "未知";
 
     public IReadOnlyList<string> TagList => Tags ?? [];

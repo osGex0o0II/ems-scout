@@ -76,7 +76,9 @@ public sealed class DashboardUiContractTests
         Assert.Contains("ColumnSpacing=\"6\"", header);
         Assert.DoesNotContain("<ColumnDefinition Width=\"20\"", header);
         Assert.DoesNotContain("Width=\"270\"", header);
-        Assert.Contains("Width=\"240\"", header);
+        Assert.DoesNotContain("Width=\"320\"", header);
+        Assert.Contains("<ColumnDefinition Width=\"Auto\" />", header);
+        Assert.Contains("HorizontalAlignment=\"Left\"", header);
     }
 
     [Fact]

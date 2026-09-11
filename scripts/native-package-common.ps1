@@ -190,7 +190,19 @@ function Get-NativeUserDataPath {
 function Set-NativeWorkspaceMarker {
     param([Parameter(Mandatory)][string]$PackageDirectory)
 
-    $directory = Get-Item -LiteralPath (Resolve-NativePackageDirectory $PackageDirectory)
+    $packageRoot = Resolve-NativePackageDirectory $PackageDirectory
+    $userDataPath = Get-NativeUserDataPath
+    New-Item -ItemType Directory -Path $userDataPath -Force | Out-Null
+
+    $markerPath = Join-Path $userDataPath 'workspace-root.txt'
+    if (Test-Path -LiteralPath $markerPath -PathType Leaf) {
+        $existing = (Get-Content -LiteralPath $markerPath -Raw).Trim()
+        if ($existing -and (Test-Path -LiteralPath (Join-Path $existing 'package.json') -PathType Leaf)) {
+            return $existing
+        }
+    }
+
+    $directory = Get-Item -LiteralPath $packageRoot
     $workspaceRoot = $null
     while ($null -ne $directory) {
         if ((Test-Path -LiteralPath (Join-Path $directory.FullName 'package.json') -PathType Leaf) -and
@@ -205,9 +217,7 @@ function Set-NativeWorkspaceMarker {
         return $null
     }
 
-    $userDataPath = Get-NativeUserDataPath
-    New-Item -ItemType Directory -Path $userDataPath -Force | Out-Null
-    Set-Content -LiteralPath (Join-Path $userDataPath 'workspace-root.txt') -Value $workspaceRoot -Encoding UTF8
+    Set-Content -LiteralPath $markerPath -Value $workspaceRoot -Encoding UTF8
     return $workspaceRoot
 }
 

@@ -154,6 +154,7 @@ public sealed class SqliteDeviceReadRepositoryTests
             !string.IsNullOrWhiteSpace(row.SubArea) &&
             !string.IsNullOrWhiteSpace(row.Name) &&
             !string.IsNullOrWhiteSpace(row.CommunicationText) &&
+            row.CommunicationText != "离线" &&
             !string.IsNullOrWhiteSpace(row.Mode) &&
             !string.IsNullOrWhiteSpace(row.Fan) &&
             !string.IsNullOrWhiteSpace(row.SetTemperature) &&
@@ -210,7 +211,7 @@ public sealed class SqliteDeviceReadRepositoryTests
         var zuoQuery = new DeviceQuery(Building: zuoSample.Building, Zuo: zuoSample.Zuo, Limit: 1);
         var zuoResult = await repository.SearchAsync(zuoQuery);
         var zuoOptions = await repository.LoadFilterOptionsAsync(zuoQuery);
-        var zuo = Assert.Single(zuoOptions.Zuos);
+        var zuo = Assert.Single(zuoOptions.Zuos, option => option.Value == zuoSample.Zuo);
         Assert.Equal(zuoSample.Zuo, zuo.Value);
         Assert.Equal(zuoResult.Total, zuo.Count);
 
@@ -219,7 +220,69 @@ public sealed class SqliteDeviceReadRepositoryTests
         var missingRealtimeOptions = await repository.LoadFilterOptionsAsync(missingRealtimeQuery);
         var missingRealtime = Assert.Single(missingRealtimeOptions.RealtimeLocks ?? [], option => option.Value == "无实时数据");
         Assert.Equal(missingRealtimeResult.Total, missingRealtime.Count);
-        Assert.DoesNotContain(missingRealtimeOptions.RealtimeLocks ?? [], option => option.Value != "无实时数据");
+        Assert.Contains(missingRealtimeOptions.RealtimeLocks ?? [], option => option.Value == "开启");
+        Assert.Contains(missingRealtimeOptions.RealtimeLocks ?? [], option => option.Value == "关闭");
+    }
+
+    [Fact]
+    public async Task FilterOptionsKeepAlternativeRealtimeLockValuesWhenLockIsSelected()
+    {
+        var repository = new SqliteDeviceReadRepository(CurrentDatabasePath(), new CurrentRealtimeSource());
+
+        var options = await repository.LoadFilterOptionsAsync(new DeviceQuery(RealtimeLock: "未知"));
+
+        Assert.Contains(options.RealtimeLocks ?? [], option => option.Value == "未知");
+        Assert.Contains(options.RealtimeLocks ?? [], option => option.Value == "开启");
+        Assert.Contains(options.RealtimeLocks ?? [], option => option.Value == "关闭");
+    }
+
+    [Fact]
+    public async Task FilterOptionsKeepAlternativeValuesForPrimaryFacets()
+    {
+        var repository = new SqliteDeviceReadRepository(CurrentDatabasePath());
+
+        var offlineOptions = await repository.LoadFilterOptionsAsync(
+            new DeviceQuery(CommunicationState: "离线"));
+        var communicationOptions = await repository.LoadFilterOptionsAsync(
+            new DeviceQuery(CommunicationState: "离线"));
+        var modeOptions = await repository.LoadFilterOptionsAsync(
+            new DeviceQuery(Mode: "通风"));
+
+        Assert.Empty(offlineOptions.Modes);
+        Assert.Empty(offlineOptions.Fans);
+        Assert.Empty(offlineOptions.SetTemperatures);
+        Assert.Contains(communicationOptions.CommunicationStates, option => option.Value == "开机");
+        Assert.Contains(communicationOptions.CommunicationStates, option => option.Value == "关机");
+        Assert.Contains(communicationOptions.CommunicationStates, option => option.Value == "离线");
+        Assert.Contains(modeOptions.Modes, option => option.Value == "通风");
+        Assert.Contains(modeOptions.Modes, option => option.Value == "制冷");
+    }
+
+    [Fact]
+    public void OfflineDevicesDoNotMatchOperatingFiltersOrQualitySignals()
+    {
+        var offline = TestDevice(isVirtual: false) with
+        {
+            CommunicationText = "离线",
+            CommunicationState = DeviceCommunicationState.Offline,
+            Mode = "制冷",
+            Fan = "高",
+            SetTemperature = "18",
+            IndoorTemperature = "35"
+        };
+
+        Assert.True(DeviceQuerySpecification.MatchesResult(offline, new DeviceQuery(Building: "1号")));
+        Assert.True(DeviceQuerySpecification.MatchesResult(offline, new DeviceQuery(CommunicationState: "离线")));
+        Assert.False(DeviceQuerySpecification.MatchesResult(offline, new DeviceQuery(Mode: "制冷")));
+        Assert.False(DeviceQuerySpecification.MatchesResult(offline, new DeviceQuery(Fan: "高")));
+        Assert.False(DeviceQuerySpecification.MatchesResult(offline, new DeviceQuery(SetTemperature: "18")));
+        Assert.False(DeviceQuerySpecification.MatchesResult(offline, new DeviceQuery(IndoorTemperature: "35")));
+        Assert.Equal("无实时数据", offline.RealtimeLockText);
+        Assert.False(DeviceHealthRules.Evaluate(offline).HasTemperatureIssue);
+
+        var facets = DeviceFacets.From([offline]);
+        Assert.Equal(0, facets.TemperatureIssues);
+        Assert.Equal(0, facets.RealtimePointsIncomplete);
     }
 
     [Fact]
@@ -326,6 +389,66 @@ public sealed class SqliteDeviceReadRepositoryTests
         var row = Assert.Single((await new SqliteDeviceReadRepository(databasePath).SearchAsync(new DeviceQuery())).Rows);
 
         Assert.Equal(DateTimeOffset.Parse("2026-07-12T00:42:15Z"), row.CollectedAt);
+    }
+
+    [Fact]
+    public async Task LoadsRealtimeLockStateFromTheSelectedHistoricalRun()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-history-realtime-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var databasePath = Path.Combine(root, "history.db");
+        var outputDirectory = Path.Combine(root, "out");
+        Directory.CreateDirectory(outputDirectory);
+        await CreateHistoricalDatabaseAsync(databasePath);
+        await File.WriteAllTextAsync(
+            Path.Combine(outputDirectory, "realtime_1号_latest.json"),
+            """
+            {
+              "runId": 1,
+              "capturedAt": "2026-08-31T03:00:00Z",
+              "rows": [{
+                "building": "1号",
+                "floor": 1,
+                "subAreaText": "1F",
+                "pageName": "default",
+                "name": "1-0101-KT",
+                "fields": { "集控锁定": "开启" },
+                "validFields": { "集控锁定": true }
+              }]
+            }
+            """);
+
+        var snapshotStore = new SqliteRealtimeSnapshotStore(() => databasePath);
+        await snapshotStore.SaveAsync(1, outputDirectory, ["1号"]);
+        var repository = new SqliteDeviceReadRepository(
+            databasePath,
+            realtimeSnapshotStore: snapshotStore);
+
+        var result = await repository.SearchAsync(new DeviceQuery(RunId: 1, Limit: 10));
+
+        var row = Assert.Single(result.Rows);
+        Assert.Equal("开启", row.RealtimeLockText);
+        Assert.Equal(1, result.Facets.RealtimeLocked);
+    }
+
+    private static async Task CreateHistoricalDatabaseAsync(string databasePath)
+    {
+        await using var connection = new SqliteConnection($"Data Source={databasePath}");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE collection_runs (id INTEGER PRIMARY KEY, completed_at TEXT);
+            CREATE TABLE run_buildings (id INTEGER PRIMARY KEY, run_id INTEGER, building TEXT, updated_at TEXT);
+            CREATE TABLE run_sub_areas (id INTEGER PRIMARY KEY, run_id INTEGER, building TEXT, sub_idx INTEGER, floor REAL, text TEXT, x REAL, y REAL);
+            CREATE TABLE run_pages (id INTEGER PRIMARY KEY, run_id INTEGER, run_sub_area_id INTEGER, page_name TEXT, layout TEXT, collected_at TEXT);
+            CREATE TABLE run_cards (id INTEGER PRIMARY KEY, run_id INTEGER, run_page_id INTEGER, name TEXT, switch TEXT, mode TEXT, indoor TEXT, set_temp TEXT, fan TEXT, indicator TEXT, comm TEXT);
+            INSERT INTO collection_runs VALUES (1, '2026-08-31T03:00:00Z');
+            INSERT INTO run_buildings VALUES (1, 1, '1号', '2026-08-31T03:00:00Z');
+            INSERT INTO run_sub_areas VALUES (1, 1, '1号', 1, 1, '1F', 100, 100);
+            INSERT INTO run_pages VALUES (1, 1, 1, 'default', 'grid', '2026-08-31T03:00:00Z');
+            INSERT INTO run_cards VALUES (1, 1, 1, '1-0101-KT', 'OFF', '制冷', '26', '25', '中', 'green.png', '关机');
+            """;
+        await command.ExecuteNonQueryAsync();
     }
 
     private static string CurrentDatabasePath()

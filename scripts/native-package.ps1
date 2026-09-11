@@ -35,6 +35,10 @@ $manifestPath = Join-Path $tempRoot 'Package.appxmanifest'
 $certificatePath = Join-Path $tempRoot 'EMS-Scout-signing.cer'
 $rootCertificatePath = Join-Path $tempRoot 'EMS-Scout-signing-root.cer'
 New-Item -ItemType Directory -Path $buildOutput -Force | Out-Null
+$nodeRuntime = (Get-Command node.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+if (-not $nodeRuntime) {
+    throw 'Node.js runtime is required to build a functional EMS Scout package.'
+}
 try {
     New-NativeVersionedManifest `
         -SourceManifestPath (Join-Path $repositoryRoot 'native\src\EmsScout.Desktop\Package.appxmanifest') `
@@ -60,6 +64,7 @@ try {
         "/p:PackageManifestPath=$manifestPath",
         "/p:AppxPackageDir=$buildOutput",
         "/p:PackageCertificateThumbprint=$($certificate.Thumbprint)",
+        "/p:NativeNodeRuntimePath=$nodeRuntime",
         '--no-restore',
         '-v:minimal'
     )
@@ -85,13 +90,16 @@ try {
     if ($null -eq $testLayout) {
         throw "MSIX test layout was not generated under $buildOutput."
     }
-    foreach ($dependency in Get-ChildItem -LiteralPath (Join-Path $testLayout.FullName 'Dependencies') -Recurse -File -Filter '*.msix') {
-        $relative = $dependency.FullName.Substring($testLayout.FullName.Length).TrimStart('\')
-        $destination = Join-Path $packageDirectory $relative
-        New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
-        Copy-Item -LiteralPath $dependency.FullName -Destination $destination -Force
+    Write-Output "MSIX test layout: $($testLayout.FullName)"
+    $dependencyRoot = Join-Path $testLayout.FullName 'Dependencies'
+    if (Test-Path -LiteralPath $dependencyRoot -PathType Container) {
+        foreach ($dependency in Get-ChildItem -LiteralPath $dependencyRoot -Recurse -File -Filter '*.msix') {
+            $relative = $dependency.FullName.Substring($testLayout.FullName.Length).TrimStart('\')
+            $destination = Join-Path $packageDirectory $relative
+            New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
+            Copy-Item -LiteralPath $dependency.FullName -Destination $destination -Force
+        }
     }
-
     $files = @(Get-ChildItem -LiteralPath $packageDirectory -Recurse -File | Where-Object { $_.Name -ne 'package-manifest.json' })
     $fileRecords = foreach ($file in $files) {
         [pscustomobject]@{

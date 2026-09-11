@@ -77,8 +77,42 @@ public sealed class DashboardOverviewServiceTests
         Assert.DoesNotContain("历史批次", totalMetric.Detail);
     }
 
-    private static DeviceRecord TestDevice(long id, bool isVirtual, DateTimeOffset? collectedAt = null)
+    [Fact]
+    public async Task UsesPercentagesForEveryStatusMetricDetail()
     {
+        var devices = new[]
+        {
+            TestDevice(1, isVirtual: false, state: DeviceCommunicationState.Running),
+            TestDevice(2, isVirtual: false, state: DeviceCommunicationState.Stopped),
+            TestDevice(3, isVirtual: false, state: DeviceCommunicationState.Offline),
+            TestDevice(4, isVirtual: false, state: DeviceCommunicationState.Unknown),
+        };
+        var repository = new CapturingDeviceRepository(
+            new DeviceListResult(devices.Length, devices, DeviceFacets.From(devices)));
+        var service = new DashboardOverviewService(
+            repository,
+            new FailingAreaGroupRepository());
+
+        var overview = await service.LoadAsync();
+
+        Assert.All(
+            overview.Metrics.Where(metric => metric.Label is "开机" or "关机" or "离线" or "未知"),
+            metric => Assert.Equal("25.0%", metric.Detail));
+    }
+
+    private static DeviceRecord TestDevice(
+        long id,
+        bool isVirtual,
+        DateTimeOffset? collectedAt = null,
+        DeviceCommunicationState state = DeviceCommunicationState.Stopped)
+    {
+        var (communicationText, switchState) = state switch
+        {
+            DeviceCommunicationState.Running => ("开机", "ON"),
+            DeviceCommunicationState.Offline => ("离线", "-"),
+            DeviceCommunicationState.Unknown => ("未知", "-"),
+            _ => ("关机", "OFF"),
+        };
         return new DeviceRecord(
             Id: id,
             Building: "1号",
@@ -90,14 +124,14 @@ public sealed class DashboardOverviewServiceTests
             PageName: "1",
             Name: isVirtual ? "GQ-VIRTUAL-KT" : "1-0101-KT",
             Layout: "grid",
-            SwitchState: "OFF",
+            SwitchState: switchState,
             Mode: "制冷",
             IndoorTemperature: "26",
             SetTemperature: "25",
             Fan: "中",
             Indicator: string.Empty,
-            CommunicationText: "关机",
-            CommunicationState: DeviceCommunicationState.Stopped,
+            CommunicationText: communicationText,
+            CommunicationState: state,
             IsVirtual: isVirtual,
             CollectedAt: collectedAt);
     }

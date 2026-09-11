@@ -39,25 +39,32 @@ public sealed class JsonQualityAuditService(
         var issues = ReadIssues(root);
         var generatedAt = ReadString(root, "generated_at");
         var generatedAtLocal = ReadString(root, "generated_at_local");
+        var reportRunId = ReadNullableInt64(root, "run_id");
         var reportTime = File.GetLastWriteTimeUtc(path);
         var databasePath = databasePathResolver();
         var databaseTime = File.Exists(databasePath)
             ? File.GetLastWriteTimeUtc(databasePath)
             : DateTime.MinValue;
-        var isStale = databaseTime > reportTime.AddSeconds(2);
-        var staleReason = isStale
-            ? $"质量报告早于当前数据库：报告 {reportTime:yyyy-MM-dd HH:mm:ss} UTC，数据库 {databaseTime:yyyy-MM-dd HH:mm:ss} UTC"
-            : string.Empty;
+        var reasons = new List<string>();
+        if (databaseTime > reportTime.AddSeconds(2))
+        {
+            reasons.Add($"质量报告早于当前数据库：报告 {reportTime:yyyy-MM-dd HH:mm:ss} UTC，数据库 {databaseTime:yyyy-MM-dd HH:mm:ss} UTC");
+        }
+
+        if (runId.HasValue && reportRunId != runId)
+        {
+            reasons.Add($"报告批次 #{reportRunId?.ToString() ?? "缺失"} 与所选批次 #{runId} 不一致");
+        }
 
         return new QualityAuditReport(
             SourcePath: path,
             GeneratedAt: generatedAt,
             GeneratedAtLocal: generatedAtLocal,
-            RunId: ReadNullableInt64(root, "run_id"),
+            RunId: reportRunId,
             Summary: summary,
             Issues: issues,
-            IsStale: isStale,
-            StaleReason: staleReason);
+            IsStale: reasons.Count > 0,
+            StaleReason: string.Join("；", reasons));
     }
 
     private static QualityAuditSummary ReadSummary(JsonElement root)

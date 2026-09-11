@@ -33,8 +33,9 @@ public sealed class HomePageUiContractTests
 
         Assert.Contains("MinimumClientWidth = 1040", source);
         Assert.Contains("MinimumClientHeight = 680", source);
-        Assert.Contains("InitialClientWidth = 1160", source);
-        Assert.Contains("InitialClientHeight = 760", source);
+        Assert.Contains("InitialClientWidth = MinimumClientWidth", source);
+        Assert.Contains("InitialClientHeight = MinimumClientHeight", source);
+        Assert.Contains("CurrentPlacementVersion = 2", source);
         Assert.Contains("WindowSizeConstraint.Attach(this)", mainWindow);
         Assert.Contains("AppWindow.Resize(WindowSizeConstraint.ScaleSizeForWindow(this, new SizeInt32(", mainWindow);
         Assert.Contains("WindowSizeConstraint.InitialClientWidth", mainWindow);
@@ -80,6 +81,52 @@ public sealed class HomePageUiContractTests
         Assert.Contains("x:Name=\"NavView\"", xaml);
         Assert.Contains("ExtendsContentIntoTitleBar = true", codeBehind);
         Assert.Contains("SetTitleBar(AppTitleBar)", codeBehind);
+    }
+
+    [Fact]
+    public void MainWindowMakesThePaneHeaderAreaToggleTheNavigationPane()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "MainWindow.xaml"));
+        var codeBehind = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "MainWindow.xaml.cs"));
+
+        Assert.Contains("PointerPressed=\"NavView_PointerPressed\"", xaml);
+        Assert.Contains("NavView_PointerPressed", codeBehind);
+        Assert.Contains("NavView.IsPaneOpen = !NavView.IsPaneOpen", codeBehind);
+        Assert.Contains("OpenPaneLength", codeBehind);
+        Assert.Contains("e.Handled = true", codeBehind);
+    }
+
+    [Fact]
+    public void MainWindowMakesThePaneToggleAreaVisiblyInteractive()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "MainWindow.xaml"));
+        var app = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "App.xaml"));
+
+        Assert.Contains("PaneToggleButtonStyle=\"{StaticResource EmsPaneToggleButtonStyle}\"", xaml);
+        Assert.DoesNotContain("x:Key=\"EmsPaneToggleButtonStyle\"", xaml);
+        Assert.Contains("x:Key=\"EmsPaneToggleButtonStyle\"", app);
+        Assert.Contains("BasedOn=\"{StaticResource PaneToggleButtonStyle}\"", app);
+        Assert.Contains("Property=\"HorizontalAlignment\" Value=\"Stretch\"", app);
+        Assert.Contains("Property=\"ToolTipService.ToolTip\" Value=\"切换导航栏\"", app);
+        Assert.Contains("Property=\"AutomationProperties.Name\" Value=\"切换导航栏\"", app);
+    }
+
+    [Fact]
+    public void HomePageUsesTheEnglishBrandAndKeepsTheBatchLabelReadable()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "HomePage.xaml"));
+
+        Assert.Contains("Text=\"EMS Scout\"", xaml);
+        Assert.DoesNotContain("Text=\"EMS 运维工作台\"", xaml);
+        Assert.DoesNotContain("Width=\"320\"", xaml);
+        Assert.Contains("<ColumnDefinition Width=\"Auto\" />", xaml);
+        Assert.Contains("HorizontalAlignment=\"Left\"", xaml);
+        Assert.Contains("<ComboBox.ItemTemplate>", xaml);
+        Assert.Contains("TextTrimming=\"CharacterEllipsis\"", xaml);
+        Assert.DoesNotContain("DisplayMemberPath=\"DisplayLabel\"", xaml);
     }
 
     [Fact]
@@ -166,6 +213,26 @@ public sealed class HomePageUiContractTests
         Assert.Contains("private long? _latestDataSourceRunId", viewModel);
         Assert.Contains("_latestDataSourceRunId = DataSources.FirstOrDefault()?.RunId", viewModel);
         Assert.Contains("SelectedDataSource.RunId == _latestDataSourceRunId", viewModel);
+    }
+
+    [Fact]
+    public void HomePageStatusCardsShowPercentagesAndNavigateAsWholeCards()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "HomePage.xaml"));
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "HomeViewModel.cs"));
+
+        Assert.Contains("IsItemClickEnabled=\"True\"", xaml);
+        Assert.Contains("ItemClick=\"Metrics_ItemClick\"", xaml);
+        Assert.Contains("Text=\"{x:Bind Detail}\"", xaml);
+        Assert.DoesNotContain("Text=\"{x:Bind ActionText}\"", xaml);
+        Assert.DoesNotContain("ActionText", viewModel);
+        Assert.DoesNotContain("CanNavigate => NavigationRequest", viewModel);
+        Assert.DoesNotContain("ViewModel.AreaGroupsStatus", xaml);
+        Assert.Contains("public void OpenMetric(MetricItem? item)", viewModel);
+        Assert.Contains("navigationService.NavigateToData(item.NavigationRequest)", viewModel);
+        Assert.Contains("CommunicationState: metric.CommunicationState", viewModel);
+        Assert.Contains("AreaType: metric.AreaType", viewModel);
     }
 
     [Fact]

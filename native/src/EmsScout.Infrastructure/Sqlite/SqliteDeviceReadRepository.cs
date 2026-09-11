@@ -10,13 +10,15 @@ namespace EmsScout.Infrastructure.Sqlite;
 public sealed class SqliteDeviceReadRepository(
     string databasePath,
     IRealtimeDetailSource? realtimeDetailSource = null,
-    IDeviceWatchRepository? watchRepository = null) : IDeviceReadRepository
+    IDeviceWatchRepository? watchRepository = null,
+    IRealtimeSnapshotStore? realtimeSnapshotStore = null) : IDeviceReadRepository
 {
     public SqliteDeviceReadRepository(
         Func<string> databasePathResolver,
         IRealtimeDetailSource? realtimeDetailSource = null,
-        IDeviceWatchRepository? watchRepository = null)
-        : this(string.Empty, realtimeDetailSource, watchRepository)
+        IDeviceWatchRepository? watchRepository = null,
+        IRealtimeSnapshotStore? realtimeSnapshotStore = null)
+        : this(string.Empty, realtimeDetailSource, watchRepository, realtimeSnapshotStore)
     {
         DatabasePathResolver = databasePathResolver;
     }
@@ -60,9 +62,12 @@ public sealed class SqliteDeviceReadRepository(
             query,
             rows,
             groupIds.Count > 0 ? groupItems : null);
-        var realtimeSet = realtimeDetailSource is null || source.IsHistory || realtimeBuildings.Count == 0
-            ? new RealtimeDetailSet([])
-            : await realtimeDetailSource.LoadAsync(realtimeBuildings, cancellationToken).ConfigureAwait(false);
+        var realtimeSet = await LoadRealtimeDetailsAsync(
+            connection,
+            source,
+            query.RunId,
+            realtimeBuildings,
+            cancellationToken).ConfigureAwait(false);
         rows = AttachRealtimeRows(rows, realtimeSet, overrides);
         rows = rows
             .Where(row => DeviceQueryVisibility.ShouldInclude(row, query))
@@ -92,7 +97,8 @@ public sealed class SqliteDeviceReadRepository(
         return new DeviceListResult(
             Total: filtered.Count,
             Rows: filtered.Skip(offset).Take(limit).ToList(),
-            Facets: facets);
+            Facets: facets,
+            DataStatusText: realtimeSet.StatusText);
     }
 
     private async Task<List<DeviceRecord>> AttachWatchRowsAsync(
@@ -144,7 +150,8 @@ public sealed class SqliteDeviceReadRepository(
             connection,
             groupIds,
             cancellationToken).ConfigureAwait(false);
-        var (runWhereSql, runParameters) = BuildWhereClause(query, source);
+        var candidateQuery = query.WithoutFacets();
+        var (runWhereSql, runParameters) = BuildWhereClause(candidateQuery, source);
 
         var annotations = source.IsHistory
             ? EmptyAnnotations()
@@ -160,12 +167,15 @@ public sealed class SqliteDeviceReadRepository(
             annotations,
             cancellationToken).ConfigureAwait(false);
         var realtimeBuildings = ResolveRealtimeBuildings(
-            query,
+            candidateQuery,
             rows,
             groupIds.Count > 0 ? groupItems : null);
-        var realtimeSet = realtimeDetailSource is null || source.IsHistory || realtimeBuildings.Count == 0
-            ? new RealtimeDetailSet([])
-            : await realtimeDetailSource.LoadAsync(realtimeBuildings, cancellationToken).ConfigureAwait(false);
+        var realtimeSet = await LoadRealtimeDetailsAsync(
+            connection,
+            source,
+            query.RunId,
+            realtimeBuildings,
+            cancellationToken).ConfigureAwait(false);
         rows = AttachRealtimeRows(rows, realtimeSet, overrides);
         rows = rows
             .Where(row => DeviceQueryVisibility.ShouldInclude(row, query))
@@ -181,30 +191,65 @@ public sealed class SqliteDeviceReadRepository(
             rows = await AttachWatchRowsAsync(rows, cancellationToken).ConfigureAwait(false);
         }
 
-        var filtered = rows
-            .Where(row => DeviceQuerySpecification.MatchesResult(row, query))
-            .ToList();
+        var buildingRows = FilterFacetRows(rows, query, DeviceFilterFacet.Building);
+        var communicationRows = FilterFacetRows(rows, query, DeviceFilterFacet.CommunicationState);
+        var floorRows = FilterFacetRows(rows, query, DeviceFilterFacet.Floor);
+        var subAreaRows = FilterFacetRows(rows, query, DeviceFilterFacet.SubArea);
+        var pageRows = FilterFacetRows(rows, query, DeviceFilterFacet.PageName);
+        var deviceNameRows = FilterFacetRows(rows, query, DeviceFilterFacet.DeviceName);
+        var zuoRows = FilterFacetRows(rows, query, DeviceFilterFacet.Zuo);
+        var modeRows = FilterFacetRows(rows, query, DeviceFilterFacet.Mode);
+        var fanRows = FilterFacetRows(rows, query, DeviceFilterFacet.Fan);
+        var setTemperatureRows = FilterFacetRows(rows, query, DeviceFilterFacet.SetTemperature);
+        var indoorTemperatureRows = FilterFacetRows(rows, query, DeviceFilterFacet.IndoorTemperature);
+        var tagRows = FilterFacetRows(rows, query, DeviceFilterFacet.Tag);
+        var realtimePowerRows = FilterFacetRows(rows, query, DeviceFilterFacet.RealtimePower);
+        var realtimeModeRows = FilterFacetRows(rows, query, DeviceFilterFacet.RealtimeMode);
+        var realtimeFanRows = FilterFacetRows(rows, query, DeviceFilterFacet.RealtimeFan);
+        var realtimeLockRows = FilterFacetRows(rows, query, DeviceFilterFacet.RealtimeLock);
+        var realtimeSystemTypeRows = FilterFacetRows(rows, query, DeviceFilterFacet.RealtimeSystemType);
 
         return new DeviceFilterOptions(
-            CountOptions(filtered, row => row.Building),
-            CountOptions(filtered, row => row.CommunicationStatusText, sortByCountDescending: true),
-            CountOptions(filtered, row => row.FloorLabel, sortKey: option => FloorSortValue(option.Value)),
-            CountOptions(filtered, row => row.SubArea),
-            PageOptions(filtered),
-            CountOptions(filtered, row => row.Name),
-            CountOptions(filtered.Where(ShouldExposeZuo), row => row.Zuo ?? string.Empty),
-            CountOptions(filtered, row => row.Mode),
-            CountOptions(filtered, row => row.Fan),
-            CountOptions(filtered, row => row.SetTemperature),
-            CountOptions(filtered, row => row.IndoorTemperature),
-            CountOptions(filtered.SelectMany(row => row.TagList), tag => tag),
-            RealtimePowers: CountOptions(filtered, row => row.Realtime?.PowerState ?? string.Empty),
-            RealtimeModes: CountOptions(filtered, row => row.Realtime?.Mode ?? string.Empty),
-            RealtimeFans: CountOptions(filtered, row => row.Realtime?.Fan ?? string.Empty),
+            CountOptions(buildingRows, row => row.Building),
+            CountOptions(communicationRows, row => row.CommunicationStatusText, sortByCountDescending: true),
+            CountOptions(floorRows, row => row.FloorLabel, sortKey: option => FloorSortValue(option.Value)),
+            CountOptions(subAreaRows, row => row.SubArea),
+            PageOptions(pageRows),
+            CountOptions(deviceNameRows, row => row.Name),
+            CountOptions(zuoRows.Where(ShouldExposeZuo), row => row.Zuo ?? string.Empty),
+            CountOptions(modeRows, row => row.Mode),
+            CountOptions(fanRows, row => row.Fan),
+            CountOptions(setTemperatureRows, row => row.SetTemperature),
+            CountOptions(indoorTemperatureRows, row => row.IndoorTemperature),
+            CountOptions(tagRows.SelectMany(row => row.TagList), tag => tag),
+            RealtimePowers: CountOptions(realtimePowerRows, row => row.Realtime?.PowerState ?? string.Empty),
+            RealtimeModes: CountOptions(realtimeModeRows, row => row.Realtime?.Mode ?? string.Empty),
+            RealtimeFans: CountOptions(realtimeFanRows, row => row.Realtime?.Fan ?? string.Empty),
             RealtimeLocks: CountOptions(
-                filtered,
+                realtimeLockRows,
                 row => row.RealtimeLockText),
-            RealtimeSystemTypes: CountOptions(filtered, row => row.Realtime?.Field("系统类型") ?? string.Empty));
+            RealtimeSystemTypes: CountOptions(realtimeSystemTypeRows, row => row.Realtime?.Field("系统类型") ?? string.Empty));
+    }
+
+    private static List<DeviceRecord> FilterFacetRows(
+        IEnumerable<DeviceRecord> rows,
+        DeviceQuery query,
+        DeviceFilterFacet excludedFacet)
+    {
+        return rows
+            .Where(row => DeviceQuerySpecification.MatchesResultExcept(row, query, excludedFacet))
+            .Where(row => excludedFacet is not (
+                DeviceFilterFacet.Mode or
+                DeviceFilterFacet.Fan or
+                DeviceFilterFacet.SetTemperature or
+                DeviceFilterFacet.IndoorTemperature or
+                DeviceFilterFacet.RealtimePower or
+                DeviceFilterFacet.RealtimeMode or
+                DeviceFilterFacet.RealtimeFan or
+                DeviceFilterFacet.RealtimeLock or
+                DeviceFilterFacet.RealtimeSystemType) ||
+                row.CommunicationState != DeviceCommunicationState.Offline)
+            .ToList();
     }
 
     private SqliteConnection OpenConnection()
@@ -215,6 +260,62 @@ public sealed class SqliteDeviceReadRepository(
         command.CommandText = "PRAGMA busy_timeout = 10000; PRAGMA foreign_keys = ON;";
         command.ExecuteNonQuery();
         return connection;
+    }
+
+    private async Task<RealtimeDetailSet> LoadRealtimeDetailsAsync(
+        SqliteConnection connection,
+        DeviceSqlSource source,
+        long? runId,
+        IReadOnlyList<string> buildings,
+        CancellationToken cancellationToken)
+    {
+        if (buildings.Count == 0 || runId is null && realtimeDetailSource is null)
+        {
+            return new RealtimeDetailSet([]);
+        }
+
+        if (source.IsHistory)
+        {
+            return realtimeSnapshotStore is null
+                ? new RealtimeDetailSet([])
+                : await realtimeSnapshotStore.LoadAsync(runId!.Value, buildings, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (realtimeDetailSource is null)
+        {
+            return new RealtimeDetailSet([]);
+        }
+
+        var expectedRunId = runId ?? await LoadCurrentRunIdAsync(connection, cancellationToken).ConfigureAwait(false);
+        return await realtimeDetailSource.LoadAsync(buildings, expectedRunId, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<long?> LoadCurrentRunIdAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, "collection_runs", cancellationToken).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        var orderColumn = await ColumnExistsAsync(connection, "collection_runs", "imported_at", cancellationToken).ConfigureAwait(false)
+            ? "imported_at"
+            : "completed_at";
+        var statusClause = await ColumnExistsAsync(connection, "collection_runs", "status", cancellationToken).ConfigureAwait(false)
+            ? "WHERE status = 'completed'"
+            : string.Empty;
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            SELECT id
+            FROM collection_runs
+            {statusClause}
+            ORDER BY datetime({orderColumn}) DESC, id DESC
+            LIMIT 1
+            """;
+        var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return value is null || value is DBNull ? null : Convert.ToInt64(value, CultureInfo.InvariantCulture);
     }
 
     private void EnsureDatabaseExists()
@@ -932,7 +1033,9 @@ public sealed class SqliteDeviceReadRepository(
     {
         if (realtimeSet.Rows.Count == 0)
         {
-            return rows;
+            return string.IsNullOrWhiteSpace(realtimeSet.StatusText)
+                ? rows
+                : rows.Select(row => row with { RealtimeUnavailableReason = realtimeSet.StatusText }).ToList();
         }
 
         var byId = rows.ToDictionary(row => row.Id);
@@ -1012,7 +1115,12 @@ public sealed class SqliteDeviceReadRepository(
                 continue;
             }
 
-            attached.Add(row);
+            attached.Add(row with
+            {
+                RealtimeUnavailableReason = string.IsNullOrWhiteSpace(realtimeSet.StatusText)
+                    ? null
+                    : realtimeSet.StatusText
+            });
         }
 
         attached.AddRange(virtualRows);

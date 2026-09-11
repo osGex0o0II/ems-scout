@@ -20,6 +20,12 @@ public sealed class AppSettings
 
     public bool SaveNdjsonLog { get; set; } = true;
 
+    public int RealtimeBatchSize { get; set; } = 20;
+
+    public int RealtimeReopenEvery { get; set; } = 3;
+
+    public int RealtimeTimeoutMs { get; set; } = 15000;
+
     public string Theme { get; set; } = "system";
 
     public bool CompactDataTable { get; set; } = true;
@@ -57,6 +63,9 @@ public sealed class AppSettings
         DefaultCollectionMode = DefaultCollectionMode,
         LogLevel = LogLevel,
         SaveNdjsonLog = SaveNdjsonLog,
+        RealtimeBatchSize = RealtimeBatchSize,
+        RealtimeReopenEvery = RealtimeReopenEvery,
+        RealtimeTimeoutMs = RealtimeTimeoutMs,
         Theme = Theme,
         CompactDataTable = CompactDataTable,
         ReduceMotion = ReduceMotion,
@@ -75,6 +84,8 @@ public sealed class AppSettings
 
 public sealed class WindowPlacementState
 {
+    public int PlacementVersion { get; set; }
+
     public int Left { get; set; }
 
     public int Top { get; set; }
@@ -85,6 +96,7 @@ public sealed class WindowPlacementState
 
     public WindowPlacementState Clone() => new()
     {
+        PlacementVersion = PlacementVersion,
         Left = Left,
         Top = Top,
         Width = Width,

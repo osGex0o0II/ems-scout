@@ -45,7 +45,7 @@ The native solution now proves the first refactor path:
 
 - `EmsScout.Desktop`: Windows-native shell, pages, view models, commands.
 - `EmsScout.Application`: use cases and view-ready orchestration.
-- `EmsScout.Collection`: Playwright/Edge CDP collection orchestration and page-side extraction bridge.
+- 采集编排由 `EmsScout.Desktop` 通过 `NodeCollectionTaskRunner` 调用仓库内 Node.js/Playwright + Edge CDP 脚本完成。
 - `EmsScout.Domain`: device, building, quality, collection, and data-management rules.
 - `EmsScout.Infrastructure`: SQLite, filtered Excel export, file system, logging.
 - `EmsScout.Infrastructure.Importing` and `EmsScout.Infrastructure.Realtime`: file-source adapters for current JSON artifacts.

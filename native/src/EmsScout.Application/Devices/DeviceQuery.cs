@@ -31,3 +31,51 @@ public sealed record DeviceQuery(
     int Limit = 500,
     int Offset = 0,
     long? RunId = null);
+
+public enum DeviceFilterFacet
+{
+    Building,
+    CommunicationState,
+    Floor,
+    SubArea,
+    PageName,
+    DeviceName,
+    Zuo,
+    Mode,
+    Fan,
+    SetTemperature,
+    IndoorTemperature,
+    Tag,
+    RealtimePower,
+    RealtimeMode,
+    RealtimeFan,
+    RealtimeLock,
+    RealtimeSystemType,
+}
+
+public static class DeviceQueryFacetExtensions
+{
+    public static DeviceQuery WithoutFacets(this DeviceQuery query)
+    {
+        return query with
+        {
+            Building = null,
+            CommunicationState = null,
+            Floor = null,
+            SubArea = null,
+            PageName = null,
+            DeviceName = null,
+            Zuo = null,
+            Mode = null,
+            Fan = null,
+            SetTemperature = null,
+            IndoorTemperature = null,
+            Tag = null,
+            RealtimePower = null,
+            RealtimeMode = null,
+            RealtimeFan = null,
+            RealtimeLock = null,
+            RealtimeSystemType = null,
+        };
+    }
+}

@@ -14,12 +14,14 @@ public sealed class NativePackageContractTests
         Assert.Contains("Assert-NativeVersion", package, StringComparison.Ordinal);
         Assert.Contains("package-manifest.json", package, StringComparison.Ordinal);
         Assert.Contains("$outputRootFull $Version", package, StringComparison.Ordinal);
+        Assert.Contains("NativeNodeRuntimePath", package, StringComparison.Ordinal);
     }
 
     [Fact]
     public void LifecycleScriptsExposeInstallUpdateAndSafeUninstallContracts()
     {
         var root = LocateRepositoryRoot();
+        var common = File.ReadAllText(Path.Combine(root, "scripts", "native-package-common.ps1"));
         var install = File.ReadAllText(Path.Combine(root, "scripts", "native-install.ps1"));
         var update = File.ReadAllText(Path.Combine(root, "scripts", "native-update.ps1"));
         var uninstall = File.ReadAllText(Path.Combine(root, "scripts", "native-uninstall.ps1"));
