@@ -12,10 +12,6 @@
     SizeChanged="Page_SizeChanged"
     NavigationCacheMode="Required"
     mc:Ignorable="d">
-    <Page.Resources>
-        <local:LogSeverityBrushConverter x:Key="LogSeverityBrushConverter" />
-        <local:LogSeverityGlyphConverter x:Key="LogSeverityGlyphConverter" />
-    </Page.Resources>
     <Grid Padding="{StaticResource PagePadding}" RowSpacing="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -126,15 +122,20 @@
             </Grid>
         </Border>
 
-        <Grid x:Name="WorkflowGrid" Grid.Row="2" ColumnSpacing="14" RowSpacing="0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition x:Name="SetupColumn" Width="0.9*" />
-                <ColumnDefinition x:Name="ExecutionColumn" Width="1.35*" />
-            </Grid.ColumnDefinitions>
-            <Grid.RowDefinitions>
-                <RowDefinition x:Name="SetupRow" Height="*" />
-                <RowDefinition x:Name="ExecutionRow" Height="0" />
-            </Grid.RowDefinitions>
+        <ScrollViewer
+            x:Name="WorkflowScrollViewer"
+            Grid.Row="2"
+            HorizontalScrollBarVisibility="Disabled"
+            VerticalScrollBarVisibility="Disabled">
+            <Grid x:Name="WorkflowGrid" ColumnSpacing="14" RowSpacing="0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition x:Name="SetupColumn" Width="0.9*" />
+                    <ColumnDefinition x:Name="ExecutionColumn" Width="1.35*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition x:Name="SetupRow" Height="*" />
+                    <RowDefinition x:Name="ExecutionRow" Height="0" />
+                </Grid.RowDefinitions>
 
             <ScrollViewer x:Name="SetupPanel" VerticalScrollBarVisibility="Auto">
                 <StackPanel Spacing="12">
@@ -173,52 +174,13 @@
                         </StackPanel>
                     </Border>
 
-                    <Border Style="{StaticResource WorkbenchCardStyle}">
-                        <StackPanel Spacing="10">
-                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="高级设置" />
-                            <Grid ColumnSpacing="8" RowSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <ComboBox
-                                    Header="日志级别"
-                                    IsEnabled="{x:Bind ViewModel.CanEditTaskOptions, Mode=OneWay}"
-                                    ItemsSource="{x:Bind ViewModel.LogSeverityOptions, Mode=OneWay}"
-                                    SelectedItem="{x:Bind ViewModel.SelectedLogSeverity, Mode=TwoWay}" />
-                                <ComboBox
-                                    Grid.Column="1"
-                                    Header="实时批量设备数"
-                                    IsEnabled="{x:Bind ViewModel.CanEditTaskOptions, Mode=OneWay}"
-                                    ItemsSource="{x:Bind ViewModel.RealtimeBatchSizeOptions, Mode=OneWay}"
-                                    SelectedItem="{x:Bind ViewModel.RealtimeBatchSize, Mode=TwoWay}" />
-                            </Grid>
-                            <Grid ColumnSpacing="8" RowSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <ComboBox
-                                    Header="单批超时（毫秒）"
-                                    IsEnabled="{x:Bind ViewModel.CanEditTaskOptions, Mode=OneWay}"
-                                    ItemsSource="{x:Bind ViewModel.RealtimeTimeoutOptions, Mode=OneWay}"
-                                    SelectedItem="{x:Bind ViewModel.RealtimeTimeoutMs, Mode=TwoWay}" />
-                                <ComboBox
-                                    Grid.Column="1"
-                                    Header="设备批次重开间隔"
-                                    IsEnabled="{x:Bind ViewModel.CanEditTaskOptions, Mode=OneWay}"
-                                    ItemsSource="{x:Bind ViewModel.RealtimeReopenEveryOptions, Mode=OneWay}"
-                                    SelectedItem="{x:Bind ViewModel.RealtimeReopenEvery, Mode=TwoWay}" />
-                            </Grid>
-                        </StackPanel>
-                    </Border>
                 </StackPanel>
             </ScrollViewer>
 
             <Grid x:Name="ExecutionPanel" Grid.Column="1" RowSpacing="12">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
-                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
                 <Border Style="{StaticResource WorkbenchCardStyle}">
                     <StackPanel Spacing="10">
@@ -270,6 +232,19 @@
                                 </StackPanel>
                             </Grid>
                         </Border>
+                        <Border
+                            Padding="12,10"
+                            Background="{ThemeResource SystemFillColorCautionBackgroundBrush}"
+                            CornerRadius="6"
+                            Visibility="{x:Bind local:TasksPage.BoolToVisibility(ViewModel.HasTaskIssue), Mode=OneWay}">
+                            <StackPanel Spacing="3">
+                                <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.ProgressText, Mode=OneWay}" />
+                                <TextBlock
+                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                    Text="{x:Bind ViewModel.TaskSummaryText, Mode=OneWay}"
+                                    TextWrapping="WrapWholeWords" />
+                            </StackPanel>
+                        </Border>
                         <StackPanel Spacing="6">
                             <ProgressBar IsIndeterminate="{x:Bind ViewModel.IsRunning, Mode=OneWay}" />
                             <Grid ColumnSpacing="8">
@@ -314,80 +289,11 @@
                                 <TextBlock Grid.Column="1" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.ProgressSpeedText, Mode=OneWay}" />
                             </Grid>
                         </StackPanel>
-                        <ItemsControl
-                            x:Name="StagesList"
-                            ItemsSource="{x:Bind ViewModel.Stages, Mode=OneWay}"
-                            Visibility="Collapsed">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Grid Padding="0,6" ColumnSpacing="8">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="20" />
-                                            <ColumnDefinition Width="140" />
-                                            <ColumnDefinition Width="60" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <FontIcon FontSize="12" Glyph="&#xE915;" />
-                                        <TextBlock Grid.Column="1" FontWeight="SemiBold" Text="{Binding Label}" />
-                                        <TextBlock Grid.Column="2" Text="{Binding State}" />
-                                        <TextBlock Grid.Column="3" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{Binding Detail}" TextTrimming="CharacterEllipsis" />
-                                    </Grid>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
                     </StackPanel>
                 </Border>
 
-                <Border Grid.Row="1" VerticalAlignment="Top" Style="{StaticResource WorkbenchCardStyle}">
-                    <Grid RowSpacing="8">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
-                        </Grid.RowDefinitions>
-                        <Grid ColumnSpacing="8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Spacing="2">
-                                <TextBlock Style="{StaticResource SectionTitleStyle}" Text="运行记录" />
-                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="失败时自动展开用于排查" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="4">
-                                <Button Click="CopyLogs_Click" Style="{StaticResource ToolbarButtonStyle}" ToolTipService.ToolTip="复制日志">
-                                    <FontIcon FontSize="13" Glyph="&#xE8C8;" />
-                                </Button>
-                                <Button Click="ClearLogs_Click" Style="{StaticResource ToolbarButtonStyle}" ToolTipService.ToolTip="清空日志">
-                                    <FontIcon FontSize="13" Glyph="&#xE74D;" />
-                                </Button>
-                            </StackPanel>
-                        </Grid>
-                        <ListView
-                            x:Name="LogsList"
-                            Grid.Row="2"
-                            ItemsSource="{x:Bind ViewModel.FilteredLogs, Mode=OneWay}"
-                            MaxHeight="260"
-                            SelectionMode="None"
-                            ScrollViewer.VerticalScrollBarVisibility="Auto">
-                            <ListView.ItemTemplate>
-                                <DataTemplate>
-                                    <Grid Padding="0,2" ColumnSpacing="6">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="58" />
-                                            <ColumnDefinition Width="18" />
-                                            <ColumnDefinition Width="*" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{Binding Time}" />
-                                        <FontIcon Grid.Column="1" FontSize="12" Glyph="{Binding Severity, Converter={StaticResource LogSeverityGlyphConverter}}" Foreground="{Binding Severity, Converter={StaticResource LogSeverityBrushConverter}}" />
-                                        <TextBlock Grid.Column="2" Text="{Binding Message}" ToolTipService.ToolTip="{Binding Message}" TextWrapping="WrapWholeWords" Foreground="{Binding Severity, Converter={StaticResource LogSeverityBrushConverter}}" />
-                                    </Grid>
-                                </DataTemplate>
-                            </ListView.ItemTemplate>
-                        </ListView>
-                    </Grid>
-                </Border>
             </Grid>
-        </Grid>
+            </Grid>
+        </ScrollViewer>
     </Grid>
 </Page>

@@ -91,6 +91,9 @@ public sealed class AppSettingsService
         output.DefaultCollectionMode = "edge-cdp";
         output.CheckLoginBeforeCollection = true;
         output.LogLevel = NormalizeOption(output.LogLevel, "INFO", "ERROR", "INFO", "DEBUG");
+        output.RealtimeBatchSize = Math.Clamp(output.RealtimeBatchSize, 1, 100);
+        output.RealtimeReopenEvery = Math.Clamp(output.RealtimeReopenEvery, 0, 50);
+        output.RealtimeTimeoutMs = Math.Clamp(output.RealtimeTimeoutMs, 3000, 120000);
         output.Theme = NormalizeOption(output.Theme, "system", "system", "light", "dark");
         output.PageTransitionStyle = NormalizeOption(output.PageTransitionStyle, "fade", "none", "fade", "slide");
         if (output.WindowPlacement is not null)

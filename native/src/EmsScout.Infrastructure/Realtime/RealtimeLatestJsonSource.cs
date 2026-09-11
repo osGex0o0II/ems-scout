@@ -15,7 +15,16 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
 
     public async Task<RealtimeDetailSet> LoadAsync(IReadOnlyList<string> buildings, CancellationToken cancellationToken = default)
     {
+        return await LoadAsync(buildings, expectedRunId: null, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<RealtimeDetailSet> LoadAsync(
+        IReadOnlyList<string> buildings,
+        long? expectedRunId,
+        CancellationToken cancellationToken = default)
+    {
         var rows = new List<RealtimeDetailRecord>();
+        long? sourceRunId = null;
         foreach (var building in buildings.Where(item => !string.IsNullOrWhiteSpace(item)).Distinct())
         {
             var file = LatestRealtimeFile(building);
@@ -32,21 +41,101 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
                 continue;
             }
 
+            var fileRunId = ReadRunId(document.RootElement);
+            if (expectedRunId is not null && fileRunId != expectedRunId)
+            {
+                var actual = fileRunId is null ? "缺失" : $"#{fileRunId}";
+                return new RealtimeDetailSet(
+                    [],
+                    RealtimeDetailAvailability.MissingSnapshot,
+                    $"实时详情批次不匹配：当前批次 #{expectedRunId}，文件批次 {actual}。请重新采集实时详情。",
+                    fileRunId);
+            }
+
+            sourceRunId ??= fileRunId;
+            if (sourceRunId != fileRunId)
+            {
+                return new RealtimeDetailSet(
+                    [],
+                    RealtimeDetailAvailability.Unavailable,
+                    "实时详情文件来自多个批次，无法安全合并。请重新采集实时详情。",
+                    null);
+            }
+
             var updatedAt = ReadSourceUpdatedAt(document.RootElement, file);
             var sourceFile = Path.GetRelativePath(rootPath, file);
-            var index = 0;
-            foreach (var row in jsonRows.EnumerateArray())
+            foreach (var row in ReadRows(document.RootElement, building, sourceFile, updatedAt))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                rows.Add(ReadRow(row, building, sourceFile, updatedAt, index));
-                index++;
+                rows.Add(row);
             }
         }
 
-        return new RealtimeDetailSet(rows);
+        return new RealtimeDetailSet(rows, RealtimeDetailAvailability.Available, null, sourceRunId);
     }
 
-    private static DateTimeOffset ReadSourceUpdatedAt(JsonElement root, string file)
+    internal static long? ReadRunId(JsonElement root)
+    {
+        foreach (var propertyName in new[] { "runId", "run_id" })
+        {
+            if (root.TryGetProperty(propertyName, out var property) &&
+                property.ValueKind == JsonValueKind.Number &&
+                property.TryGetInt64(out var runId) && runId > 0)
+            {
+                return runId;
+            }
+
+            if (root.TryGetProperty(propertyName, out property) &&
+                property.ValueKind == JsonValueKind.String &&
+                long.TryParse(property.GetString(), out var stringRunId) && stringRunId > 0)
+            {
+                return stringRunId;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool TryReadTimestamp(JsonElement element, string propertyName, out DateTimeOffset timestamp)
+    {
+        timestamp = default;
+        if (!element.TryGetProperty(propertyName, out var value) ||
+            value.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        return DateTimeOffset.TryParse(value.GetString(), out timestamp);
+    }
+
+    private string LatestRealtimeFile(string building)
+    {
+        return FindLatestFile(OutDirectoryResolver(), building);
+    }
+
+    internal static string FindLatestFile(string outDirectory, string building)
+    {
+        var latest = Path.Combine(outDirectory, $"realtime_{building}_latest.json");
+        if (File.Exists(latest))
+        {
+            return latest;
+        }
+
+        if (!Directory.Exists(outDirectory))
+        {
+            return string.Empty;
+        }
+
+        return Directory.EnumerateFiles(outDirectory, $"realtime_{building}_*.json")
+            .Where(path => Path.GetFileName(path).Contains("_batch_", StringComparison.OrdinalIgnoreCase) ||
+                           System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(path), $"^realtime_{System.Text.RegularExpressions.Regex.Escape(building)}_\\d{{8}}_\\d{{6}}\\.json$"))
+            .Select(path => new FileInfo(path))
+            .OrderByDescending(file => file.LastWriteTimeUtc)
+            .FirstOrDefault()
+            ?.FullName ?? string.Empty;
+    }
+
+    internal static DateTimeOffset ReadSourceUpdatedAt(JsonElement root, string file)
     {
         foreach (var propertyName in new[] { "capturedAt", "completedAt", "collectedAt", "updatedAt" })
         {
@@ -70,42 +159,29 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
         return new DateTimeOffset(File.GetLastWriteTimeUtc(file), TimeSpan.Zero);
     }
 
-    private static bool TryReadTimestamp(JsonElement element, string propertyName, out DateTimeOffset timestamp)
+    internal static IReadOnlyList<RealtimeDetailRecord> ReadRows(
+        JsonElement root,
+        string fallbackBuilding,
+        string sourceFile,
+        DateTimeOffset updatedAt)
     {
-        timestamp = default;
-        if (!element.TryGetProperty(propertyName, out var value) ||
-            value.ValueKind != JsonValueKind.String)
+        if (!root.TryGetProperty("rows", out var jsonRows) || jsonRows.ValueKind != JsonValueKind.Array)
         {
-            return false;
+            return [];
         }
 
-        return DateTimeOffset.TryParse(value.GetString(), out timestamp);
+        var rows = new List<RealtimeDetailRecord>();
+        var index = 0;
+        foreach (var row in jsonRows.EnumerateArray())
+        {
+            rows.Add(ReadRow(row, fallbackBuilding, sourceFile, updatedAt, index));
+            index++;
+        }
+
+        return rows;
     }
 
-    private string LatestRealtimeFile(string building)
-    {
-        var outDirectory = OutDirectoryResolver();
-        var latest = Path.Combine(outDirectory, $"realtime_{building}_latest.json");
-        if (File.Exists(latest))
-        {
-            return latest;
-        }
-
-        if (!Directory.Exists(outDirectory))
-        {
-            return string.Empty;
-        }
-
-        return Directory.EnumerateFiles(outDirectory, $"realtime_{building}_*.json")
-            .Where(path => Path.GetFileName(path).Contains("_batch_", StringComparison.OrdinalIgnoreCase) ||
-                           System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(path), $"^realtime_{System.Text.RegularExpressions.Regex.Escape(building)}_\\d{{8}}_\\d{{6}}\\.json$"))
-            .Select(path => new FileInfo(path))
-            .OrderByDescending(file => file.LastWriteTimeUtc)
-            .FirstOrDefault()
-            ?.FullName ?? string.Empty;
-    }
-
-    private static RealtimeDetailRecord ReadRow(
+    internal static RealtimeDetailRecord ReadRow(
         JsonElement row,
         string fallbackBuilding,
         string sourceFile,

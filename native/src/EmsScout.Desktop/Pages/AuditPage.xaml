@@ -230,10 +230,10 @@
                                     <Button Grid.Column="1" Command="{x:Bind ViewModel.LoadSelectedComparisonCommand}" Style="{StaticResource ToolbarButtonStyle}" Content="重新对比" />
                                 </Grid>
                                 <ComboBox
-                                    Width="460"
                                     AutomationProperties.Name="选择对比批次"
                                     DisplayMemberPath="Summary"
                                     Header="对比批次"
+                                    HorizontalAlignment="Left"
                                     ItemsSource="{x:Bind ViewModel.FilteredRuns, Mode=OneWay}"
                                     SelectedItem="{x:Bind ViewModel.SelectedRun, Mode=TwoWay}"
                                     PlaceholderText="没有可用历史批次" />

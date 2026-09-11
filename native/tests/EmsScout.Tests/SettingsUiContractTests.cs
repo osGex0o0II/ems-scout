@@ -54,6 +54,35 @@ public sealed class SettingsUiContractTests
     }
 
     [Fact]
+    public void CollectionParametersLiveInAdvancedSettingsAndTaskPageDoesNotRenderLogs()
+    {
+        var root = LocateRepositoryRoot();
+        var settings = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Application", "Settings", "AppSettings.cs"));
+        var settingsViewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "SettingsViewModel.cs"));
+        var settingsPage = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "SettingsPage.xaml"));
+        var tasksPage = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "TasksPage.xaml"));
+        var taskViewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "CollectionTaskViewModel.cs"));
+
+        Assert.Contains("RealtimeBatchSize", settings);
+        Assert.Contains("RealtimeReopenEvery", settings);
+        Assert.Contains("RealtimeTimeoutMs", settings);
+        Assert.Contains("RealtimeBatchSize", settingsViewModel);
+        Assert.Contains("RealtimeReopenEvery", settingsViewModel);
+        Assert.Contains("RealtimeTimeoutMs", settingsViewModel);
+        Assert.Contains("采集参数", settingsPage);
+        Assert.Contains("实时批量设备数", settingsPage);
+        Assert.Contains("单批超时（毫秒）", settingsPage);
+        Assert.Contains("设备批次重开间隔", settingsPage);
+        Assert.DoesNotContain("高级设置", tasksPage);
+        Assert.DoesNotContain("日志筛选", tasksPage);
+        Assert.DoesNotContain("RealtimeBatchSizeOptions", tasksPage);
+        Assert.DoesNotContain("RealtimeBatchSizeOptions", taskViewModel);
+        Assert.Contains("settings.RealtimeBatchSize", taskViewModel);
+        Assert.Contains("settings.RealtimeReopenEvery", taskViewModel);
+        Assert.Contains("settings.RealtimeTimeoutMs", taskViewModel);
+    }
+
+    [Fact]
     public void MainWindowUsesOneCentralizedPageTransitionPolicy()
     {
         var root = LocateRepositoryRoot();

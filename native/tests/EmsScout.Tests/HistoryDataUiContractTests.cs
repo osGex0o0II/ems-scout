@@ -59,6 +59,23 @@ public sealed class HistoryDataUiContractTests
     }
 
     [Fact]
+    public void ComparisonBatchPickerUsesContentDrivenWidth()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "AuditPage.xaml"));
+
+        var pickerStart = xaml.IndexOf("AutomationProperties.Name=\"选择对比批次\"", StringComparison.Ordinal);
+        var pickerEnd = xaml.IndexOf(" />", pickerStart, StringComparison.Ordinal);
+        Assert.True(pickerStart >= 0);
+        Assert.True(pickerEnd > pickerStart);
+
+        var picker = xaml[pickerStart..pickerEnd];
+        Assert.DoesNotContain("Width=\"460\"", picker);
+        Assert.Contains("HorizontalAlignment=\"Left\"", picker);
+        Assert.Contains("PlaceholderText=\"没有可用历史批次\"", picker);
+    }
+
+    [Fact]
     public void ComparisonSelectionUpdatesRestoreStateAndRejectsStaleResults()
     {
         var root = LocateRepositoryRoot();
@@ -68,6 +85,17 @@ public sealed class HistoryDataUiContractTests
         Assert.Contains("SelectedRun?.Id != runId", viewModel);
         Assert.Contains("CancellationTokenSource", viewModel);
         Assert.Contains("!run.IsCurrent", viewModel);
+    }
+
+    [Fact]
+    public void SelectedHistoryBatchShowsMissingQualityReportAsBatchSpecificState()
+    {
+        var root = LocateRepositoryRoot();
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "AuditViewModel.cs"));
+
+        Assert.Contains("批次 #{SelectedRun.Id} 没有质量报告", viewModel);
+        Assert.Contains("该批次没有可关联的质量审计结果", viewModel);
+        Assert.Contains("reportRunId != runId", File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Infrastructure", "Quality", "JsonQualityAuditService.cs")));
     }
 
     private static string LocateRepositoryRoot()

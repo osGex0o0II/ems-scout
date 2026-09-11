@@ -4,7 +4,6 @@ using System.Net.Http;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using EmsScout.Application.Collection;
@@ -24,7 +23,8 @@ public sealed partial class CollectionTaskViewModel(
     IQualityAuditService qualityAuditService,
     IRealtimeQualityAuditService realtimeQualityAuditService,
     IRealtimeReconciliationService realtimeReconciliationService,
-    ICollectionRunRepository collectionRunRepository) : ObservableObject
+    ICollectionRunRepository collectionRunRepository,
+    IRealtimeSnapshotStore realtimeSnapshotStore) : ObservableObject
 {
     private CancellationTokenSource? _activeTask;
     private bool _stopRequested;
@@ -35,7 +35,11 @@ public sealed partial class CollectionTaskViewModel(
     private string _activeStageKey = string.Empty;
     private string _lastStepFailureDetail = string.Empty;
     private string _lastProgressLocation = string.Empty;
+    private long? _targetRunId;
+    private long _taskGeneration;
+    private bool _acceptProgressEvents = true;
     private bool _currentDataUpdatedThisRun;
+    private bool _qualityRequiresReview;
     private bool _buildingEventsAttached;
     private bool _environmentChecked;
     private bool _nodeReady;
@@ -151,7 +155,7 @@ public sealed partial class CollectionTaskViewModel(
     public partial string TaskSummaryText { get; private set; } = string.Empty;
 
     [ObservableProperty]
-    public partial bool RunLogsExpanded { get; set; }
+    public partial bool HasTaskIssue { get; private set; }
 
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(StartCommand))]
@@ -200,28 +204,10 @@ public sealed partial class CollectionTaskViewModel(
     public partial bool RunRealtimeAuditAfterDetails { get; set; } = true;
 
     [ObservableProperty]
-    public partial bool EnableLogFile { get; set; } = true;
-
-    [ObservableProperty]
-    public partial string SelectedLogSeverity { get; set; } = "ERROR";
-
-    [ObservableProperty]
-    public partial string LogCategory { get; set; } = string.Empty;
-
-    [ObservableProperty]
     public partial bool EnableSelfDiagnose { get; set; }
 
     [ObservableProperty]
     public partial bool DisableNetworkMonitor { get; set; }
-
-    [ObservableProperty]
-    public partial double RealtimeBatchSize { get; set; } = 20;
-
-    [ObservableProperty]
-    public partial double RealtimeReopenEvery { get; set; } = 3;
-
-    [ObservableProperty]
-    public partial double RealtimeTimeoutMs { get; set; } = 15000;
 
     [ObservableProperty]
     public partial double RealtimeMaxDevices { get; set; }
@@ -300,18 +286,6 @@ public sealed partial class CollectionTaskViewModel(
     public ObservableCollection<CollectionTaskModeOption> TaskModes { get; } =
         new(CollectionTaskModeCatalog.Options.Where(option => option.Value != CollectionTaskModeValues.Custom));
 
-    public ObservableCollection<string> LogSeverityOptions { get; } = ["ERROR", "WARN", "INFO", "全部"];
-
-    public ObservableCollection<double> RealtimeBatchSizeOptions { get; } = [10, 20, 50, 100];
-
-    public ObservableCollection<double> RealtimeReopenEveryOptions { get; } = [0, 1, 3, 5, 10];
-
-    public ObservableCollection<double> RealtimeTimeoutOptions { get; } = [5000, 10000, 15000, 30000, 60000];
-
-    public ObservableCollection<CollectionTaskLogRow> Logs { get; } = [];
-
-    public ObservableCollection<CollectionTaskLogRow> FilteredLogs { get; } = [];
-
     public ObservableCollection<CollectionStageRow> Stages { get; } = [];
 
     public ObservableCollection<PreflightCheckRow> PreflightChecks { get; } =
@@ -387,8 +361,6 @@ public sealed partial class CollectionTaskViewModel(
         OnPropertyChanged(nameof(CanStartTask));
     }
 
-    partial void OnSelectedLogSeverityChanged(string value) => RefreshFilteredLogs();
-
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         // Idempotent: skip full re-init if already initialized and task is running.
@@ -402,7 +374,6 @@ public sealed partial class CollectionTaskViewModel(
             return;
         }
 
-        LoadSettingsDefaults();
         SelectedTaskMode ??= TaskModes.FirstOrDefault(
             mode => mode.Value == CollectionTaskModeValues.Full);
         ApplyTaskModePreset(SelectedTaskMode);
@@ -422,6 +393,8 @@ public sealed partial class CollectionTaskViewModel(
         _environmentChecked = true;
         IsEnvironmentReady = false;
         IsCollectionBrowserConnected = false;
+        ProgressText = "初始化失败";
+        SetTaskIssueSummary("页面初始化", exception.Message);
         ReadinessTitle = "采集页面初始化失败";
         ReadinessDetail = exception.Message;
         ReadinessGlyph = "\uE7BA";
@@ -429,11 +402,6 @@ public sealed partial class CollectionTaskViewModel(
         EnvironmentText = "初始化失败：" + exception.Message;
         StatusText = "采集准备未完成，请检查数据目录设置";
         AddLog(EnvironmentText);
-    }
-
-    public void LoadSettingsDefaults()
-    {
-        EnableLogFile = true;
     }
 
     private void ApplyTaskModePreset(CollectionTaskModeOption? mode)
@@ -676,6 +644,7 @@ public sealed partial class CollectionTaskViewModel(
             QualityIssues.Clear();
             if (report is null)
             {
+                _qualityRequiresReview = true;
                 QualityStatusText = "未找到质量审计文件";
                 QualitySummaryText = "采集或手动运行质量审计后显示结果";
                 QualityGeneratedText = "--";
@@ -690,6 +659,7 @@ public sealed partial class CollectionTaskViewModel(
             QualityStatusText = report.IsStale
                 ? "质量审计可能过期"
                 : report.Summary.IssueCount > 0 ? "存在待复核质量问题" : "质量审计通过";
+            _qualityRequiresReview = report.IsStale || report.Summary.IssueCount > 0;
             QualitySummaryText =
                 $"总数 {report.Summary.TotalCards:N0}；问题 {report.Summary.IssueCount:N0}；未知通讯 {report.Summary.UnknownCommunication:N0}；缺 indicator {report.Summary.MissingIndicator:N0}";
             QualityGeneratedText = string.IsNullOrWhiteSpace(report.GeneratedAtLocal)
@@ -702,6 +672,7 @@ public sealed partial class CollectionTaskViewModel(
         }
         catch (Exception ex)
         {
+            _qualityRequiresReview = true;
             QualityIssues.Clear();
             QualityStatusText = "质量审计读取失败";
             QualitySummaryText = ex.Message;
@@ -922,6 +893,8 @@ public sealed partial class CollectionTaskViewModel(
                 : PreflightCheckRow.Warning("EMS 页面", "系统设置中的 EMS 地址无效"));
             EnvironmentText = $"Node {nodeVersion}；依赖 {nodeDependencies}；浏览器 {cdpStatus.Detail}";
             CollectionBrowserActionText = "打开采集浏览器";
+            HasTaskIssue = false;
+            TaskSummaryText = string.Empty;
             UpdateEnvironmentReadiness();
             StatusText = IsEnvironmentReady ? "等待任务启动" : "采集准备未完成";
             var passed = PreflightChecks.Count(r => r.State == "通过");
@@ -942,6 +915,8 @@ public sealed partial class CollectionTaskViewModel(
             ReadinessDetail = ex.Message;
             ReadinessGlyph = "\uE7BA";
             EnvironmentText = "检查失败：" + ex.Message;
+            ProgressText = "环境检查失败";
+            SetTaskIssueSummary("环境检查", ex.Message);
             AddLog(EnvironmentText);
         }
         finally
@@ -1063,13 +1038,17 @@ public sealed partial class CollectionTaskViewModel(
         _activeTask = new CancellationTokenSource();
         _stopRequested = false;
         _currentDataUpdatedThisRun = false;
+        _qualityRequiresReview = false;
+        _targetRunId = null;
+        _taskGeneration++;
+        _acceptProgressEvents = true;
         ShowCompletionCelebration = false;
+        HasTaskIssue = false;
         CollectionCompletionText = string.Empty;
         CollectionCompletedAtText = string.Empty;
         CollectionDurationText = string.Empty;
         _activeStageKey = string.Empty;
         IsRunning = true;
-        ClearLogs();
         _lastProgressLocation = string.Empty;
         ReadinessTitle = "正在采集...";
         ReadinessDetail = string.Empty;
@@ -1087,6 +1066,7 @@ public sealed partial class CollectionTaskViewModel(
         EnsureProgressTimer();
         _progressTimer!.Start();
         ResetStages(plan);
+        _taskStartedAt = DateTimeOffset.Now;
         var settings = settingsService.Load();
         var runEnumeration = plan.RunEnumeration;
         var runValidation = plan.RunValidation;
@@ -1094,13 +1074,13 @@ public sealed partial class CollectionTaskViewModel(
         var runQualityAfterImport = plan.RunQuality;
         var runRealtimeDetailsAfterImport = plan.RunRealtimeDetails;
         var runRealtimeAuditAfterDetails = plan.RunRealtimeAudit;
-        const bool enableLogFile = true;
+        var enableLogFile = settings.SaveNdjsonLog;
         var logCategory = string.Empty;
         var enableSelfDiagnose = EnableSelfDiagnose;
         var disableNetworkMonitor = DisableNetworkMonitor;
-        var realtimeBatchSize = ClampInt(RealtimeBatchSize, 1, 100);
-        var realtimeReopenEvery = ClampInt(RealtimeReopenEvery, 0, 50);
-        var realtimeTimeoutMs = ClampInt(RealtimeTimeoutMs, 3000, 120000);
+        var realtimeBatchSize = settings.RealtimeBatchSize;
+        var realtimeReopenEvery = settings.RealtimeReopenEvery;
+        var realtimeTimeoutMs = settings.RealtimeTimeoutMs;
         var realtimeMaxDevices = ClampInt(RealtimeMaxDevices, 0, 20000);
         var refreshInventoryBeforeRealtime = RefreshInventoryBeforeRealtime;
         var skipInventoryCheck = SkipInventoryCheck;
@@ -1112,9 +1092,17 @@ public sealed partial class CollectionTaskViewModel(
                 !cdpStatus.LoginVerified ||
                 !cdpStatus.IsLoggedIn)
             {
+                const string failureLocation = "启动前检查 · EMS 登录态";
+                var failureReason = string.IsNullOrWhiteSpace(cdpStatus.LoginDetail)
+                    ? "未发现可采集 EMS 页面"
+                    : cdpStatus.LoginDetail;
+                ProgressText = "任务失败";
+                IsProgressIndeterminate = false;
+                SetTaskIssueSummary(failureLocation, failureReason, DateTimeOffset.Now - _taskStartedAt);
                 StatusText = "采集启动已阻止：未发现可采集 EMS 页面";
                 AddLog(StatusText);
                 AddLog(cdpStatus.LoginDetail);
+                _progressTimer?.Stop();
                 _activeTask.Dispose();
                 _activeTask = null;
                 IsRunning = false;
@@ -1134,14 +1122,13 @@ public sealed partial class CollectionTaskViewModel(
                 ? runQualityAfterImport ? 85 : 90
             : 100;
         StatusText = plan.RunningStatus;
-        _taskStartedAt = DateTimeOffset.Now;
         TaskSummaryText = string.Empty;
         AddLog("任务启动：" + StatusText);
         AddLog($"任务模式：{plan.Label}；楼栋 {ValueOrDash(string.Join("、", selectedBuildings))}");
         AddLog($"本次选项：枚举 {(runEnumeration ? "开启" : "关闭")}；校验 {(runValidation ? "开启" : "关闭")}；导入 SQLite {(runImportAfterCollect ? "开启" : "关闭")}；基础质量检查 {(runQualityAfterImport ? "开启" : "关闭")}；实时详情 {(runRealtimeDetailsAfterImport ? "开启" : "关闭")}；实时审计 {(runRealtimeAuditAfterDetails ? "开启" : "关闭")}；日志文件 {(enableLogFile ? "开启" : "关闭")}");
         if (runEnumeration && (enableSelfDiagnose || disableNetworkMonitor))
         {
-            AddLog($"枚举高级参数：日志级别 {SelectedLogSeverity}；自检 {(enableSelfDiagnose ? "开启" : "关闭")}；网络监听 {(disableNetworkMonitor ? "关闭" : "开启")}");
+            AddLog($"枚举高级参数：自检 {(enableSelfDiagnose ? "开启" : "关闭")}；网络监听 {(disableNetworkMonitor ? "关闭" : "开启")}");
         }
 
         if (runRealtimeDetailsAfterImport)
@@ -1154,6 +1141,18 @@ public sealed partial class CollectionTaskViewModel(
 
         try
         {
+            if (runRealtimeDetailsAfterImport && !runImportAfterCollect)
+            {
+                _targetRunId = (await collectionRunRepository.ListAsync(1, _activeTask.Token)
+                    .ConfigureAwait(true)).FirstOrDefault()?.Id;
+                if (_targetRunId is null)
+                {
+                    throw new InvalidOperationException("实时详情任务没有明确的目标历史批次。");
+                }
+
+                AddLog($"实时详情目标批次：#{_targetRunId.Value}");
+            }
+
             if (runEnumeration)
             {
                 SetStageState("collect", "进行中", "正在从 EMS 读取所选楼栋");
@@ -1214,8 +1213,12 @@ public sealed partial class CollectionTaskViewModel(
                 await RefreshAuditAsync(_activeTask.Token).ConfigureAwait(true);
                 SetStageState(
                     "quality",
-                    QualityIssues.Count > 0 ? "需复核" : "已完成",
-                    QualityIssues.Count > 0 ? $"发现 {QualityIssues.Sum(issue => issue.Count):N0} 项待复核问题" : "质量检查通过");
+                    _qualityRequiresReview ? "需复核" : "已完成",
+                    _qualityRequiresReview
+                        ? QualityIssues.Count > 0
+                            ? $"发现 {QualityIssues.Sum(issue => issue.Count):N0} 项待复核问题"
+                            : "质量报告缺失或已过期，请复核审计结果"
+                        : "质量检查通过");
             }
 
             if (runRealtimeDetailsAfterImport)
@@ -1237,6 +1240,12 @@ public sealed partial class CollectionTaskViewModel(
                     realtimeBase,
                     23,
                     _activeTask.Token);
+                if (_targetRunId is null)
+                {
+                    throw new InvalidOperationException("导入完成但未取得本次批次 ID，已阻止保存实时详情。");
+                }
+
+                await PersistRealtimeSnapshotAsync(_targetRunId.Value, selectedBuildings, _activeTask.Token);
                 ProgressValue = Math.Max(ProgressValue, 97);
                 ProgressText = runRealtimeAuditAfterDetails ? "实时详情已更新，准备审计" : "实时详情已更新";
                 if (!runRealtimeAuditAfterDetails)
@@ -1276,19 +1285,20 @@ public sealed partial class CollectionTaskViewModel(
                 ? $"{(int)elapsed.TotalMinutes} 分 {elapsed.Seconds} 秒"
                 : $"{elapsed.Seconds} 秒";
             var completedAt = DateTimeOffset.Now;
-            CollectionCompletionText = QualityIssues.Count > 0
+            CollectionCompletionText = _qualityRequiresReview
                 ? "采集完成，数据已更新（有待复核项）"
                 : "采集完成，数据已更新";
+            HasTaskIssue = false;
             CollectionCompletedAtText = $"完成时间：{completedAt:yyyy-MM-dd HH:mm:ss}";
             CollectionDurationText = $"本次用时：{elapsedText}";
             var cardCount = ProgressOverallText.Contains('/') ? ProgressOverallText.Split('·')[0].Trim() : string.Empty;
-            TaskSummaryText = QualityIssues.Count > 0
+            TaskSummaryText = _qualityRequiresReview
                 ? $"采集完成 · {cardCount}· 用时 {elapsedText} · 有待复核问题"
                 : $"采集完成 · {cardCount}· 用时 {elapsedText}";
             ShowCompletionCelebration = true;
             AddLog($"采集完成：完成时间 {completedAt:yyyy-MM-dd HH:mm:ss}；本次用时 {elapsedText}");
             StatusText = _currentDataUpdatedThisRun
-                ? QualityIssues.Count > 0
+                ? _qualityRequiresReview
                     ? "任务完成，当前数据已更新，存在待复核质量问题"
                     : "任务完成，当前数据已更新"
                 : plan.CompletedStatus(runImportAfterCollect, runRealtimeDetailsAfterImport);
@@ -1298,6 +1308,7 @@ public sealed partial class CollectionTaskViewModel(
         {
             IsProgressIndeterminate = false;
             ShowCompletionCelebration = false;
+            HasTaskIssue = true;
             ProgressText = "已停止";
             ProgressElapsedText = FormatElapsed(DateTimeOffset.Now - _taskStartedAt);
             SetActiveStageTerminalState("已停止", "用户停止了任务");
@@ -1315,12 +1326,17 @@ public sealed partial class CollectionTaskViewModel(
         {
             IsProgressIndeterminate = false;
             ShowCompletionCelebration = false;
+            HasTaskIssue = true;
             ProgressText = "任务失败";
-            ProgressElapsedText = FormatElapsed(DateTimeOffset.Now - _taskStartedAt);
+            var elapsedText = FormatElapsed(DateTimeOffset.Now - _taskStartedAt);
+            ProgressElapsedText = elapsedText;
             SetActiveStageTerminalState("失败", ex.Message);
-            // 进度卡只保留当前状态；完整失败原因统一放到运行记录，避免同一错误重复显示。
-            TaskSummaryText = string.Empty;
-            RunLogsExpanded = true;
+            var stage = Stages.FirstOrDefault(item => item.Key == _activeStageKey)?.Label ?? "当前步骤";
+            var location = string.IsNullOrWhiteSpace(_lastProgressLocation)
+                ? stage
+                : $"{stage} · {_lastProgressLocation}";
+            var failureReason = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
+            SetTaskIssueSummary(location, failureReason, DateTimeOffset.Now - _taskStartedAt);
             StatusText = _currentDataUpdatedThisRun
                 ? "任务失败；当前数据已经更新，后续步骤未完成"
                 : "任务失败；当前数据未更改";
@@ -1328,6 +1344,7 @@ public sealed partial class CollectionTaskViewModel(
         }
         finally
         {
+            _acceptProgressEvents = false;
             _activeTask?.Dispose();
             _activeTask = null;
             _activeCollectionBuildings = [];
@@ -1639,6 +1656,19 @@ public sealed partial class CollectionTaskViewModel(
             progressSpan);
     }
 
+    private async Task PersistRealtimeSnapshotAsync(
+        long runId,
+        IReadOnlyList<string> buildings,
+        CancellationToken cancellationToken)
+    {
+        await realtimeSnapshotStore.SaveAsync(
+            runId,
+            pathService.DataDirectory,
+            buildings,
+            cancellationToken).ConfigureAwait(true);
+        AddLog($"已保存批次 #{runId} 的实时详情快照");
+    }
+
     private Task RunRealtimeAuditAsync(AppSettings settings, CancellationToken cancellationToken)
     {
         return RunStepAsync(
@@ -1657,6 +1687,10 @@ public sealed partial class CollectionTaskViewModel(
             ["CDP_URL"] = "http://127.0.0.1:" + settings.EdgeCdpPort,
             ["REALTIME_BROWSER_MODE"] = "cdp",
         };
+        if (_targetRunId is > 0)
+        {
+            environment["EMS_RUN_ID"] = _targetRunId.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
         return environment;
     }
 
@@ -1699,185 +1733,31 @@ public sealed partial class CollectionTaskViewModel(
 
     private void AddLog(string message)
     {
-        var normalized = NormalizeLogMessage(message);
+        var normalized = message;
+        const string historyRunPrefix = "History run:";
+        var historyRunIndex = normalized.IndexOf(historyRunPrefix, StringComparison.OrdinalIgnoreCase);
+        if (historyRunIndex >= 0 &&
+            long.TryParse(normalized[(historyRunIndex + historyRunPrefix.Length)..].Trim(), out var importedRunId) &&
+            importedRunId > 0)
+        {
+            _targetRunId = importedRunId;
+        }
         const string qualityGatePrefix = "QUALITY GATE FAIL ";
         var qualityGateIndex = normalized.IndexOf(qualityGatePrefix, StringComparison.OrdinalIgnoreCase);
         if (qualityGateIndex >= 0)
         {
             _lastStepFailureDetail = "质量门槛未通过：" + normalized[(qualityGateIndex + qualityGatePrefix.Length)..];
         }
+        var generation = _taskGeneration;
         _dispatcherQueue.TryEnqueue(() =>
         {
-            ApplyProgressEvent(message);
-            var displayMessage = FormatOperationalLog(NormalizeLogMessage(message));
-            var row = new CollectionTaskLogRow(DateTime.Now.ToString("HH:mm:ss"), displayMessage, ClassifyLogSeverity(displayMessage));
-            if (Logs.Any(existing => string.Equals(existing.Message, row.Message, StringComparison.Ordinal)))
+            if (!_acceptProgressEvents || generation != _taskGeneration)
             {
                 return;
             }
-            Logs.Add(row);
-            if (MatchesLogFilter(row))
-            {
-                FilteredLogs.Add(row);
-            }
-            while (Logs.Count > 300)
-            {
-                var removed = Logs[0];
-                Logs.RemoveAt(0);
-                FilteredLogs.Remove(removed);
-            }
+
+            ApplyProgressEvent(message);
         });
-    }
-
-    private string FormatOperationalLog(string message)
-    {
-        if (string.IsNullOrWhiteSpace(message) || message.StartsWith("任务", StringComparison.Ordinal))
-        {
-            return message;
-        }
-
-        var context = string.IsNullOrWhiteSpace(_lastProgressLocation) ? "当前页面" : _lastProgressLocation;
-        var qualityGate = Regex.Match(
-            message,
-            @"QUALITY GATE FAIL\s+(?<building>\S+)\s+F(?<floor>\S+)\s+(?<subArea>\S+)\s+(?<page>[^:]+):\s*(?<details>.*?)(?:\s+reason=(?<reason>\S+))?$",
-            RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Singleline);
-        if (qualityGate.Success)
-        {
-            var building = qualityGate.Groups["building"].Value;
-            var subArea = qualityGate.Groups["subArea"].Value;
-            var page = qualityGate.Groups["page"].Value.Trim();
-            var reason = qualityGate.Groups["reason"].Value.Trim();
-            var reasonText = reason switch
-            {
-                var value when value.StartsWith("unresolved_comm:", StringComparison.OrdinalIgnoreCase) =>
-                    $"通信状态未确认（{(value.Length > 16 ? value[16..] : value)} 台）",
-                "template_values_unconfirmed" => "页面仍是默认模板值",
-                "placeholder_cards" => "存在占位设备名称",
-                "duplicate_collapse" => "页面卡片数量异常减少",
-                "active_fields_incomplete" => "开机或关机设备字段不完整",
-                _ when !string.IsNullOrWhiteSpace(reason) => reason,
-                _ => "设备状态数据不完整",
-            };
-            var pageText = string.Equals(page, "default", StringComparison.OrdinalIgnoreCase)
-                ? "默认页"
-                : page;
-            var locationBuilding = building.EndsWith("号", StringComparison.Ordinal) ? building + "楼" : building;
-            var location = string.Join(" · ", new[] { locationBuilding, subArea, pageText }.Where(value => !string.IsNullOrWhiteSpace(value)));
-            var details = qualityGate.Groups["details"].Value.Trim()
-                .Replace("sw=", "开关=", StringComparison.OrdinalIgnoreCase)
-                .Replace("mode=", "模式=", StringComparison.OrdinalIgnoreCase)
-                .Replace("tmp=", "室温=", StringComparison.OrdinalIgnoreCase)
-                .Replace("set=", "设定温度=", StringComparison.OrdinalIgnoreCase)
-                .Replace("fan=", "风速=", StringComparison.OrdinalIgnoreCase)
-                .Replace("comm=", "通信=", StringComparison.OrdinalIgnoreCase)
-                .Replace("ind=", "指示图=", StringComparison.OrdinalIgnoreCase)
-                .Replace("ph=", "占位=", StringComparison.OrdinalIgnoreCase)
-                .Replace("active=", "有效设备=", StringComparison.OrdinalIgnoreCase);
-            return $"质量检查失败（{location}）；原因：{reasonText}；明细：{details}";
-        }
-
-        if (message.Contains("known source indicator defect", StringComparison.OrdinalIgnoreCase))
-        {
-            var exactContext = ExtractBracketContext(message) ?? context;
-            return $"设备状态待复核（{exactContext}；原因：EMS 指示图未显示，其他关键数据已保留）";
-        }
-
-        if (message.Contains("PAGE_SWITCH_TIMEOUT", StringComparison.OrdinalIgnoreCase))
-        {
-            return $"页面切换等待超时（{context}；原因：未检测到页面数据变化）" + ExtractDuration(message);
-        }
-
-        if (message.Contains("SVG_DATA_TIMEOUT", StringComparison.OrdinalIgnoreCase))
-        {
-            return $"页面数据等待超时（{context}；原因：SVG 卡片数据未稳定）" + ExtractDuration(message);
-        }
-
-        if (message.Contains("WS_TIMEOUT", StringComparison.OrdinalIgnoreCase))
-        {
-            return $"页面数据等待超时（{context}；原因：WebSocket 数据未稳定）" + ExtractDuration(message);
-        }
-
-        if (message.Contains("SVG_TIMEOUT", StringComparison.OrdinalIgnoreCase))
-        {
-            return $"页面指示图等待超时（{context}；原因：状态图标未全部加载，已继续采集）" + ExtractDuration(message);
-        }
-
-        if (message.Contains("WAIT_CARDS", StringComparison.OrdinalIgnoreCase))
-        {
-            var detail = message[(message.IndexOf(':') + 1)..].Trim();
-            detail = detail.Replace("real", "真实卡片", StringComparison.OrdinalIgnoreCase)
-                .Replace("switch images not loaded", "开关状态图未加载", StringComparison.OrdinalIgnoreCase)
-                .Replace("comm", "通信状态", StringComparison.OrdinalIgnoreCase)
-                .Replace("waiting", "继续等待", StringComparison.OrdinalIgnoreCase)
-                .Replace("ms", "毫秒", StringComparison.OrdinalIgnoreCase);
-            return $"等待页面卡片加载（{context}；原因：{detail}）";
-        }
-
-        if (message.Contains("FIRST PAGE", StringComparison.OrdinalIgnoreCase) &&
-            (message.Contains("timeout", StringComparison.OrdinalIgnoreCase) || message.Contains("round", StringComparison.OrdinalIgnoreCase)))
-        {
-            var exactContext = ExtractBracketContext(message) ?? ExtractFirstPageContext(message) ?? context;
-            return $"首屏页面仍在等待数据（{exactContext}；原因：设备数据或页面质量尚未稳定）" + ExtractDuration(message);
-        }
-
-        if (message.Contains("adaptive polling", StringComparison.OrdinalIgnoreCase))
-        {
-            var exactContext = ExtractBracketContext(message) ?? context;
-            return $"等待页面数据稳定（{exactContext}；原因：首屏质量未达标，最长等待 45 秒）";
-        }
-
-        if (message.Contains("progressive retry", StringComparison.OrdinalIgnoreCase))
-        {
-            return $"页面数据质量未达标，正在重试（{context}；原因：等待设备状态完整）";
-        }
-
-        if (message.Contains("进入页面", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("开始等待", StringComparison.OrdinalIgnoreCase))
-        {
-            return $"进入页面，等待页面变化（{context}；原因：等待 EMS 页面完成加载）";
-        }
-
-        return message;
-    }
-
-    private static string ExtractDuration(string message)
-    {
-        var match = Regex.Match(message, @"(?:after|等待)\s*(\d+)\s*ms", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
-        return match.Success ? $"；已等待 {match.Groups[1].Value} 毫秒" : string.Empty;
-    }
-
-    private static string? ExtractFirstPageContext(string message)
-    {
-        var marker = message.IndexOf("FIRST PAGE ", StringComparison.OrdinalIgnoreCase);
-        if (marker < 0)
-        {
-            return null;
-        }
-
-        var value = message[(marker + "FIRST PAGE ".Length)..];
-        foreach (var endMarker in new[] { " timeout", " round", " accepting", " using" })
-        {
-            var index = value.IndexOf(endMarker, StringComparison.OrdinalIgnoreCase);
-            if (index >= 0)
-            {
-                value = value[..index];
-            }
-        }
-
-        return string.IsNullOrWhiteSpace(value) ? null : value.Trim().Replace(" ", " · ", StringComparison.Ordinal);
-    }
-
-    private static string? ExtractBracketContext(string message)
-    {
-        var start = message.IndexOf('[', StringComparison.Ordinal);
-        var end = start < 0 ? -1 : message.IndexOf(']', start + 1);
-        if (start < 0 || end <= start)
-        {
-            return null;
-        }
-
-        var value = message[(start + 1)..end].Trim();
-        return string.IsNullOrWhiteSpace(value) ? null : value.Replace(" ", " · ", StringComparison.Ordinal);
     }
 
     public void StartEnvironmentMonitoring()
@@ -1994,53 +1874,14 @@ public sealed partial class CollectionTaskViewModel(
                 : $"已用时：{totalSeconds} 秒";
     }
 
-    public void ClearLogs()
+    private void SetTaskIssueSummary(string location, string reason, TimeSpan? elapsed = null)
     {
-        Logs.Clear();
-        FilteredLogs.Clear();
-    }
-
-    private bool MatchesLogFilter(CollectionTaskLogRow row) =>
-        SelectedLogSeverity == "全部" || string.Equals(row.Severity, SelectedLogSeverity, StringComparison.OrdinalIgnoreCase);
-
-    private void RefreshFilteredLogs()
-    {
-        FilteredLogs.Clear();
-        foreach (var row in Logs.Where(MatchesLogFilter))
-        {
-            FilteredLogs.Add(row);
-        }
-    }
-
-    private static string ClassifyLogSeverity(string message)
-    {
-        if (IsWaitTimeoutMessage(message))
-        {
-            return "WARN";
-        }
-
-        if (message.Contains("失败", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("ERROR", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("退出码", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("无法", StringComparison.OrdinalIgnoreCase) ||
-            (message.Contains("超时", StringComparison.OrdinalIgnoreCase) &&
-             !message.Contains("等待", StringComparison.OrdinalIgnoreCase)) ||
-            (message.Contains("timeout", StringComparison.OrdinalIgnoreCase) &&
-             !message.Contains("waiting", StringComparison.OrdinalIgnoreCase)))
-        {
-            return "ERROR";
-        }
-
-        if (message.Contains("WARN", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("warning", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("LOW QUALITY", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("待复核", StringComparison.OrdinalIgnoreCase) ||
-            message.Contains("等待", StringComparison.OrdinalIgnoreCase))
-        {
-            return "WARN";
-        }
-
-        return "INFO";
+        HasTaskIssue = true;
+        var elapsedText = elapsed.HasValue ? FormatElapsed(elapsed.Value) : "未开始";
+        ProgressElapsedText = elapsed.HasValue ? elapsedText : "未开始";
+        var failureLocation = string.IsNullOrWhiteSpace(location) ? "当前步骤" : location;
+        var failureReason = string.IsNullOrWhiteSpace(reason) ? "未提供具体原因" : reason;
+        TaskSummaryText = $"失败位置：{failureLocation}；失败原因：{failureReason}；已运行：{elapsedText}";
     }
 
     private static bool IsPageWaitMessage(string message)
@@ -2063,104 +1904,6 @@ public sealed partial class CollectionTaskViewModel(
                (message.Contains("超时", StringComparison.OrdinalIgnoreCase) ||
                 message.Contains("timeout", StringComparison.OrdinalIgnoreCase) ||
                 message.Contains("45秒", StringComparison.OrdinalIgnoreCase));
-    }
-
-    private static string NormalizeLogMessage(string message)
-    {
-        if (message.StartsWith("[PROGRESS]", StringComparison.Ordinal))
-        {
-            return FormatProgressMessage(message["[PROGRESS]".Length..]);
-        }
-
-        return message;
-    }
-
-    private static string FormatProgressMessage(string json)
-    {
-        try
-        {
-            using var document = JsonDocument.Parse(json);
-            var root = document.RootElement;
-            var parts = new List<string>();
-
-            var building = GetString(root, "building", "bldg");
-            var seat = GetString(root, "seat", "zuo");
-            var buildingIndex = GetInt(root, "buildingIndex", 0);
-            var buildingTotal = GetInt(root, "buildingTotal", 0);
-            if (string.IsNullOrWhiteSpace(building) && buildingTotal > 0)
-            {
-                building = $"第{buildingIndex}/{buildingTotal}栋";
-            }
-
-            var floorText = GetString(root, "floorText");
-            if (string.IsNullOrWhiteSpace(floorText) && root.TryGetProperty("floor", out var floorElem))
-            {
-                floorText = floorElem.GetInt32() switch
-                {
-                    -2 => "BM",
-                    -1 => "B1F",
-                    var f => $"{f}F",
-                };
-            }
-            var pageName = GetString(root, "pageName");
-            var currentSubArea = GetInt(root, "curSa", 0);
-            var totalSubArea = GetInt(root, "totalSa", 0);
-
-            if (!string.IsNullOrWhiteSpace(building))
-            {
-                parts.Add(building);
-                if (!string.IsNullOrWhiteSpace(seat))
-                {
-                    parts.Add(seat);
-                }
-                if (!string.IsNullOrWhiteSpace(floorText))
-                {
-                    parts.Add(floorText);
-                    if (!string.IsNullOrWhiteSpace(pageName) && pageName != "default")
-                    {
-                        parts.Add(pageName);
-                    }
-                }
-                else if (totalSubArea > 0)
-                {
-                    parts.Add($"子区 {currentSubArea}/{totalSubArea}");
-                }
-            }
-
-            if (root.TryGetProperty("deviceDone", out var done) &&
-                root.TryGetProperty("deviceTotal", out var deviceTotal) &&
-                deviceTotal.GetInt32() > 0)
-            {
-                parts.Add($"设备 {done.GetInt32()}/{deviceTotal.GetInt32()}");
-            }
-
-            var cards = GetInt(root, "cards", 0);
-            var accumulated = GetInt(root, "acc", 0);
-            if (cards > 0 && accumulated > 0)
-            {
-                parts.Add($"本页 {cards} 张，累计 {accumulated} 张");
-            }
-
-            if (parts.Count > 0)
-            {
-                return string.Join(" · ", parts);
-            }
-
-            if (root.TryGetProperty("message", out var message))
-            {
-                var text = message.GetString();
-                if (!string.IsNullOrWhiteSpace(text))
-                {
-                    return text;
-                }
-            }
-
-            return "采集进度";
-        }
-        catch
-        {
-            return "采集进度 " + json;
-        }
     }
 
     private static string GetString(JsonElement root, params string[] names)

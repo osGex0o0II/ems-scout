@@ -1,7 +1,6 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/EmsScout.Application/EmsScout.Application.csproj" />
-    <Project Path="src/EmsScout.Collection/EmsScout.Collection.csproj" />
     <Project Path="src/EmsScout.Desktop/EmsScout.Desktop.csproj" />
     <Project Path="src/EmsScout.Domain/EmsScout.Domain.csproj" />
     <Project Path="src/EmsScout.Infrastructure/EmsScout.Infrastructure.csproj" />

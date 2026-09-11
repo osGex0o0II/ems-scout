@@ -1,5 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Windowing;
@@ -43,7 +45,18 @@ public sealed partial class MainWindow : Window
         var settings = _settingsService.Current;
         if (settings.SaveWindowPlacement && settings.WindowPlacement is not null)
         {
-            WindowSizeConstraint.Restore(this, settings.WindowPlacement);
+            if (settings.WindowPlacement.PlacementVersion >= WindowSizeConstraint.CurrentPlacementVersion)
+            {
+                WindowSizeConstraint.Restore(this, settings.WindowPlacement);
+            }
+            else
+            {
+                // Placement files written before the bounded startup-size contract
+                // may contain the old 2080x1360 default. Keep the new initial size
+                // and persist it so the migration runs only once.
+                settings.WindowPlacement = WindowSizeConstraint.Capture(this);
+                _settingsService.Save(settings);
+            }
         }
         App.Services.GetRequiredService<WindowHandleProvider>().Attach(this);
         App.Services.GetRequiredService<AppUiSettingsService>().ApplyTheme(RootGrid);
@@ -141,6 +154,34 @@ public sealed partial class MainWindow : Window
         };
 
         NavigateToPage(pageType);
+    }
+
+    private void NavView_PointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        var point = e.GetCurrentPoint(NavView).Position;
+        var paneWidth = NavView.IsPaneOpen ? NavView.OpenPaneLength : NavView.CompactPaneLength;
+        if (point.X >= paneWidth || point.Y > 48 || IsPaneToggleButtonSource(e.OriginalSource as DependencyObject))
+        {
+            return;
+        }
+
+        NavView.IsPaneOpen = !NavView.IsPaneOpen;
+        e.Handled = true;
+    }
+
+    private static bool IsPaneToggleButtonSource(DependencyObject? source)
+    {
+        while (source is not null)
+        {
+            if (source is Button button && button.Name is "TogglePaneButton" or "NavigationViewBackButton" or "NavigationViewCloseButton")
+            {
+                return true;
+            }
+
+            source = VisualTreeHelper.GetParent(source);
+        }
+
+        return false;
     }
 
     private void NavigateToData(DataNavigationRequest request)

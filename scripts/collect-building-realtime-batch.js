@@ -21,6 +21,9 @@ const SKIP_DEVICES = Number((process.argv.find(a => a.startsWith('--skip-devices
 const REOPEN_EVERY = Number((process.argv.find(a => a.startsWith('--reopen-every=')) || '').split('=')[1] || 0);
 const TIMEOUT_MS = Number((process.argv.find(a => a.startsWith('--timeout=')) || '').split('=')[1] || 12000);
 const OVERWRITE_LATEST = process.argv.includes('--write-latest');
+const RUN_ID = Number(
+  ((process.argv.find(a => a.startsWith('--run-id=')) || '').split('=').slice(1).join('=') ||
+    process.env.EMS_RUN_ID || 0));
 const OUT_DIR = path.resolve(process.env.EMS_OUT_DIR || path.resolve(__dirname, '..', 'out'));
 installRealtimeLog({ prefix: `realtime_${BUILDING}_batch` });
 
@@ -719,7 +722,12 @@ async function main() {
       rows.push(row);
       ndjson.write(JSON.stringify(row) + '\n');
     }
-    const partial = { summary: summarize(rows, startedAt), rows };
+    const partial = {
+      ...(RUN_ID > 0 ? { runId: RUN_ID } : {}),
+      capturedAt: new Date().toISOString(),
+      summary: summarize(rows, startedAt),
+      rows,
+    };
     fs.writeFileSync(jsonPath, JSON.stringify(partial, null, 2), 'utf8');
     progress({
       phase: 'realtime_batch',
@@ -736,7 +744,12 @@ async function main() {
 
   await restoreBatchSubscription(page);
   const capturedAt = new Date().toISOString();
-  const result = { capturedAt, summary: summarize(rows, startedAt), rows };
+  const result = {
+    ...(RUN_ID > 0 ? { runId: RUN_ID } : {}),
+    capturedAt,
+    summary: summarize(rows, startedAt),
+    rows,
+  };
   fs.writeFileSync(jsonPath, JSON.stringify(result, null, 2), 'utf8');
   if (OVERWRITE_LATEST && MAX_DEVICES === 0) fs.writeFileSync(latestPath, JSON.stringify(result, null, 2), 'utf8');
   ndjson.end();

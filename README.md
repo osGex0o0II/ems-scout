@@ -96,7 +96,7 @@ scripts/
 native/src/
   EmsScout.Desktop        WinUI 3 产品界面
   EmsScout.Application    应用用例和页面契约
-  EmsScout.Collection     Native 采集编排契约
+  NodeCollectionTaskRunner  Native 调用 Node.js/Edge CDP 采集脚本
   EmsScout.Domain         领域模型
   EmsScout.Infrastructure SQLite、文件源和 Excel 导出
 native/tools/EmsScout.ExportSmoke/

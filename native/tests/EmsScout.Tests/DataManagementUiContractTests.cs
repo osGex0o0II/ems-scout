@@ -29,7 +29,10 @@ public sealed class DataManagementUiContractTests
         Assert.Contains("HorizontalScrollBarVisibility=\"Disabled\"", xaml);
         Assert.DoesNotContain("运行状态", xaml);
         Assert.DoesNotContain("打开上次导出", xaml);
-        Assert.Contains("筛选和 Excel 导出使用同一组条件", xaml);
+        Assert.DoesNotContain("筛选和 Excel 导出使用同一组条件", xaml);
+        Assert.Contains("ViewModel.DataStatusText", xaml);
+        Assert.DoesNotContain("TextFillColorCautionBrush", xaml);
+        Assert.Contains("SystemFillColorCautionBrush", xaml);
         Assert.DoesNotContain("Header=\"子区\"", xaml);
         Assert.DoesNotContain("Header=\"环境温度(℃)\"", xaml);
         Assert.DoesNotContain("Header=\"设置温度条件\"", xaml);
@@ -75,7 +78,7 @@ public sealed class DataManagementUiContractTests
         Assert.True(compactStart >= 0);
         Assert.True(wideStart >= 0);
         Assert.Contains("AdaptiveTrigger MinWindowWidth=\"1500\"", xaml);
-        Assert.Contains("Grid.Row=\"1\"", xaml[compactStart..]);
+        Assert.Contains("Grid.Row=\"2\"", xaml[compactStart..]);
         Assert.Contains("Text=\"温度（设 / 环，℃）\"", xaml[compactStart..]);
         Assert.Contains("Text=\"温度（设 / 环，℃）\"", xaml[wideStart..]);
         Assert.DoesNotContain("MinWidth=\"1620\"", xaml);
@@ -150,7 +153,8 @@ public sealed class DataManagementUiContractTests
         Assert.Contains("ItemsSource=\"{x:Bind ViewModel.DataSources, Mode=OneWay}\"", xaml);
         Assert.Contains("<ComboBox.ItemTemplate>", xaml);
         Assert.Contains("Text=\"{Binding DisplayLabel}\"", xaml);
-        Assert.Contains("Width=\"320\"", xaml);
+        Assert.DoesNotContain("Width=\"320\"", xaml);
+        Assert.Contains("HorizontalAlignment=\"Left\"", xaml);
         Assert.Contains("MaxDropDownHeight=\"420\"", xaml);
     }
 
@@ -180,7 +184,7 @@ public sealed class DataManagementUiContractTests
         Assert.DoesNotContain("OpenExportLocation_Click", xaml);
         Assert.DoesNotContain("打开导出位置", xaml);
         Assert.DoesNotContain("LastExportPath", xaml);
-        Assert.Contains("Width=\"320\"", xaml);
+        Assert.DoesNotContain("Width=\"320\"", xaml);
         Assert.Contains("compact ? new Thickness(14, 14, 14, 14)", viewModel);
     }
 
@@ -214,6 +218,20 @@ public sealed class DataManagementUiContractTests
         Assert.Contains("Foreground=\"{Binding TemperatureForeground}\"", xaml);
         Assert.Contains("TemperatureWarningThreshold", row);
         Assert.Contains("IsTemperatureWarning", row);
+        Assert.Contains("record.CommunicationState != DeviceCommunicationState.Offline", row);
+    }
+
+    [Fact]
+    public void OfflineCommunicationClearsRealtimeOnlySelections()
+    {
+        var root = LocateRepositoryRoot();
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs"));
+
+        Assert.Contains("string.Equals(value?.Value, \"离线\", StringComparison.OrdinalIgnoreCase)", viewModel);
+        Assert.Contains("SelectedMode = ModeOptions.FirstOrDefault()", viewModel);
+        Assert.Contains("SelectedFan = FanOptions.FirstOrDefault()", viewModel);
+        Assert.Contains("SelectedSetTemperature = SetTemperatureOptions.FirstOrDefault()", viewModel);
+        Assert.Contains("SelectedRealtimeLock = RealtimeLockOptions.FirstOrDefault()", viewModel);
     }
 
     [Fact]
@@ -336,6 +354,11 @@ public sealed class DataManagementUiContractTests
         Assert.Contains("private long? _latestDataSourceRunId", source);
         Assert.Contains("_latestDataSourceRunId = latestOption?.RunId", source);
         Assert.Contains("SelectedDataSource.RunId == _latestDataSourceRunId", source);
+
+        var loadingBlock = source[
+            source.IndexOf("public bool IsLoading", StringComparison.Ordinal)..
+            source.IndexOf("public bool CanMovePrevious", StringComparison.Ordinal)];
+        Assert.Contains("OnPropertyChanged(nameof(CanChangeDataSource))", loadingBlock);
     }
 
     [Fact]

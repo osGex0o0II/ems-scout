@@ -36,9 +36,9 @@ public sealed class DashboardOverviewService(
         {
             new OverviewMetric("总设备数", summary.Total.ToString("N0"), totalMetricDetail, OverviewMetricKind.Info),
             new OverviewMetric("开机", summary.Running.ToString("N0"), Percent(summary.RunningRate), OverviewMetricKind.Success, CommunicationState: "开机"),
-            new OverviewMetric("关机", summary.Stopped.ToString("N0"), "在线但未运行", OverviewMetricKind.Neutral, CommunicationState: "关机"),
+            new OverviewMetric("关机", summary.Stopped.ToString("N0"), Percent(Rate(summary.Stopped, summary.Total)), OverviewMetricKind.Neutral, CommunicationState: "关机"),
             new OverviewMetric("离线", summary.Offline.ToString("N0"), Percent(summary.OfflineRate), OverviewMetricKind.Warning, CommunicationState: "离线"),
-            new OverviewMetric("未知", summary.Unknown.ToString("N0"), "需排查状态映射", summary.Unknown > 0 ? OverviewMetricKind.Warning : OverviewMetricKind.Success, CommunicationState: "未知"),
+            new OverviewMetric("未知", summary.Unknown.ToString("N0"), Percent(Rate(summary.Unknown, summary.Total)), summary.Unknown > 0 ? OverviewMetricKind.Warning : OverviewMetricKind.Success, CommunicationState: "未知"),
         };
 
         return new DashboardOverview(
@@ -53,6 +53,11 @@ public sealed class DashboardOverviewService(
     private static string Percent(double value)
     {
         return value.ToString("P1");
+    }
+
+    private static double Rate(int count, int total)
+    {
+        return total == 0 ? 0 : count / (double)total;
     }
 
     private static FleetSummary BuildSummary(IReadOnlyList<DeviceRecord> devices)

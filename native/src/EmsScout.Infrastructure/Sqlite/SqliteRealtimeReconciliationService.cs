@@ -29,7 +29,8 @@ public sealed class SqliteRealtimeReconciliationService(
         await using var connection = OpenConnection();
         var buildings = ResolveBuildings(query.Building);
         var dbRows = await LoadDbRowsAsync(connection, buildings, cancellationToken).ConfigureAwait(false);
-        var realtimeSet = await realtimeDetailSource.LoadAsync(buildings, cancellationToken).ConfigureAwait(false);
+        var expectedRunId = await LoadCurrentRunIdAsync(connection, cancellationToken).ConfigureAwait(false);
+        var realtimeSet = await realtimeDetailSource.LoadAsync(buildings, expectedRunId, cancellationToken).ConfigureAwait(false);
         var realtimeRows = realtimeSet.Rows.ToList();
         var overrides = await LoadRealtimeMatchOverridesAsync(connection, cancellationToken).ConfigureAwait(false);
 
@@ -193,6 +194,51 @@ public sealed class SqliteRealtimeReconciliationService(
         command.Parameters.AddWithValue("$name", tableName);
         var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return result is not null;
+    }
+
+    private static async Task<long?> LoadCurrentRunIdAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, "collection_runs", cancellationToken).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        var hasImportedAt = await ColumnExistsAsync(connection, "collection_runs", "imported_at", cancellationToken).ConfigureAwait(false);
+        var hasStatus = await ColumnExistsAsync(connection, "collection_runs", "status", cancellationToken).ConfigureAwait(false);
+        var orderColumn = hasImportedAt ? "imported_at" : "completed_at";
+        var statusClause = hasStatus ? "WHERE status = 'completed'" : string.Empty;
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            SELECT id
+            FROM collection_runs
+            {statusClause}
+            ORDER BY datetime({orderColumn}) DESC, id DESC
+            LIMIT 1
+            """;
+        var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return value is null || value is DBNull ? null : Convert.ToInt64(value, CultureInfo.InvariantCulture);
+    }
+
+    private static async Task<bool> ColumnExistsAsync(
+        SqliteConnection connection,
+        string tableName,
+        string columnName,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({tableName})";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void ConsumeExactMatches(ReconcileState state)

@@ -132,6 +132,25 @@ function ensureHistorySchema(db) {
     CREATE INDEX IF NOT EXISTS idx_run_cards_name ON run_cards(name);
     CREATE INDEX IF NOT EXISTS idx_run_cards_switch ON run_cards(switch);
 
+    CREATE TABLE IF NOT EXISTS run_realtime_details (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id INTEGER NOT NULL,
+      source_row_id TEXT NOT NULL,
+      building TEXT NOT NULL,
+      floor REAL,
+      sub_area TEXT,
+      page_name TEXT,
+      name TEXT,
+      source_file TEXT,
+      source_updated_at TEXT,
+      payload_json TEXT NOT NULL,
+      FOREIGN KEY(run_id) REFERENCES collection_runs(id) ON DELETE CASCADE
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_run_realtime_details_row
+      ON run_realtime_details(run_id, source_row_id);
+    CREATE INDEX IF NOT EXISTS idx_run_realtime_details_run_building
+      ON run_realtime_details(run_id, building);
+
     CREATE TABLE IF NOT EXISTS floor_catalog (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       building TEXT NOT NULL,
@@ -325,6 +344,7 @@ function deleteRun(db, runId) {
   const run = db.prepare('SELECT id, run_key, completed_at, card_count FROM collection_runs WHERE id = ?').get(id);
   if (!run) throw new Error('Run not found: ' + runId);
   const tx = db.transaction(() => {
+    db.prepare('DELETE FROM run_realtime_details WHERE run_id = ?').run(id);
     db.prepare('DELETE FROM run_cards WHERE run_id = ?').run(id);
     db.prepare('DELETE FROM run_pages WHERE run_id = ?').run(id);
     db.prepare('DELETE FROM run_sub_areas WHERE run_id = ?').run(id);

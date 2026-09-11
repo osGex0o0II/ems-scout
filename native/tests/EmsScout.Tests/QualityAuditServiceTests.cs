@@ -149,6 +149,23 @@ public sealed class QualityAuditServiceTests
         Assert.EndsWith("quality_report_run24.json", report.SourcePath, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task MarksReportWithWrongRunIdAsStale()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-quality-run-mismatch-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var dbPath = Path.Combine(root, "ac.db");
+        File.WriteAllText(dbPath, string.Empty);
+        File.WriteAllText(Path.Combine(root, "quality_report_run24.json"), ReportJson(23, 6573));
+
+        var report = await new JsonQualityAuditService(() => root, () => dbPath).LoadForRunAsync(24);
+
+        Assert.NotNull(report);
+        Assert.True(report.IsStale);
+        Assert.Contains("批次 #23", report.StaleReason);
+        Assert.Contains("批次 #24", report.StaleReason);
+    }
+
     private static string ReportJson(long runId, int totalCards) => JsonSerializer.Serialize(new
     {
         generated_at = "2026-07-01T10:51:56.564Z",

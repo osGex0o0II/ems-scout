@@ -23,7 +23,8 @@ public static class DeviceHealthRules
             issues.Add("通讯未知");
         }
 
-        if (IsTemperatureAbnormal(record.IndoorTemperature) || IsTemperatureAbnormal(record.SetTemperature))
+        if (record.CommunicationState != DeviceCommunicationState.Offline &&
+            (IsTemperatureAbnormal(record.IndoorTemperature) || IsTemperatureAbnormal(record.SetTemperature)))
         {
             issues.Add("温度异常");
             hasTemperatureIssue = true;
@@ -61,8 +62,9 @@ public static class DeviceHealthRules
             "private" => record.AreaType == DeviceAreaClassifier.PrivateArea,
             "unknown" => record.CommunicationState == DeviceCommunicationState.Unknown,
             "locked" => record.RealtimeLocked,
-            "points_incomplete" => record.Realtime is null || !record.RealtimePointsComplete,
-            "realtime_missing" => record.Realtime is null,
+            "points_incomplete" => record.CommunicationState != DeviceCommunicationState.Offline &&
+                                    (record.Realtime is null || !record.RealtimePointsComplete),
+            "realtime_missing" => record.CommunicationState != DeviceCommunicationState.Offline && record.Realtime is null,
             _ => true,
         };
     }

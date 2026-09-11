@@ -43,6 +43,8 @@
             Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
             IsPaneToggleButtonVisible="True"
             IsSettingsVisible="False"
+            PointerPressed="NavView_PointerPressed"
+            PaneToggleButtonStyle="{StaticResource EmsPaneToggleButtonStyle}"
             SelectionChanged="NavView_SelectionChanged">
             <NavigationView.MenuItems>
                 <NavigationViewItem

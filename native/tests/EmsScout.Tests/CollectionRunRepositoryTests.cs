@@ -11,6 +11,7 @@ public sealed class CollectionRunRepositoryTests
         var databasePath = CreateDatabase();
         var repository = new SqliteCollectionRunRepository(() => databasePath);
 
+        await new SqliteSchemaMigrator(() => databasePath).MigrateAsync();
         var runs = await repository.ListAsync();
         var comparison = await repository.CompareCurrentAsync(1);
 
@@ -195,6 +196,17 @@ public sealed class CollectionRunRepositoryTests
     public async Task DeletesRunHistoryWithoutTouchingCurrentDataOrAnnotations()
     {
         var databasePath = CreateDatabase();
+        await ExecuteAsync(databasePath, """
+            CREATE TABLE run_realtime_details (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL,
+                source_row_id TEXT NOT NULL,
+                building TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+            );
+            INSERT INTO run_realtime_details (run_id, source_row_id, building, payload_json)
+            VALUES (1, 'out/realtime_1号_latest.json#0', '1号', '{}');
+            """);
         var repository = new SqliteCollectionRunRepository(() => databasePath);
 
         var deleted = await repository.DeleteAsync(1);
@@ -215,6 +227,7 @@ public sealed class CollectionRunRepositoryTests
         Assert.Equal(1L, await ScalarLongAsync(verify, "SELECT COUNT(*) FROM sub_areas"));
         Assert.Equal(1L, await ScalarLongAsync(verify, "SELECT COUNT(*) FROM buildings"));
         Assert.Equal(1L, await ScalarLongAsync(verify, "SELECT COUNT(*) FROM device_notes"));
+        Assert.Equal(0L, await ScalarLongAsync(verify, "SELECT COUNT(*) FROM run_realtime_details"));
     }
 
     [Fact]

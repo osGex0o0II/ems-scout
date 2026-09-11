@@ -11,13 +11,11 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         CancellationToken cancellationToken = default)
     {
         EnsureDatabaseExists();
-        await using var connection = OpenConnection(readOnly: false);
+        await using var connection = OpenConnection(readOnly: true);
         if (!await TableExistsAsync(connection, "collection_runs", cancellationToken).ConfigureAwait(false))
         {
             return [];
         }
-
-        await EnsureCollectionRunMetadataColumnsAsync(connection, cancellationToken).ConfigureAwait(false);
 
         var snapshotCardCount = await TableExistsAsync(connection, "run_cards", cancellationToken).ConfigureAwait(false)
             ? "(SELECT COUNT(*) FROM run_cards snapshot WHERE snapshot.run_id = collection_runs.id)"
@@ -25,10 +23,7 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
 
         await using var command = connection.CreateCommand();
         command.CommandText = $"""
-            SELECT id, run_key, started_at, completed_at, imported_at, status, scope,
-                   buildings, json_path, db_snapshot_path, card_count, on_count,
-                   off_count, offline_count, unknown_count, quality_summary, is_anomaly, note,
-                   source, data_version, operator_name, restored_from_run_id,
+            SELECT collection_runs.*,
                    {snapshotCardCount} AS snapshot_card_count
             FROM collection_runs
             ORDER BY datetime(completed_at) DESC, id DESC
@@ -51,8 +46,7 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         CancellationToken cancellationToken = default)
     {
         EnsureDatabaseExists();
-        await using var connection = OpenConnection(readOnly: false);
-        await EnsureCollectionRunMetadataColumnsAsync(connection, cancellationToken).ConfigureAwait(false);
+        await using var connection = OpenConnection(readOnly: true);
         var run = await LoadRunAsync(connection, runId, cancellationToken).ConfigureAwait(false)
                   ?? throw new InvalidOperationException($"Run not found: {runId}");
 
@@ -182,6 +176,10 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         await using var transaction = (SqliteTransaction)await connection
             .BeginTransactionAsync(cancellationToken)
             .ConfigureAwait(false);
+        if (await TableExistsAsync(connection, "run_realtime_details", cancellationToken).ConfigureAwait(false))
+        {
+            await ExecuteCountAsync(connection, transaction, "DELETE FROM run_realtime_details WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
+        }
         var deletedCards = await ExecuteCountAsync(connection, transaction, "DELETE FROM run_cards WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
         var deletedPages = await ExecuteCountAsync(connection, transaction, "DELETE FROM run_pages WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
         var deletedSubAreas = await ExecuteCountAsync(connection, transaction, "DELETE FROM run_sub_areas WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
@@ -231,10 +229,7 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
 
         await using var command = connection.CreateCommand();
         command.CommandText = $"""
-            SELECT id, run_key, started_at, completed_at, imported_at, status, scope,
-                   buildings, json_path, db_snapshot_path, card_count, on_count,
-                   off_count, offline_count, unknown_count, quality_summary, is_anomaly, note,
-                   source, data_version, operator_name, restored_from_run_id,
+            SELECT collection_runs.*,
                    {snapshotCardCount} AS snapshot_card_count
             FROM collection_runs
             WHERE id = $id
@@ -269,9 +264,9 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             IsAnomaly: ReadInt32(reader, "is_anomaly") != 0,
             Note: ReadString(reader, "note"),
             SnapshotCardCount: ReadInt32(reader, "snapshot_card_count"),
-            Source: ReadString(reader, "source"),
-            DataVersion: ReadString(reader, "data_version"),
-            Operator: ReadString(reader, "operator_name"),
+            Source: ReadString(reader, "source", "采集导入"),
+            DataVersion: ReadString(reader, "data_version", "v1.0.0"),
+            Operator: ReadString(reader, "operator_name", "本机"),
             RestoredFromRunId: ReadNullableInt64(reader, "restored_from_run_id"));
     }
 
@@ -1031,10 +1026,28 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
 
     private static object DbValue(double? value) => value.HasValue ? value.Value : DBNull.Value;
 
-    private static string ReadString(SqliteDataReader reader, string column)
+    private static string ReadString(SqliteDataReader reader, string column, string fallback = "")
     {
-        var ordinal = reader.GetOrdinal(column);
+        var ordinal = GetOrdinal(reader, column);
+        if (ordinal < 0)
+        {
+            return fallback;
+        }
+
         return reader.IsDBNull(ordinal) ? string.Empty : reader.GetString(ordinal);
+    }
+
+    private static int GetOrdinal(SqliteDataReader reader, string column)
+    {
+        for (var index = 0; index < reader.FieldCount; index++)
+        {
+            if (string.Equals(reader.GetName(index), column, StringComparison.OrdinalIgnoreCase))
+            {
+                return index;
+            }
+        }
+
+        return -1;
     }
 
     private static int ReadInt32(SqliteDataReader reader, string column)
@@ -1045,7 +1058,12 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
 
     private static long? ReadNullableInt64(SqliteDataReader reader, string column)
     {
-        var ordinal = reader.GetOrdinal(column);
+        var ordinal = GetOrdinal(reader, column);
+        if (ordinal < 0)
+        {
+            return null;
+        }
+
         return reader.IsDBNull(ordinal) ? null : reader.GetInt64(ordinal);
     }
 

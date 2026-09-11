@@ -200,14 +200,41 @@
 
                         <StackPanel x:Name="AdvancedSection" Spacing="12" Visibility="Collapsed">
                             <TextBlock Style="{StaticResource SectionTitleStyle}" Text="高级" />
-                            <ComboBox Header="日志级别" SelectedIndex="{x:Bind ViewModel.LogLevelIndex, Mode=TwoWay}">
-                                <ComboBoxItem Content="错误" />
-                                <ComboBoxItem Content="信息" />
-                                <ComboBoxItem Content="调试" />
-                            </ComboBox>
-                            <ToggleSwitch Header="保存 NDJSON 日志" OnContent="开" OffContent="关" IsOn="{x:Bind ViewModel.SaveNdjsonLog, Mode=TwoWay}" />
-                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="设置文件" />
-                            <TextBlock Text="{x:Bind ViewModel.SettingsPath, Mode=OneWay}" TextWrapping="WrapWholeWords" />
+                            <StackPanel Spacing="10">
+                                <TextBlock FontWeight="SemiBold" Text="日志与诊断" />
+                                <ComboBox Header="日志输出级别" SelectedIndex="{x:Bind ViewModel.LogLevelIndex, Mode=TwoWay}">
+                                    <ComboBoxItem Content="错误" />
+                                    <ComboBoxItem Content="信息" />
+                                    <ComboBoxItem Content="调试" />
+                                </ComboBox>
+                                <ToggleSwitch Header="保存 NDJSON 日志" OnContent="开" OffContent="关" IsOn="{x:Bind ViewModel.SaveNdjsonLog, Mode=TwoWay}" />
+                            </StackPanel>
+                            <StackPanel Spacing="10">
+                                <TextBlock FontWeight="SemiBold" Text="采集参数" />
+                                <Grid ColumnSpacing="8" RowSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox
+                                        Header="实时批量设备数"
+                                        ItemsSource="{x:Bind ViewModel.RealtimeBatchSizeOptions, Mode=OneWay}"
+                                        SelectedItem="{x:Bind ViewModel.RealtimeBatchSize, Mode=TwoWay}" />
+                                    <ComboBox
+                                        Grid.Column="1"
+                                        Header="设备批次重开间隔"
+                                        ItemsSource="{x:Bind ViewModel.RealtimeReopenEveryOptions, Mode=OneWay}"
+                                        SelectedItem="{x:Bind ViewModel.RealtimeReopenEvery, Mode=TwoWay}" />
+                                </Grid>
+                                <ComboBox
+                                    Header="单批超时（毫秒）"
+                                    ItemsSource="{x:Bind ViewModel.RealtimeTimeoutOptions, Mode=OneWay}"
+                                    SelectedItem="{x:Bind ViewModel.RealtimeTimeoutMs, Mode=TwoWay}" />
+                            </StackPanel>
+                            <StackPanel Spacing="4">
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="设置文件" />
+                                <TextBlock Text="{x:Bind ViewModel.SettingsPath, Mode=OneWay}" TextWrapping="WrapWholeWords" />
+                            </StackPanel>
                         </StackPanel>
                     </Grid>
                 </ScrollViewer>

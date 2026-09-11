@@ -26,6 +26,7 @@ public sealed class DataViewModel(
         new(@"^数据管理筛选结果_\d{8}_\d{6}\.xlsx$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private string _statusText = "正在读取 SQLite 数据";
+    private string _dataStatusText = string.Empty;
     private string _resultSummary = "--";
     private string _pageSummary = "--";
     private string _lastExportPath = string.Empty;
@@ -104,6 +105,22 @@ public sealed class DataViewModel(
         get => _statusText;
         private set => SetProperty(ref _statusText, value);
     }
+
+    public string DataStatusText
+    {
+        get => _dataStatusText;
+        private set
+        {
+            if (SetProperty(ref _dataStatusText, value))
+            {
+                OnPropertyChanged(nameof(DataStatusVisibility));
+            }
+        }
+    }
+
+    public Visibility DataStatusVisibility => string.IsNullOrWhiteSpace(DataStatusText)
+        ? Visibility.Collapsed
+        : Visibility.Visible;
 
     public string ResultSummary
     {
@@ -192,6 +209,7 @@ public sealed class DataViewModel(
                 OnPropertyChanged(nameof(CanMovePrevious));
                 OnPropertyChanged(nameof(CanMoveNext));
                 OnPropertyChanged(nameof(CanRunDataAction));
+                OnPropertyChanged(nameof(CanChangeDataSource));
                 OnPropertyChanged(nameof(CanExport));
                 OnPropertyChanged(nameof(CanOpenLastExport));
                 OnPropertyChanged(nameof(EmptyStateVisibility));
@@ -268,7 +286,19 @@ public sealed class DataViewModel(
     public DataFilterOption? SelectedCommunication
     {
         get => _selectedCommunication;
-        set => SetProperty(ref _selectedCommunication, value);
+        set
+        {
+            if (!SetProperty(ref _selectedCommunication, value) ||
+                !string.Equals(value?.Value, "离线", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            SelectedMode = ModeOptions.FirstOrDefault();
+            SelectedFan = FanOptions.FirstOrDefault();
+            SelectedSetTemperature = SetTemperatureOptions.FirstOrDefault();
+            SelectedRealtimeLock = RealtimeLockOptions.FirstOrDefault();
+        }
     }
 
     public DataFilterOption? SelectedFloor
@@ -647,6 +677,7 @@ public sealed class DataViewModel(
         var query = BuildQuery(limit: PageSize, offset: (CurrentPage - 1) * PageSize);
         var result = await repository.SearchAsync(query, cancellationToken).ConfigureAwait(true);
         TotalRows = result.Total;
+        DataStatusText = result.DataStatusText;
         Devices.Clear();
         foreach (var record in result.Rows)
         {

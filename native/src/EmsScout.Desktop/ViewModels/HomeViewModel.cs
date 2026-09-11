@@ -418,9 +418,6 @@ public sealed class MetricItem(OverviewMetric metric)
             CommunicationState: metric.CommunicationState,
             AreaType: metric.AreaType);
 
-    public bool CanNavigate => NavigationRequest is not null;
-
-    public string ActionText => CanNavigate ? "查看筛选" : string.Empty;
 }
 
 public sealed class DashboardAreaGroupRow(DashboardAreaGroupSummary summary)

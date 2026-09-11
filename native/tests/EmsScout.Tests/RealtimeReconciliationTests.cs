@@ -84,7 +84,7 @@ public sealed class RealtimeReconciliationTests
         var root = LocateRepositoryRoot();
         var repository = new SqliteDeviceReadRepository(
             Path.Combine(root, "out", "ac.db"),
-            new RealtimeLatestJsonSource(root, Path.Combine(root, "out")));
+            new LegacyCurrentRealtimeSource(new RealtimeLatestJsonSource(root, Path.Combine(root, "out"))));
         var search = await CurrentService().AnalyzeAsync(new(
             DiffType: RealtimeReconciliationTypes.VirtualOverride,
             Limit: 10));
@@ -105,7 +105,16 @@ public sealed class RealtimeReconciliationTests
         var root = LocateRepositoryRoot();
         return new SqliteRealtimeReconciliationService(
             Path.Combine(root, "out", "ac.db"),
-            new RealtimeLatestJsonSource(root, Path.Combine(root, "out")));
+            new LegacyCurrentRealtimeSource(new RealtimeLatestJsonSource(root, Path.Combine(root, "out"))));
+    }
+
+    private sealed class LegacyCurrentRealtimeSource(RealtimeLatestJsonSource source)
+        : EmsScout.Application.Devices.IRealtimeDetailSource
+    {
+        public Task<EmsScout.Application.Devices.RealtimeDetailSet> LoadAsync(
+            IReadOnlyList<string> buildings,
+            CancellationToken cancellationToken = default)
+            => source.LoadAsync(buildings, cancellationToken);
     }
 
     private static string LocateRepositoryRoot()

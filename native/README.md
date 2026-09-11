@@ -66,7 +66,7 @@ node --check src\data-history.js
 
 - `EmsScout.Desktop`: WinUI 3 shell, pages, view models, commands.
 - `EmsScout.Application`: use cases and view-ready application contracts.
-- `EmsScout.Collection`: Playwright/Edge CDP collection orchestration.
+- 采集编排由 Native `NodeCollectionTaskRunner` 调用仓库内 Node.js/Playwright + Edge CDP 脚本完成；不再保留重复的 Native Playwright 项目。
 - `EmsScout.Domain`: device, building, and quality domain model.
 - `EmsScout.Infrastructure`: SQLite, filtered Excel export, file system, and OS integrations.
 - `EmsScout.Infrastructure.Importing`: current enum JSON file source.

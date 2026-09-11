@@ -99,6 +99,52 @@ public sealed class AppSettingsServiceTests
     }
 
     [Fact]
+    public void PersistsAndNormalizesCollectionParameters()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ems-scout-settings-tests", Guid.NewGuid().ToString("N"));
+        var settingsPath = Path.Combine(tempDir, "settings.json");
+        var service = new AppSettingsService(settingsPath);
+
+        service.Save(new AppSettings
+        {
+            RealtimeBatchSize = 50,
+            RealtimeReopenEvery = 5,
+            RealtimeTimeoutMs = 30000,
+        });
+
+        var loaded = new AppSettingsService(settingsPath).Load();
+
+        Assert.Equal(50, loaded.RealtimeBatchSize);
+        Assert.Equal(5, loaded.RealtimeReopenEvery);
+        Assert.Equal(30000, loaded.RealtimeTimeoutMs);
+
+        Directory.Delete(tempDir, recursive: true);
+    }
+
+    [Fact]
+    public void ClampsInvalidCollectionParametersToSupportedRuntimeBounds()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ems-scout-settings-tests", Guid.NewGuid().ToString("N"));
+        var settingsPath = Path.Combine(tempDir, "settings.json");
+        var service = new AppSettingsService(settingsPath);
+
+        service.Save(new AppSettings
+        {
+            RealtimeBatchSize = 0,
+            RealtimeReopenEvery = -1,
+            RealtimeTimeoutMs = 1,
+        });
+
+        var loaded = service.Load();
+
+        Assert.Equal(1, loaded.RealtimeBatchSize);
+        Assert.Equal(0, loaded.RealtimeReopenEvery);
+        Assert.Equal(3000, loaded.RealtimeTimeoutMs);
+
+        Directory.Delete(tempDir, recursive: true);
+    }
+
+    [Fact]
     public void PersistsWindowStartupAndIntegrationSettingsInTheSettingsDocument()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "ems-scout-settings-tests", Guid.NewGuid().ToString("N"));
@@ -137,6 +183,27 @@ public sealed class AppSettingsServiceTests
         Assert.NotNull(loaded.WindowPlacement);
         Assert.Equal(1, loaded.WindowPlacement!.Width);
         Assert.Equal(1, loaded.WindowPlacement.Height);
+
+        Directory.Delete(tempDir, recursive: true);
+    }
+
+    [Fact]
+    public void KeepsLegacyPlacementVersionDetectableForStartupMigration()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ems-scout-settings-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+        var settingsPath = Path.Combine(tempDir, "settings.json");
+        File.WriteAllText(settingsPath, """
+            {
+              "WindowPlacement": { "Left": 0, "Top": 0, "Width": 2080, "Height": 1360 }
+            }
+            """);
+
+        var loaded = new AppSettingsService(settingsPath).Load();
+
+        Assert.NotNull(loaded.WindowPlacement);
+        Assert.Equal(0, loaded.WindowPlacement!.PlacementVersion);
+        Assert.Equal(2080, loaded.WindowPlacement.Width);
 
         Directory.Delete(tempDir, recursive: true);
     }

@@ -1,13 +1,6 @@
-using System.Collections.Specialized;
-using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Data;
-using Microsoft.UI.Xaml.Media;
-using Windows.ApplicationModel.DataTransfer;
-using Windows.UI;
 using EmsScout.Desktop.ViewModels;
 
 namespace EmsScout.Desktop.Pages;
@@ -16,18 +9,15 @@ public sealed partial class TasksPage : Page
 {
     public CollectionTaskViewModel ViewModel { get; }
     private bool _loaded;
-    private bool _logsSubscribed;
 
     public TasksPage()
     {
         ViewModel = App.Services.GetRequiredService<CollectionTaskViewModel>();
         InitializeComponent();
-        AttachLogs();
     }
 
     private async void Page_Loaded(object sender, RoutedEventArgs e)
     {
-        AttachLogs();
         if (!_loaded)
         {
             try
@@ -51,7 +41,6 @@ public sealed partial class TasksPage : Page
     private void Page_Unloaded(object sender, RoutedEventArgs e)
     {
         ViewModel.StopEnvironmentMonitoring();
-        DetachLogs();
     }
 
     private void Page_SizeChanged(object sender, SizeChangedEventArgs e)
@@ -59,19 +48,24 @@ public sealed partial class TasksPage : Page
         var narrow = e.NewSize.Width < 980;
         if (narrow)
         {
+            WorkflowScrollViewer.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+            SetupPanel.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
             SetupColumn.Width = new GridLength(1, GridUnitType.Star);
             ExecutionColumn.Width = new GridLength(0);
-            SetupRow.Height = new GridLength(0.48, GridUnitType.Star);
-            ExecutionRow.Height = new GridLength(0.52, GridUnitType.Star);
+            SetupRow.Height = new GridLength(1, GridUnitType.Auto);
+            ExecutionRow.Height = new GridLength(1, GridUnitType.Auto);
             Grid.SetColumn(SetupPanel, 0);
             Grid.SetRow(SetupPanel, 0);
             Grid.SetColumn(ExecutionPanel, 0);
             Grid.SetRow(ExecutionPanel, 1);
+            WorkflowGrid.VerticalAlignment = VerticalAlignment.Top;
             WorkflowGrid.ColumnSpacing = 0;
             WorkflowGrid.RowSpacing = 12;
             return;
         }
 
+        WorkflowScrollViewer.VerticalScrollBarVisibility = ScrollBarVisibility.Disabled;
+        SetupPanel.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
         SetupColumn.Width = new GridLength(0.9, GridUnitType.Star);
         ExecutionColumn.Width = new GridLength(1.35, GridUnitType.Star);
         SetupRow.Height = new GridLength(1, GridUnitType.Star);
@@ -80,6 +74,7 @@ public sealed partial class TasksPage : Page
         Grid.SetRow(SetupPanel, 0);
         Grid.SetColumn(ExecutionPanel, 1);
         Grid.SetRow(ExecutionPanel, 0);
+        WorkflowGrid.VerticalAlignment = VerticalAlignment.Stretch;
         WorkflowGrid.ColumnSpacing = 14;
         WorkflowGrid.RowSpacing = 0;
     }
@@ -134,79 +129,6 @@ public sealed partial class TasksPage : Page
         }
     }
 
-    private void Logs_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
-    {
-        if (e.Action is not NotifyCollectionChangedAction.Add || ViewModel.FilteredLogs.Count == 0)
-        {
-            return;
-        }
-
-        if (!IsLoaded || XamlRoot is null)
-        {
-            return;
-        }
-
-        var latest = ViewModel.FilteredLogs[^1];
-        DispatcherQueue.GetForCurrentThread()?.TryEnqueue(() =>
-        {
-            if (!IsLoaded || XamlRoot is null)
-            {
-                return;
-            }
-
-            try
-            {
-                LogsList.ScrollIntoView(latest);
-            }
-            catch (Exception)
-            {
-                // The item can be removed while navigation or layout is completing.
-            }
-        });
-    }
-
-    private void AttachLogs()
-    {
-        if (_logsSubscribed)
-        {
-            return;
-        }
-
-        ViewModel.FilteredLogs.CollectionChanged += Logs_CollectionChanged;
-        _logsSubscribed = true;
-    }
-
-    private void DetachLogs()
-    {
-        if (!_logsSubscribed)
-        {
-            return;
-        }
-
-        ViewModel.FilteredLogs.CollectionChanged -= Logs_CollectionChanged;
-        _logsSubscribed = false;
-    }
-
-    private void CopyLogs_Click(object sender, RoutedEventArgs e)
-    {
-        if (ViewModel.FilteredLogs.Count == 0)
-        {
-            return;
-        }
-
-        var text = string.Join(
-            Environment.NewLine,
-            ViewModel.FilteredLogs.Select(log => $"[{log.Time}] [{log.Severity}] {log.Message}"));
-        var package = new DataPackage();
-        package.SetText(text);
-        Clipboard.SetContent(package);
-    }
-
-    private void ClearLogs_Click(object sender, RoutedEventArgs e)
-    {
-        ViewModel.ClearLogs();
-    }
-
     private async void DeleteRun_Click(object sender, RoutedEventArgs e)
     {
         if (!ViewModel.CanDeleteSelectedRun || ViewModel.SelectedRun is null)
@@ -245,35 +167,4 @@ public sealed partial class TasksPage : Page
 
     public static Visibility NotNullOrWhiteSpaceToVisibility(string? value) =>
         string.IsNullOrWhiteSpace(value) ? Visibility.Collapsed : Visibility.Visible;
-}
-
-public sealed class LogSeverityBrushConverter : IValueConverter
-{
-    public object Convert(object value, Type targetType, object parameter, string language)
-    {
-        var key = value?.ToString() switch
-        {
-            "ERROR" => "SystemFillColorCriticalBrush",
-            "WARN" => "SystemFillColorCautionBrush",
-            _ => "TextFillColorSecondaryBrush",
-        };
-
-        return Microsoft.UI.Xaml.Application.Current.Resources.TryGetValue(key, out var resource) && resource is Brush brush
-            ? brush
-            : new SolidColorBrush(Color.FromArgb(255, 128, 128, 128));
-    }
-
-    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
-}
-
-public sealed class LogSeverityGlyphConverter : IValueConverter
-{
-    public object Convert(object value, Type targetType, object parameter, string language) => value?.ToString() switch
-    {
-        "ERROR" => "\uE783",
-        "WARN" => "\uE7BA",
-        _ => "\uE946",
-    };
-
-    public object ConvertBack(object value, Type targetType, object parameter, string language) => throw new NotSupportedException();
 }
