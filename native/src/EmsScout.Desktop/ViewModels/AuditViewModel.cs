@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using EmsScout.Application;
 using EmsScout.Application.Collection;
 using EmsScout.Application.Devices;
 using EmsScout.Application.Quality;
@@ -382,13 +383,19 @@ public sealed partial class AuditViewModel(
     {
         try
         {
-            var report = await realtimeQualityAuditService.LoadLatestAsync(cancellationToken).ConfigureAwait(true);
+            var report = SelectedRun is null
+                ? await realtimeQualityAuditService.LoadLatestAsync(cancellationToken).ConfigureAwait(true)
+                : await realtimeQualityAuditService.LoadForRunAsync(SelectedRun.Id, cancellationToken).ConfigureAwait(true);
             RealtimeQualityCategories.Clear();
             RealtimeQualityBuildings.Clear();
             if (report is null)
             {
-                RealtimeQualityStatusText = "未找到实时审计文件";
-                RealtimeQualitySummaryText = "运行实时详情采集和点位审计后显示结果";
+                RealtimeQualityStatusText = SelectedRun is null
+                    ? "未找到实时审计文件"
+                    : $"批次 #{SelectedRun.Id} 没有实时审计结果";
+                RealtimeQualitySummaryText = SelectedRun is null
+                    ? "运行实时详情采集和点位审计后显示结果"
+                    : "该批次没有可关联的实时审计结果，请针对该批次重新运行实时审计";
                 RealtimeQualityGeneratedText = "--";
                 return;
             }
@@ -803,7 +810,7 @@ public sealed partial class AuditViewModel(
 
     private static string FormatDateTime(string value)
     {
-        return DateTimeOffset.TryParse(value, out var parsed)
+        return StoredTimestamp.TryParse(value, out var parsed)
             ? parsed.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
             : value;
     }

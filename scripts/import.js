@@ -1,7 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
-const { ensureHistorySchema, createRunFromCurrent, syncFloorCatalogFromCurrent } = require('../src/data-history');
+const { formatLocalTimestamp } = require('../src/time');
+const { ensureHistorySchema, createRunFromCurrent, syncFloorCatalogFromCurrent, normalizeStoredTimestamp } = require('../src/data-history');
 const { validateEnumData, formatValidation } = require('../src/enum-validator');
 const { labelSamePageDuplicateCards } = require('../src/rules');
 
@@ -157,9 +158,9 @@ function insertBuildings() {
         const rawCount = pageCards.rawCount;
         const uniqueCount = pageCards.uniqueCount;
         const duplicateNamesJson = duplicateNames.length ? JSON.stringify(duplicateNames) : '';
-        const pageCollectedAt = Number.isFinite(Date.parse(p.collectedAt || p.collected_at || ''))
-          ? (p.collectedAt || p.collected_at)
-          : buildingCollectedAt(bldg);
+        const pageCollectedAt = normalizeStoredTimestamp(
+          p.collectedAt || p.collected_at,
+          buildingCollectedAt(bldg));
         const pResult = insertPage.run(saId, p.page, cards.length, rawCount, uniqueCount, duplicateNamesJson, p.onHref ?? null, p.offHref ?? null, p.layout, p.qualityReason ?? p.quality_reason ?? '', pageCollectedAt, p.err ?? null);
         const pageId = pResult.lastInsertRowid;
         for (const c of cards) {
@@ -190,11 +191,9 @@ function clearBuildings(selected) {
 }
 
 console.log('Importing...');
-const now = new Date().toISOString();
-const collectedAt = Number.isFinite(Date.parse(data.completedAt || '')) ? data.completedAt : now;
-const buildingCollectedAt = building => Number.isFinite(Date.parse(building.completedAt || ''))
-  ? building.completedAt
-  : collectedAt;
+const now = formatLocalTimestamp();
+const collectedAt = normalizeStoredTimestamp(data.completedAt, now);
+const buildingCollectedAt = building => normalizeStoredTimestamp(building.completedAt, collectedAt);
 const upsert = db.prepare(`INSERT INTO buildings (building, sub_area_count, menu_clicked, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(building) DO UPDATE SET sub_area_count=excluded.sub_area_count, menu_clicked=excluded.menu_clicked, updated_at=excluded.updated_at`);
 const updateTs = db.prepare(`UPDATE buildings SET updated_at=? WHERE building=?`);
 
@@ -215,6 +214,7 @@ const importCurrent = db.transaction(() => {
   syncFloorCatalogFromCurrent(db);
   return createRunFromCurrent(db, {
     buildings: IMPORT_FILTER || buildings.map(b => b.building),
+    startedAt: process.env.EMS_RUN_STARTED_AT || undefined,
     completedAt: collectedAt,
     jsonPath: JSON_PATH,
     note: IMPORT_FILTER ? 'Native/脚本单栋或多栋导入' : 'Native/脚本全量导入',

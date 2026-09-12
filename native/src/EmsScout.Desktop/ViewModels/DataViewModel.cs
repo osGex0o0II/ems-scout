@@ -909,6 +909,10 @@ public sealed class DataViewModel(
     private void ApplyNavigationRequest(DataNavigationRequest request)
     {
         DeviceNameText = request.SearchText;
+        if (request.RunId is not null)
+        {
+            SelectedDataSource = DataSources.FirstOrDefault(option => option.RunId == request.RunId) ?? SelectedDataSource;
+        }
         SelectedBuilding = SelectOption(BuildingOptions, request.Building) ?? SelectedBuilding;
         SelectedCommunication = SelectOption(CommunicationOptions, request.CommunicationState) ?? SelectedCommunication;
         SelectedArea = request.AreaGroupId is null

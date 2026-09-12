@@ -286,7 +286,7 @@ public sealed class DataManagementUiContractTests
     }
 
     [Fact]
-    public void SettingsPageUsesAStableSecondaryPaneAndConstrainedContent()
+    public void SettingsPageUsesAStableSecondaryPaneAndResponsiveContent()
     {
         var root = LocateRepositoryRoot();
         var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "SettingsPage.xaml"));
@@ -294,10 +294,32 @@ public sealed class DataManagementUiContractTests
         Assert.Contains("IsPaneToggleButtonVisible=\"False\"", xaml);
         Assert.Contains("PaneDisplayMode=\"Left\"", xaml);
         Assert.Contains("OpenPaneLength=\"176\"", xaml);
-        Assert.Contains("HorizontalAlignment=\"Left\"", xaml);
-        Assert.Contains("MaxWidth=\"860\"", xaml);
+        Assert.Contains("HorizontalAlignment=\"Stretch\"", xaml);
+        Assert.Contains("HorizontalContentAlignment=\"Stretch\"", xaml);
+        Assert.DoesNotContain("MaxWidth=\"860\"", xaml);
         Assert.Contains("x:Name=\"StatusTextBlock\"", xaml);
         Assert.DoesNotContain("x:Name=\"StatusBanner\"", xaml);
+    }
+
+    [Fact]
+    public void FormInputsUsePurposeSizedMaximumWidthsAcrossPages()
+    {
+        var root = LocateRepositoryRoot();
+        var settings = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "SettingsPage.xaml"));
+        var data = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "DataPage.xaml"));
+        var areas = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "AreasPage.xaml"));
+        var audit = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "AuditPage.xaml"));
+        var home = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "HomePage.xaml"));
+
+        Assert.Contains("MaxWidth=\"640\"", settings);
+        Assert.Contains("MaxWidth=\"260\"", settings);
+        Assert.Contains("MaxWidth=\"220\"", data);
+        Assert.Contains("MaxWidth=\"420\"", data);
+        Assert.Contains("MaxWidth=\"520\"", areas);
+        Assert.Contains("MaxWidth=\"720\"", areas);
+        Assert.Contains("MaxWidth=\"360\"", audit);
+        Assert.Contains("MaxWidth=\"420\"", audit);
+        Assert.Contains("MaxWidth=\"420\"", home);
     }
 
     [Fact]
@@ -620,6 +642,19 @@ public sealed class DataManagementUiContractTests
     }
 
     [Fact]
+    public void DeviceRecordKeepsUnmappedRealtimeLockAsUnknownWhileRetainingRawValue()
+    {
+        var record = DeviceWithRealtimeLock("32896") with
+        {
+            Realtime = Realtime("32896", valid: true, rawLockState: "32896"),
+        };
+
+        Assert.Equal("未知", record.RealtimeLockText);
+        Assert.Equal("32896", record.Realtime?.RawLockState);
+        Assert.False(record.RealtimeLocked);
+    }
+
+    [Fact]
     public void DevicePageNameFormatterUsesUserFacingPageLabels()
     {
         Assert.Equal("默认页", EmsScout.Application.Devices.DevicePageNameFormatter.Format("default"));
@@ -675,7 +710,8 @@ public sealed class DataManagementUiContractTests
     private static EmsScout.Application.Devices.RealtimeDetailRecord Realtime(
         string lockState,
         DateTimeOffset? sourceUpdatedAt = null,
-        bool valid = true)
+        bool valid = true,
+        string? rawLockState = null)
     {
         return new EmsScout.Application.Devices.RealtimeDetailRecord(
             RowId: "rt-1",
@@ -704,7 +740,10 @@ public sealed class DataManagementUiContractTests
             ValidFields: new Dictionary<string, bool>
             {
                 ["集控锁定"] = valid,
-            });
+            },
+            RawFields: rawLockState is null
+                ? null
+                : new Dictionary<string, string> { ["集控锁定"] = rawLockState });
     }
 
     private static int IndexOf(string source, string value)

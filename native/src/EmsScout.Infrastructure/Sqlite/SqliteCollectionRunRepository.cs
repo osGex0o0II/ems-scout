@@ -1,4 +1,5 @@
 using System.Text.Json;
+using EmsScout.Application;
 using EmsScout.Application.Collection;
 using Microsoft.Data.Sqlite;
 
@@ -36,6 +37,18 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             rows.Add(ReadRun(reader));
+        }
+
+        foreach (var index in Enumerable.Range(0, rows.Count))
+        {
+            rows[index] = rows[index] with
+            {
+                BuildingCardCounts = await LoadBuildingCardCountsAsync(
+                    connection,
+                    rows[index].Id,
+                    snapshot: true,
+                    cancellationToken).ConfigureAwait(false),
+            };
         }
 
         return rows;
@@ -103,6 +116,11 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         if (run.IsAnomaly)
         {
             throw new InvalidOperationException("异常隔离批次不能恢复，请先取消异常标记并复核数据。");
+        }
+
+        if (CollectionRunCompleteness.HasBlockingQualityFailure(run.QualitySummary))
+        {
+            throw new InvalidOperationException("质量审计存在阻断问题的批次不能恢复，请先完成复核或重新采集。");
         }
 
         if (!run.Status.Equals("completed", StringComparison.OrdinalIgnoreCase))
@@ -236,10 +254,24 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             """;
         command.Parameters.AddWithValue("$id", runId);
 
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
-            ? ReadRun(reader)
-            : null;
+        CollectionRunRecord? run;
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
+        {
+            run = await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+                ? ReadRun(reader)
+                : null;
+        }
+
+        return run is null
+            ? null
+            : run with
+            {
+                BuildingCardCounts = await LoadBuildingCardCountsAsync(
+                    connection,
+                    run.Id,
+                    snapshot: true,
+                    cancellationToken).ConfigureAwait(false),
+            };
     }
 
     private static CollectionRunRecord ReadRun(SqliteDataReader reader)
@@ -389,6 +421,11 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             return "异常隔离批次不能恢复，请先取消异常标记并复核数据。";
         }
 
+        if (CollectionRunCompleteness.HasBlockingQualityFailure(run.QualitySummary))
+        {
+            return "质量审计存在阻断问题的批次不能恢复，请先完成复核或重新采集。";
+        }
+
         if (!run.Status.Equals("completed", StringComparison.OrdinalIgnoreCase))
         {
             return $"状态为“{run.Status}”的批次不能恢复，仅允许恢复已完成批次。";
@@ -429,13 +466,24 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         CancellationToken cancellationToken)
     {
         var runId = run.Id;
+        var snapshotByBuilding = await LoadBuildingCardCountsAsync(connection, runId, snapshot: true, cancellationToken).ConfigureAwait(false);
+        var declaredBuildings = run.Buildings
+            .Where(building => !string.IsNullOrWhiteSpace(building))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var buildings = await ScalarLongAsync(connection, "SELECT COUNT(*) FROM run_buildings WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
         var subAreas = await ScalarLongAsync(connection, "SELECT COUNT(*) FROM run_sub_areas WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
         var pages = await ScalarLongAsync(connection, "SELECT COUNT(*) FROM run_pages WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
         var cards = await ScalarLongAsync(connection, "SELECT COUNT(*) FROM run_cards WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
-        if (buildings != run.Buildings.Count || subAreas == 0 || pages == 0 || cards != run.CardCount || cards == 0)
+        if (run.Buildings.Count != declaredBuildings.Count ||
+            buildings != declaredBuildings.Count ||
+            !snapshotByBuilding.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(declaredBuildings) ||
+            subAreas == 0 || pages == 0 || cards != run.CardCount || cards == 0 ||
+            !CollectionRunCompleteness.HasSelfConsistentBuildingCardCounts(
+                snapshotByBuilding,
+                declaredBuildings,
+                run.CardCount))
         {
-            throw new InvalidOperationException($"批次 #{runId} 快照计数不完整：楼栋 {buildings}/{run.Buildings.Count}，子区 {subAreas}，页面 {pages}，卡片 {cards}/{run.CardCount}。");
+            throw new InvalidOperationException($"批次 #{runId} 快照计数不完整或不自洽：楼栋 {buildings}/{run.Buildings.Count}，子区 {subAreas}，页面 {pages}，卡片 {cards}/{run.CardCount}。");
         }
 
         var orphanSubAreas = await ScalarLongAsync(connection, """
@@ -489,7 +537,7 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             return null;
         }
 
-        var now = DateTimeOffset.Now.ToString("O", System.Globalization.CultureInfo.InvariantCulture);
+        var now = StoredTimestamp.FormatLocal(DateTimeOffset.Now);
         var runKey = $"pre_restore_{DateTimeOffset.Now:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid():N}";
         var buildings = new List<string>();
         await using (var buildingsCommand = connection.CreateCommand())

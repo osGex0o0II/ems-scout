@@ -4,35 +4,53 @@ namespace EmsScout.Application.Collection;
 
 public static class CollectionRunCompleteness
 {
-    private static readonly IReadOnlySet<string> BlockingQualityCodes =
+    public static readonly IReadOnlySet<string> BlockingQualityCodes =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "empty_sub_areas",
             "placeholder_cards",
             "duplicate_cards_same_page",
             "duplicate_rendered_pages",
-            "baseline_delta",
+            "state_mismatch",
+            "unknown_comm",
+            "unknown_switch",
+            "missing_indicator",
+            "suspicious_uniform_pages",
             "invalid_card_fields",
             "active_field_incomplete_pages",
             "offline_template_without_stability",
+            "offline_template_stable",
         };
 
-    public static readonly IReadOnlySet<string> RequiredBuildings =
+    public static IReadOnlySet<string> RequiredBuildings { get; } =
         new HashSet<string>(["1号", "2号", "3号", "4号", "5号", "6号"], StringComparer.OrdinalIgnoreCase);
 
     public static bool IsCompleteFleetSnapshot(CollectionRunRecord run)
     {
-        var buildings = run.Buildings
+        var declaredBuildings = run.Buildings
             .Where(building => !string.IsNullOrWhiteSpace(building))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         return run.Status.Equals("completed", StringComparison.OrdinalIgnoreCase) &&
             run.Scope.Equals("full", StringComparison.OrdinalIgnoreCase) &&
             !run.IsAnomaly &&
-            buildings.SetEquals(RequiredBuildings) &&
-            run.CardCount > 0 &&
+            declaredBuildings.SetEquals(RequiredBuildings) &&
             run.SnapshotCardCount == run.CardCount &&
+            run.CardCount > 0 &&
+            HasSelfConsistentBuildingCardCounts(run.BuildingCardCounts, declaredBuildings, run.CardCount) &&
             !HasBlockingQualityFailure(run.QualitySummary);
+    }
+
+    public static bool HasSelfConsistentBuildingCardCounts(
+        IReadOnlyDictionary<string, int> counts,
+        IReadOnlySet<string> declaredBuildings,
+        int declaredCardCount)
+    {
+        return declaredCardCount > 0 &&
+            counts.Count == declaredBuildings.Count &&
+            counts.Keys.ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(declaredBuildings) &&
+            counts.Values.All(count => count > 0) &&
+            counts.Values.Sum() == declaredCardCount;
     }
 
     public static IReadOnlyList<CollectionRunRecord> GetCompleteFleetSnapshots(
@@ -47,12 +65,12 @@ public static class CollectionRunCompleteness
 
     private static DateTimeOffset ParseTimestamp(string value)
     {
-        return DateTimeOffset.TryParse(value, out var parsed)
+        return StoredTimestamp.TryParse(value, out var parsed)
             ? parsed
             : DateTimeOffset.MinValue;
     }
 
-    private static bool HasBlockingQualityFailure(string qualitySummary)
+    public static bool HasBlockingQualityFailure(string qualitySummary)
     {
         if (string.IsNullOrWhiteSpace(qualitySummary) || qualitySummary.Equals("{}", StringComparison.Ordinal))
         {
@@ -82,7 +100,11 @@ public static class CollectionRunCompleteness
                 {
                     if (issue.TryGetProperty("code", out var code) &&
                         code.ValueKind == JsonValueKind.String &&
-                        BlockingQualityCodes.Contains(code.GetString() ?? string.Empty))
+                        BlockingQualityCodes.Contains(code.GetString() ?? string.Empty) &&
+                        (!issue.TryGetProperty("severity", out var severity) ||
+                         !string.Equals(severity.GetString(), "INFO", StringComparison.OrdinalIgnoreCase)) &&
+                        (!issue.TryGetProperty("count", out var count) ||
+                         !count.TryGetInt32(out var issueCount) || issueCount > 0))
                     {
                         return true;
                     }

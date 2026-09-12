@@ -8,6 +8,7 @@ const { BLDG_META, checkCardQuality, getZone, assessBuildingIdentity, labelSameP
 const { validateEnumData, formatValidation } = require('./enum-validator');
 const { log: loggerLog, setLevel, setCategories, enableFileLog, close, LEVELS, CATEGORIES } = require('./logger');
 const { isAllowedEmsUrl, isAllowedCdpUrl, sanitizeUrlForDisplay } = require('./connection-policy');
+const { formatLocalTimestamp } = require('./time');
 // Compat: old-style log() defaults to INFO+ENUM
 const LOG = { I: m => loggerLog(LEVELS.INFO, 'ENUM', m), D: (c, m, x) => loggerLog(LEVELS.DEBUG, c, m, x), 
   W: (c, m) => loggerLog(LEVELS.WARN, c, m), E: (c, m) => loggerLog(LEVELS.ERROR, c, m) };
@@ -116,7 +117,7 @@ function saveOutput(buildingResult) {
   existing.buildings.push(buildingResult);
   const order = ['1号', '2号', '3号', '4号', '5号', '6号'];
   existing.buildings.sort((a, b) => order.indexOf(a.building) - order.indexOf(b.building));
-  existing.completedAt = new Date().toISOString();
+  existing.completedAt = formatLocalTimestamp();
   fs.mkdirSync(OUT_DIR, { recursive: true });
   fs.writeFileSync(OUT_FILE, JSON.stringify(existing, null, 2), 'utf-8');
 }
@@ -1068,7 +1069,7 @@ function pageFromData(pageName, data, extra = {}) {
     offHref: data.offHref,
     layout: data.layout,
     qualityReason,
-    collectedAt: data.collectedAt || new Date().toISOString(),
+    collectedAt: data.collectedAt || formatLocalTimestamp(),
     cards: normalizedCards,
     ...extra,
     qualityReason,
@@ -1252,28 +1253,36 @@ async function waitForCaptureReady(page, opts = {}) {
 }
 
 async function waitForBuildingOverview(page, building, opts = {}) {
-  const expected = opts.expectedSubAreas ?? BLDG_META[building]?.baselineSubAreas;
   const maxRetries = opts.maxRetries || 10;
   const waitMs = opts.waitMs || 200;
   let last = { subAreaCount: 0, menuText: '', details: '' };
+  let previousSubAreaCount = -1;
+  let stableRounds = 0;
   for (let i = 0; i < maxRetries; i++) {
-    const state = await page.evaluate(() => {
+    const state = await page.evaluate((expectedBuilding) => {
       const items = Array.from(document.querySelectorAll('.ivu-menu-item'));
-      const active = items.find(el => /ivu-menu-item-selected|active/.test(String(el.className || '')));
+      const active = items.find(el => {
+        const classes = String(el.className || '').split(/\s+/);
+        return classes.includes('ivu-menu-item-selected') ||
+          classes.includes('ivu-menu-item-active') ||
+          el.getAttribute('aria-current') === 'page';
+      });
       const groups = window.__ems && window.__ems.findAllSubAreaGroups
         ? window.__ems.findAllSubAreaGroups()
         : [];
+      const menuText = active ? (active.textContent || '').trim() : '';
       return {
         subAreaCount: groups.length,
-        menuText: active ? (active.textContent || '').trim() : '',
+        menuText,
+        menuMatchesBuilding: Boolean(expectedBuilding) && menuText.includes(expectedBuilding),
       };
-    }).catch(() => ({ subAreaCount: 0, menuText: '' }));
-    last = { ...state, details: `subAreas=${state.subAreaCount}, expected=${expected}` };
-    const acceptedCount = Number.isFinite(expected) && (
-      state.subAreaCount === expected ||
-      (building === '6号' && (state.subAreaCount === 30 || state.subAreaCount === BLDG_META['6号']?.baselineSubAreas))
-    );
-    if (acceptedCount) return { ok: true, ...last };
+    }, building).catch(() => ({ subAreaCount: 0, menuText: '', menuMatchesBuilding: false }));
+    stableRounds = state.subAreaCount > 0 && state.subAreaCount === previousSubAreaCount
+      ? stableRounds + 1
+      : 0;
+    last = { ...state, details: `menu=${state.menuText || '-'}, subAreas=${state.subAreaCount}, stable=${stableRounds}` };
+    if (state.menuMatchesBuilding && state.subAreaCount > 0 && stableRounds >= 1) return { ok: true, ...last };
+    previousSubAreaCount = state.subAreaCount;
     await pause(waitMs);
   }
   loggerLog(LEVELS.ERROR, 'QUALITY', `BUILDING_OVERVIEW_NOT_READY ${building}: ${last.details}`);
@@ -1546,7 +1555,7 @@ async function captureEnhancedSnapshot(page, label) {
 
   return {
     label,
-    ts: new Date().toISOString(),
+    ts: formatLocalTimestamp(),
     elapsed: Date.now() - start,
     pageState,
     cardIntegrity,
@@ -2184,7 +2193,7 @@ async function main() {
       log(`  Total: ${total} cards (placeholder ${placeholder})`);
       recaptureResult.targets.push({ ...t, result: saRes });
     }
-    recaptureResult.completedAt = new Date().toISOString();
+    recaptureResult.completedAt = formatLocalTimestamp();
     const recOut = path.join(OUT_DIR, 'recapture_result.json');
     fs.mkdirSync(OUT_DIR, { recursive: true });
     fs.writeFileSync(recOut, JSON.stringify(recaptureResult, null, 2), 'utf-8');
@@ -2211,8 +2220,6 @@ async function main() {
   const allResults = [];
   const bldgs = FILTER ? BUILDINGS.filter(b => FILTER.includes(b.building)) : BUILDINGS;
   if (FILTER) log(`Building filter: ${FILTER.join(', ')}`);
-  const totalExpectedCards = bldgs.reduce((sum, b) => sum + (BLDG_META[b.building]?.baselineCards || 0), 0);
-
   let firstBldg = true;
   const enumStartedAt = Date.now();
   let globalCardAcc = 0;
@@ -2303,16 +2310,7 @@ async function main() {
         if (!resetResult.ready) {
           log(`  [${saIdx}] F${target.floor} WARN: reset menu not fully ready, continuing with current DOM`);
         }
-        // 6号 A座 BM is an inline entry that may disappear after returning from a
-        // device page. The initial 31-entry scan already captured it; subsequent
-        // overview resets only need the 30 regular sub-areas to be present.
-        const resetExpectedSubAreas = bldg.building === '6号'
-          ? BLDG_META[bldg.building].baselineSubAreas - 1
-          : undefined;
-        const resetOverview = await waitForBuildingOverview(page, bldg.building, {
-          maxRetries: 20,
-          expectedSubAreas: resetExpectedSubAreas,
-        });
+        const resetOverview = await waitForBuildingOverview(page, bldg.building, { maxRetries: 20 });
         if (!resetOverview.ok) {
           log(`  [${saIdx}] F${target.floor} SKIP: building identity after reset`);
           bRes.subAreas.push({ idx: saIdx, floor: target.floor, text: target.text, err: 'building identity after reset' });
@@ -2900,9 +2898,9 @@ async function main() {
         seat,
         pageName: lastPage ? lastPage.page : target.text,
         deviceDone: totalCards,
-        deviceTotal: BLDG_META[bldg.building]?.baselineCards || totalCards,
+        deviceTotal: 0,
         overallDone: globalCardAcc,
-        overallTotal: totalExpectedCards,
+        overallTotal: 0,
         stage: 'collecting',
         elapsedMs: Date.now() - enumStartedAt
       }) + '\n');
@@ -2910,7 +2908,7 @@ async function main() {
       bRes.subAreas.push(saRes);
     }
 
-    bRes.completedAt = new Date().toISOString();
+    bRes.completedAt = formatLocalTimestamp();
     allResults.push(bRes);
     const bTotal = bRes.subAreas.reduce((sum, sa) => sum + (sa.pages ? sa.pages.reduce((s, p) => s + (p && p.cards ? p.cards.length : 0), 0) : 0), 0);
     log(`  ${bldg.building} total: ${bTotal} cards`);
@@ -2929,15 +2927,15 @@ async function main() {
       seat: lastSeat,
       pageName: 'done',
       deviceDone: bTotal,
-      deviceTotal: BLDG_META[bldg.building]?.baselineCards || bTotal,
+      deviceTotal: bTotal,
       overallDone: globalCardAcc,
-      overallTotal: totalExpectedCards,
+      overallTotal: globalCardAcc,
       stage: 'building_done',
       elapsedMs: Date.now() - enumStartedAt
     }) + '\n');
   }
 
-  const output = { buildings: allResults, completedAt: new Date().toISOString() };
+  const output = { buildings: allResults, completedAt: formatLocalTimestamp() };
   const validation = validateEnumData(output, { buildings: bldgs.map(b => b.building) });
   for (const line of formatValidation(validation)) log(`  ${line}`);
   const qualityGateIssues = auditCollectedOutput(output);
@@ -2945,7 +2943,7 @@ async function main() {
     loggerLog(LEVELS.ERROR, 'QUALITY', `QUALITY GATE FAIL ${issue.building} F${issue.floor} ${issue.subArea} ${issue.page}: ${issue.details} reason=${issue.reason}`);
   }
   if (!validation.ok || qualityGateIssues.length) {
-    const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z');
+    const stamp = formatLocalTimestamp().replace(/[-:]/g, '').replace(/\.\d+[+-]\d{4}$/, '');
     const rejectedFile = path.join(OUT_DIR, `enum_rejected_${stamp}.json`);
     fs.mkdirSync(OUT_DIR, { recursive: true });
     fs.writeFileSync(rejectedFile, JSON.stringify(output, null, 2), 'utf-8');

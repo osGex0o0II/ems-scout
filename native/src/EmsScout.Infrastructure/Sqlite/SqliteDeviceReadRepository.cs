@@ -1,4 +1,5 @@
 using System.Globalization;
+using EmsScout.Application;
 using EmsScout.Application.Devices;
 using EmsScout.Application.Groups;
 using EmsScout.Application.Watch;
@@ -303,7 +304,7 @@ public sealed class SqliteDeviceReadRepository(
             ? "imported_at"
             : "completed_at";
         var statusClause = await ColumnExistsAsync(connection, "collection_runs", "status", cancellationToken).ConfigureAwait(false)
-            ? "WHERE status = 'completed'"
+            ? "WHERE status IN ('completed', 'needs_review')"
             : string.Empty;
 
         await using var command = connection.CreateCommand();
@@ -1287,11 +1288,7 @@ public sealed class SqliteDeviceReadRepository(
     private static DateTimeOffset? ReadDateTimeOffsetOrNull(SqliteDataReader reader, string column)
     {
         var value = ReadString(reader, column);
-        return DateTimeOffset.TryParse(
-            value,
-            CultureInfo.InvariantCulture,
-            DateTimeStyles.AssumeUniversal,
-            out var parsed)
+        return StoredTimestamp.TryParse(value, out var parsed)
             ? parsed
             : null;
     }

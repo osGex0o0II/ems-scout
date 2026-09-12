@@ -1,12 +1,14 @@
 using EmsScout.Application.Devices;
 using EmsScout.Application.Groups;
+using EmsScout.Application.Settings;
 using EmsScout.Domain;
 
 namespace EmsScout.Application;
 
 public sealed class DashboardOverviewService(
     IDeviceReadRepository repository,
-    IAreaGroupRepository areaGroupRepository)
+    IAreaGroupRepository areaGroupRepository,
+    AppSettingsService? settingsService = null)
 {
     private static readonly string[] Buildings = ["1号", "2号", "3号", "4号", "5号", "6号"];
 
@@ -21,7 +23,24 @@ public sealed class DashboardOverviewService(
             .Where(device => !device.IsVirtual)
             .ToArray();
         var summary = BuildSummary(inventoryRows);
-        var areaGroupsTask = LoadAreaGroupsAsync(inventoryRows, cancellationToken);
+        var onlineRows = inventoryRows
+            .Where(device => device.CommunicationState is DeviceCommunicationState.Running or DeviceCommunicationState.Stopped)
+            .ToArray();
+        var realtimeRows = onlineRows.Where(device => device.Realtime is not null).ToArray();
+        var realtimeStatus = DashboardRealtimeAvailabilityRules.Evaluate(
+            onlineRows.Length,
+            realtimeRows.Length,
+            onlineRows
+                .Select(device => device.RealtimeUnavailableReason)
+                .FirstOrDefault(reason => !string.IsNullOrWhiteSpace(reason)));
+        var configuredSettings = settingsService?.Current;
+        var anomalySettings = configuredSettings is null
+            ? DashboardAnomalySettings.Default
+            : new DashboardAnomalySettings(
+                configuredSettings.DashboardNormalMode,
+                configuredSettings.DashboardTemperatureMin,
+                configuredSettings.DashboardTemperatureMax);
+        var areaGroupsTask = LoadAreaGroupsAsync(inventoryRows, anomalySettings, cancellationToken);
         var areaGroupContext = await areaGroupsTask.ConfigureAwait(false);
         var collectedAt = inventoryRows
             .Where(device => device.CollectedAt is not null)
@@ -47,7 +66,9 @@ public sealed class DashboardOverviewService(
             summary,
             metrics,
             areaGroupContext.Groups,
-            areaGroupContext.Error);
+            areaGroupContext.Error,
+            realtimeStatus.Availability,
+            realtimeStatus.StatusText);
     }
 
     private static string Percent(double value)
@@ -94,13 +115,14 @@ public sealed class DashboardOverviewService(
 
     private async Task<DashboardAreaGroupContext> LoadAreaGroupsAsync(
         IReadOnlyList<DeviceRecord> devices,
+        DashboardAnomalySettings anomalySettings,
         CancellationToken cancellationToken)
     {
         try
         {
             var groupSet = await areaGroupRepository.LoadAsync(cancellationToken).ConfigureAwait(false);
             return new DashboardAreaGroupContext(
-                DashboardAreaGroupBuilder.Build(devices, groupSet),
+                DashboardAreaGroupBuilder.Build(devices, groupSet, anomalySettings),
                 string.Empty);
         }
         catch (Exception ex)

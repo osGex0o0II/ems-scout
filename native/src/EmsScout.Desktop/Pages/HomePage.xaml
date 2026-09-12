@@ -19,6 +19,11 @@
                 </Grid.ColumnDefinitions>
                 <StackPanel Spacing="3">
                     <TextBlock Style="{StaticResource WorkbenchPageTitleStyle}" Text="EMS Scout" />
+                    <TextBlock
+                        Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                        Text="{x:Bind ViewModel.RealtimeStatusText, Mode=OneWay}"
+                        TextTrimming="CharacterEllipsis"
+                        ToolTipService.ToolTip="{x:Bind ViewModel.RealtimeStatusText, Mode=OneWay}" />
                 </StackPanel>
                 <Grid
                     x:Name="HeaderActions"
@@ -61,6 +66,7 @@
                     </Button>
                     <ComboBox
                         Grid.Column="1"
+                        MaxWidth="420"
                         AutomationProperties.Name="数据批次时间"
                         HorizontalAlignment="Left"
                         VerticalContentAlignment="Center"
@@ -212,27 +218,27 @@
                                 <Grid HorizontalAlignment="Stretch" Padding="16,9" ColumnSpacing="8">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="2*" MinWidth="180" />
-                                        <ColumnDefinition Width="64" />
-                                        <ColumnDefinition Width="64" />
-                                        <ColumnDefinition Width="64" />
-                                        <ColumnDefinition Width="64" />
-                                        <ColumnDefinition Width="64" />
-                                        <ColumnDefinition Width="64" />
-                                        <ColumnDefinition Width="64" />
-                                        <ColumnDefinition Width="80" />
-                                        <ColumnDefinition Width="80" />
+                                        <ColumnDefinition Width="72" />
+                                        <ColumnDefinition Width="72" />
+                                        <ColumnDefinition Width="72" />
+                                        <ColumnDefinition Width="72" />
+                                        <ColumnDefinition Width="72" />
+                                        <ColumnDefinition Width="72" />
+                                        <ColumnDefinition Width="72" />
+                                        <ColumnDefinition Width="72" />
+                                        <ColumnDefinition Width="72" />
                                         <ColumnDefinition Width="96" />
                                     </Grid.ColumnDefinitions>
                                     <TextBlock FontWeight="SemiBold" Text="区域组 / 覆盖范围" />
                                     <TextBlock Grid.Column="1" HorizontalAlignment="Right" FontWeight="SemiBold" Text="设备" />
-                                    <TextBlock Grid.Column="2" HorizontalAlignment="Right" FontWeight="SemiBold" Text="公区" />
-                                    <TextBlock Grid.Column="3" HorizontalAlignment="Right" FontWeight="SemiBold" Text="非公区" />
-                                    <TextBlock Grid.Column="4" HorizontalAlignment="Right" FontWeight="SemiBold" Text="在线" />
-                                    <TextBlock Grid.Column="5" HorizontalAlignment="Right" FontWeight="SemiBold" Text="离线" />
-                                    <TextBlock Grid.Column="6" HorizontalAlignment="Right" FontWeight="SemiBold" Text="开机" />
-                                    <TextBlock Grid.Column="7" HorizontalAlignment="Right" FontWeight="SemiBold" Text="关机" />
-                                    <TextBlock Grid.Column="8" HorizontalAlignment="Right" FontWeight="SemiBold" Text="公区开机" />
-                                    <TextBlock Grid.Column="9" HorizontalAlignment="Right" FontWeight="SemiBold" Text="公区关机" />
+                                    <TextBlock Grid.Column="2" HorizontalAlignment="Right" FontWeight="SemiBold" Text="在线" />
+                                    <TextBlock Grid.Column="3" HorizontalAlignment="Right" FontWeight="SemiBold" Text="离线" />
+                                    <TextBlock Grid.Column="4" HorizontalAlignment="Right" FontWeight="SemiBold" Text="开机" />
+                                    <TextBlock Grid.Column="5" HorizontalAlignment="Right" FontWeight="SemiBold" Text="关机" />
+                                    <TextBlock Grid.Column="6" HorizontalAlignment="Right" FontWeight="SemiBold" Text="模式异常" />
+                                    <TextBlock Grid.Column="7" HorizontalAlignment="Right" FontWeight="SemiBold" Text="温度异常" />
+                                    <TextBlock Grid.Column="8" HorizontalAlignment="Right" FontWeight="SemiBold" Text="集控锁开" />
+                                    <TextBlock Grid.Column="9" HorizontalAlignment="Right" FontWeight="SemiBold" Text="集控锁关" />
                                     <TextBlock Grid.Column="10" HorizontalAlignment="Right" FontWeight="SemiBold" Text="操作" />
                                 </Grid>
                             </ListView.Header>
@@ -246,15 +252,15 @@
                                         ColumnSpacing="8">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="2*" MinWidth="180" />
-                                            <ColumnDefinition Width="64" />
-                                            <ColumnDefinition Width="64" />
-                                            <ColumnDefinition Width="64" />
-                                            <ColumnDefinition Width="64" />
-                                            <ColumnDefinition Width="64" />
-                                            <ColumnDefinition Width="64" />
-                                            <ColumnDefinition Width="64" />
-                                            <ColumnDefinition Width="80" />
-                                            <ColumnDefinition Width="80" />
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="72" />
                                             <ColumnDefinition Width="96" />
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Spacing="3">
@@ -273,14 +279,14 @@
                                                 ToolTipService.ToolTip="{x:Bind Description}" />
                                         </StackPanel>
                                         <TextBlock Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold" Text="{x:Bind Total}" />
-                                        <TextBlock Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold" Text="{x:Bind PublicTotal}" />
-                                        <TextBlock Grid.Column="3" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold" Text="{x:Bind PrivateTotal}" />
-                                        <TextBlock Grid.Column="4" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource SystemFillColorSuccessBrush}" FontWeight="SemiBold" Text="{x:Bind Online}" />
-                                        <TextBlock Grid.Column="5" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource SystemFillColorCriticalBrush}" FontWeight="SemiBold" Text="{x:Bind Offline}" />
-                                        <TextBlock Grid.Column="6" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource SystemFillColorSuccessBrush}" FontWeight="SemiBold" Text="{x:Bind Running}" />
-                                        <TextBlock Grid.Column="7" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold" Text="{x:Bind Stopped}" />
-                                        <TextBlock Grid.Column="8" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource SystemFillColorSuccessBrush}" FontWeight="SemiBold" Text="{x:Bind PublicRunning}" />
-                                        <TextBlock Grid.Column="9" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold" Text="{x:Bind PublicStopped}" />
+                                        <TextBlock Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource SystemFillColorSuccessBrush}" FontWeight="SemiBold" Text="{x:Bind Online}" />
+                                        <TextBlock Grid.Column="3" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource SystemFillColorCriticalBrush}" FontWeight="SemiBold" Text="{x:Bind Offline}" />
+                                        <TextBlock Grid.Column="4" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource SystemFillColorSuccessBrush}" FontWeight="SemiBold" Text="{x:Bind Running}" />
+                                        <TextBlock Grid.Column="5" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold" Text="{x:Bind Stopped}" />
+                                        <TextBlock Grid.Column="6" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource SystemFillColorCautionBrush}" FontWeight="SemiBold" Text="{x:Bind ModeAbnormal}" ToolTipService.ToolTip="{x:Bind RealtimeStatusText}" />
+                                        <TextBlock Grid.Column="7" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource SystemFillColorCautionBrush}" FontWeight="SemiBold" Text="{x:Bind TemperatureAbnormal}" ToolTipService.ToolTip="{x:Bind RealtimeStatusText}" />
+                                        <TextBlock Grid.Column="8" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource SystemFillColorSuccessBrush}" FontWeight="SemiBold" Text="{x:Bind LockOn}" ToolTipService.ToolTip="{x:Bind RealtimeStatusText}" />
+                                        <TextBlock Grid.Column="9" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold" Text="{x:Bind LockOff}" ToolTipService.ToolTip="{x:Bind RealtimeStatusText}" />
                                         <StackPanel Grid.Column="10" HorizontalAlignment="Right" VerticalAlignment="Center" Orientation="Horizontal" Spacing="5">
                                             <TextBlock Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" Text="查看设备" />
                                             <FontIcon Foreground="{ThemeResource TextFillColorSecondaryBrush}" Glyph="&#xE76C;" />
@@ -321,14 +327,14 @@
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
-                                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                                <TextBlock FontWeight="SemiBold" Text="{x:Bind Name}" />
-                                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind Priority}" />
-                                                <StackPanel Orientation="Horizontal" Spacing="3">
-                                                    <FontIcon FontSize="12" Glyph="{x:Bind Glyph}" />
-                                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind StateText}" />
-                                                </StackPanel>
-                                            </StackPanel>
+                                             <StackPanel Orientation="Horizontal" Spacing="6">
+                                                 <TextBlock FontWeight="SemiBold" Text="{x:Bind Name}" />
+                                                 <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind Priority}" />
+                                                 <StackPanel Orientation="Horizontal" Spacing="3">
+                                                     <FontIcon FontSize="12" Glyph="{x:Bind Glyph}" />
+                                                     <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind StateText}" />
+                                                 </StackPanel>
+                                             </StackPanel>
                                             <TextBlock
                                                 Grid.Column="1"
                                                 HorizontalAlignment="Right"
@@ -371,20 +377,20 @@
                                                 <TextBlock FontWeight="SemiBold" Text="{x:Bind Stopped}" />
                                             </StackPanel>
                                             <StackPanel Grid.Column="5" HorizontalAlignment="Center" Spacing="0">
-                                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="公区开机" />
-                                                <TextBlock Foreground="{ThemeResource SystemFillColorSuccessBrush}" FontWeight="SemiBold" Text="{x:Bind PublicRunning}" />
+                                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="模式异常" />
+                                                <TextBlock Foreground="{ThemeResource SystemFillColorCautionBrush}" FontWeight="SemiBold" Text="{x:Bind ModeAbnormal}" ToolTipService.ToolTip="{x:Bind RealtimeStatusText}" />
                                             </StackPanel>
                                             <StackPanel Grid.Column="6" HorizontalAlignment="Center" Spacing="0">
-                                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="公区关机" />
-                                                <TextBlock FontWeight="SemiBold" Text="{x:Bind PublicStopped}" />
+                                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="温度异常" />
+                                                <TextBlock Foreground="{ThemeResource SystemFillColorCautionBrush}" FontWeight="SemiBold" Text="{x:Bind TemperatureAbnormal}" ToolTipService.ToolTip="{x:Bind RealtimeStatusText}" />
                                             </StackPanel>
                                             <StackPanel Grid.Column="7" HorizontalAlignment="Center" Spacing="0">
-                                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="公区" />
-                                                <TextBlock FontWeight="SemiBold" Text="{x:Bind PublicTotal}" />
+                                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="集控锁开" />
+                                                <TextBlock Foreground="{ThemeResource SystemFillColorSuccessBrush}" FontWeight="SemiBold" Text="{x:Bind LockOn}" ToolTipService.ToolTip="{x:Bind RealtimeStatusText}" />
                                             </StackPanel>
                                             <StackPanel Grid.Column="8" HorizontalAlignment="Center" Spacing="0">
-                                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="非公区" />
-                                                <TextBlock FontWeight="SemiBold" Text="{x:Bind PrivateTotal}" />
+                                                <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="集控锁关" />
+                                                <TextBlock FontWeight="SemiBold" Text="{x:Bind LockOff}" ToolTipService.ToolTip="{x:Bind RealtimeStatusText}" />
                                             </StackPanel>
                                         </Grid>
                                     </Grid>

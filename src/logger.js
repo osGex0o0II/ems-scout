@@ -1,6 +1,7 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const { formatLocalTimestamp } = require('./time');
 
 const LEVELS = Object.freeze({ ERROR: 0, WARN: 1, INFO: 2, DEBUG: 3 });
 const LEVEL_NAMES = Object.keys(LEVELS);
@@ -27,8 +28,8 @@ for (const stream of [process.stdout, process.stderr]) {
   }
 }
 
-function ts() { return new Date().toISOString().substring(11, 19); }
-function tsFull() { return new Date().toISOString(); }
+function ts() { return formatLocalTimestamp().substring(11, 19); }
+function tsFull() { return formatLocalTimestamp(); }
 
 function setLevel(level) {
   if (typeof level === 'number') {
@@ -50,7 +51,7 @@ function setCategories(cats) {
 }
 
 function enableFileLog(dir) {
-  const date = new Date().toISOString().substring(0, 10);
+  const date = formatLocalTimestamp().substring(0, 10);
   logFilePath = path.resolve(dir, `enum_${date}.log`);
   fs.mkdirSync(path.dirname(logFilePath), { recursive: true });
   logFileStream = fs.createWriteStream(logFilePath, { flags: 'a' });

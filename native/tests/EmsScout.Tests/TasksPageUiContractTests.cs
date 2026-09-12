@@ -77,6 +77,20 @@ public sealed class TasksPageUiContractTests
     }
 
     [Fact]
+    public void RealtimeCollectionCommandCarriesExplicitRunIdentity()
+    {
+        var root = LocateRepositoryRoot();
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "CollectionTaskViewModel.cs"));
+        var start = viewModel.IndexOf("private Task RunRealtimeDetailsAsync", StringComparison.Ordinal);
+        var end = viewModel.IndexOf("private async Task PersistRealtimeSnapshotAsync", start, StringComparison.Ordinal);
+        Assert.True(start >= 0 && end > start);
+        var method = viewModel[start..end];
+
+        Assert.Contains("long runId", method);
+        Assert.Contains("args.Add(\"--run-id=\" + runId)", method);
+    }
+
+    [Fact]
     public void QueuedProgressEventsCannotOverwriteTerminalTaskState()
     {
         var root = LocateRepositoryRoot();

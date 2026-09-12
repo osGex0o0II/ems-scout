@@ -70,8 +70,8 @@ CREATE TABLE IF NOT EXISTS monitor_groups (
     system_key TEXT,
     locked INTEGER NOT NULL DEFAULT 0,
     enabled INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60))
 );
 
 CREATE TABLE IF NOT EXISTS monitor_group_items (
@@ -84,8 +84,8 @@ CREATE TABLE IF NOT EXISTS monitor_group_items (
     sub_area_text TEXT,
     card_name TEXT,
     note TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
     FOREIGN KEY(group_id) REFERENCES monitor_groups(id)
 );
 CREATE INDEX IF NOT EXISTS idx_monitor_group_items_group ON monitor_group_items(group_id);
@@ -214,8 +214,8 @@ CREATE TABLE IF NOT EXISTS floor_catalog (
     source TEXT NOT NULL DEFAULT 'manual',
     enabled INTEGER NOT NULL DEFAULT 1,
     note TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60))
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_floor_catalog_key
     ON floor_catalog(building, floor_label);
@@ -225,7 +225,7 @@ CREATE TABLE IF NOT EXISTS device_tags (
     card_name TEXT NOT NULL,
     building TEXT,
     tag TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
     UNIQUE(card_name, building, tag)
 );
 
@@ -234,8 +234,8 @@ CREATE TABLE IF NOT EXISTS device_notes (
     card_name TEXT NOT NULL,
     building TEXT,
     note TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
     UNIQUE(card_name, building)
 );
 
@@ -246,8 +246,8 @@ CREATE TABLE IF NOT EXISTS manual_overrides (
   field TEXT NOT NULL,
     value TEXT NOT NULL,
     reason TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
   UNIQUE(card_name, building, field)
 );
 
@@ -264,8 +264,8 @@ CREATE TABLE IF NOT EXISTS realtime_match_overrides (
   zuo_override TEXT,
   area_type_override TEXT,
   note TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60))
 );
 CREATE INDEX IF NOT EXISTS idx_realtime_match_overrides_dev
   ON realtime_match_overrides(building, dev_id);

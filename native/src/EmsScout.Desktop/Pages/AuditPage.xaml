@@ -57,13 +57,13 @@
                                         <ColumnDefinition Width="2*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <ComboBox DisplayMemberPath="Label" Header="楼栋" ItemsSource="{x:Bind ViewModel.HistoryBuildingOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedHistoryBuilding, Mode=TwoWay}" />
-                                    <ComboBox Grid.Column="1" DisplayMemberPath="Label" Header="数据来源" ItemsSource="{x:Bind ViewModel.HistorySourceOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedHistorySource, Mode=TwoWay}" />
-                                    <ComboBox Grid.Column="2" DisplayMemberPath="Label" Header="批次状态" ItemsSource="{x:Bind ViewModel.HistoryStatusOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedHistoryStatus, Mode=TwoWay}" />
-                                    <TextBox Grid.Column="3" Header="关键字" PlaceholderText="批次号、备注、版本" Text="{x:Bind ViewModel.HistoryKeyword, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <ComboBox MaxWidth="220" DisplayMemberPath="Label" Header="楼栋" ItemsSource="{x:Bind ViewModel.HistoryBuildingOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedHistoryBuilding, Mode=TwoWay}" />
+                                    <ComboBox Grid.Column="1" MaxWidth="220" DisplayMemberPath="Label" Header="数据来源" ItemsSource="{x:Bind ViewModel.HistorySourceOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedHistorySource, Mode=TwoWay}" />
+                                    <ComboBox Grid.Column="2" MaxWidth="220" DisplayMemberPath="Label" Header="批次状态" ItemsSource="{x:Bind ViewModel.HistoryStatusOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedHistoryStatus, Mode=TwoWay}" />
+                                    <TextBox Grid.Column="3" MaxWidth="360" Header="关键字" PlaceholderText="批次号、备注、版本" Text="{x:Bind ViewModel.HistoryKeyword, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                     <Button Grid.Column="4" Grid.RowSpan="2" AutomationProperties.Name="查询历史批次" Command="{x:Bind ViewModel.ApplyHistoryFilterCommand}" Style="{StaticResource PrimaryToolbarButtonStyle}" VerticalAlignment="Bottom" Content="查询" />
-                                    <TextBox Grid.Row="1" Header="开始日期" PlaceholderText="yyyy-MM-dd" Text="{x:Bind ViewModel.HistoryFromText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                    <TextBox Grid.Row="1" Grid.Column="1" Header="结束日期" PlaceholderText="yyyy-MM-dd" Text="{x:Bind ViewModel.HistoryToText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBox Grid.Row="1" MaxWidth="180" Header="开始日期" PlaceholderText="yyyy-MM-dd" Text="{x:Bind ViewModel.HistoryFromText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBox Grid.Row="1" Grid.Column="1" MaxWidth="180" Header="结束日期" PlaceholderText="yyyy-MM-dd" Text="{x:Bind ViewModel.HistoryToText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                 </Grid>
                                 <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind ViewModel.LastRefreshedText, Mode=OneWay}" />
                             </StackPanel>
@@ -233,6 +233,7 @@
                                     AutomationProperties.Name="选择对比批次"
                                     DisplayMemberPath="Summary"
                                     Header="对比批次"
+                                    MaxWidth="420"
                                     HorizontalAlignment="Left"
                                     ItemsSource="{x:Bind ViewModel.FilteredRuns, Mode=OneWay}"
                                     SelectedItem="{x:Bind ViewModel.SelectedRun, Mode=TwoWay}"
@@ -432,9 +433,9 @@
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <ComboBox DisplayMemberPath="Label" ItemsSource="{x:Bind ViewModel.ReconciliationBuildingOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedReconciliationBuilding, Mode=TwoWay}" />
-                                    <ComboBox Grid.Column="1" DisplayMemberPath="Label" ItemsSource="{x:Bind ViewModel.ReconciliationTypeOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedReconciliationType, Mode=TwoWay}" />
-                                    <TextBox Grid.Column="2" PlaceholderText="设备名 / DevId / 证据" Text="{x:Bind ViewModel.ReconciliationSearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <ComboBox MaxWidth="220" DisplayMemberPath="Label" ItemsSource="{x:Bind ViewModel.ReconciliationBuildingOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedReconciliationBuilding, Mode=TwoWay}" />
+                                    <ComboBox Grid.Column="1" MaxWidth="220" DisplayMemberPath="Label" ItemsSource="{x:Bind ViewModel.ReconciliationTypeOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedReconciliationType, Mode=TwoWay}" />
+                                    <TextBox Grid.Column="2" MaxWidth="420" PlaceholderText="设备名 / DevId / 证据" Text="{x:Bind ViewModel.ReconciliationSearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                     <Button Grid.Column="3" Command="{x:Bind ViewModel.ApplyReconciliationFilterCommand}" Style="{StaticResource PrimaryToolbarButtonStyle}" Content="筛选" />
                                 </Grid>
                                 <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.ReconciliationSummaryText, Mode=OneWay}" TextWrapping="WrapWholeWords" />

@@ -1,3 +1,4 @@
+using EmsScout.Application;
 using EmsScout.Application.Devices;
 using Microsoft.Data.Sqlite;
 
@@ -30,7 +31,7 @@ public sealed class SqliteDeviceAnnotationService(Func<string> databasePathResol
         command.Parameters.AddWithValue("$card_name", Require(key.CardName, "card name"));
         command.Parameters.AddWithValue("$building", NullIfEmpty(key.Building));
         command.Parameters.AddWithValue("$note", note ?? string.Empty);
-        command.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
+        command.Parameters.AddWithValue("$now", StoredTimestamp.FormatLocal(DateTimeOffset.Now));
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -98,7 +99,7 @@ public sealed class SqliteDeviceAnnotationService(Func<string> databasePathResol
             return null;
         }
 
-        var now = DateTimeOffset.UtcNow.ToString("O");
+        var now = StoredTimestamp.FormatLocal(DateTimeOffset.Now);
         if (existing is not null)
         {
             await using var update = connection.CreateCommand();
@@ -169,7 +170,7 @@ public sealed class SqliteDeviceAnnotationService(Func<string> databasePathResol
                 card_name TEXT NOT NULL,
                 building TEXT,
                 tag TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
                 UNIQUE(card_name, building, tag)
             );
             CREATE TABLE IF NOT EXISTS device_notes (
@@ -177,8 +178,8 @@ public sealed class SqliteDeviceAnnotationService(Func<string> databasePathResol
                 card_name TEXT NOT NULL,
                 building TEXT,
                 note TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
                 UNIQUE(card_name, building)
             );
             CREATE TABLE IF NOT EXISTS realtime_match_overrides (
@@ -194,8 +195,8 @@ public sealed class SqliteDeviceAnnotationService(Func<string> databasePathResol
                 zuo_override TEXT,
                 area_type_override TEXT,
                 note TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60))
             );
             CREATE UNIQUE INDEX IF NOT EXISTS ux_realtime_match_overrides_dev
               ON realtime_match_overrides(building, dev_id)

@@ -6,6 +6,7 @@ const path = require('path');
 const Database = require('better-sqlite3');
 const { BLDG_ORDER, BLDG_META } = require('../src/rules');
 const { ensureHistorySchema, resolveRunId, sourceForRun } = require('../src/data-history');
+const { formatLocalTimestamp } = require('../src/time');
 
 const ROOT = path.join(__dirname, '..');
 const DB_PATH = process.env.EMS_DB_PATH || path.join(ROOT, 'out', 'ac.db');
@@ -39,9 +40,7 @@ function versionLt(a, b) {
 }
 
 function nowLocal() {
-  const d = new Date();
-  const pad = n => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  return formatLocalTimestamp();
 }
 
 function rows(db, sql, params = []) {
@@ -150,6 +149,7 @@ function latestRunId(orderByImported = false) {
     const row = db.prepare(`
       SELECT id
       FROM collection_runs
+      WHERE status IN ('completed', 'needs_review')
       ORDER BY ${orderByImported ? 'datetime(imported_at)' : 'datetime(completed_at)'} DESC, id DESC
       LIMIT 1
     `).get();
@@ -170,16 +170,22 @@ function saveRunQualitySummary(runId, report) {
   const db = new Database(DB_PATH);
   try {
     ensureHistorySchema(db);
+    const hasBlockingIssue = Number(report.summary?.issue_count || 0) > 0;
+    const nextStatus = hasBlockingIssue ? 'needs_review' : 'completed';
     db.prepare(`
       UPDATE collection_runs
-      SET quality_summary = ?
+      SET quality_summary = ?,
+          status = CASE
+            WHEN status IN ('completed', 'needs_review') THEN ?
+            ELSE status
+          END
       WHERE id = ?
     `).run(JSON.stringify({
       generated_at: report.generated_at,
       generated_at_local: report.generated_at_local,
       summary: report.summary,
       issues: report.issues,
-    }), runId);
+    }), nextStatus, runId);
   } finally {
     db.close();
   }
@@ -396,19 +402,15 @@ function buildReport(options = {}) {
   `, source.runParams);
 
   const runBuildings = run ? safeJsonArray(run.buildings).filter(building => BLDG_META[building]) : [];
-  const baselineBuildings = runBuildings.length ? runBuildings : BLDG_ORDER;
-  const buildingSummary = baselineBuildings.map(building => {
+  const summaryBuildings = runBuildings.length ? runBuildings : BLDG_ORDER;
+  const buildingSummary = summaryBuildings.map(building => {
     const meta = BLDG_META[building];
     const actual = byBuilding[building] || { cards: 0, sub_areas: 0, switch_on: 0, switch_off: 0, switch_unknown: 0, comm_on: 0, comm_off: 0, comm_offline: 0 };
     return {
       building,
       name: meta.name,
       cards: actual.cards,
-      baseline_cards: meta.baselineCards,
-      card_delta: actual.cards - meta.baselineCards,
       sub_areas: actual.sub_areas,
-      baseline_sub_areas: meta.baselineSubAreas,
-      sub_area_delta: actual.sub_areas - meta.baselineSubAreas,
       switch_on: actual.switch_on || 0,
       switch_off: actual.switch_off || 0,
       switch_unknown: actual.switch_unknown || 0,
@@ -421,10 +423,8 @@ function buildReport(options = {}) {
   db.close();
 
   const issues = [];
-  if (placeholderCards.length) issues.push({ severity: 'P1', code: 'placeholder_names', count: placeholderCards.length, message: '存在 0-0001-KT 或空卡名，说明页面未完全加载即入库。' });
+  if (placeholderCards.length) issues.push({ severity: 'P1', code: 'placeholder_cards', count: placeholderCards.length, message: '存在 0-0001-KT 或空卡名，说明页面未完全加载即入库。' });
   if (inconsistentState.length) issues.push({ severity: 'P1', code: 'state_mismatch', count: inconsistentState.length, message: 'comm 与 switch 不一致。' });
-  const baselineMisses = buildingSummary.filter(b => b.card_delta !== 0 || b.sub_area_delta !== 0);
-  if (baselineMisses.length) issues.push({ severity: 'P2', code: 'baseline_delta', count: baselineMisses.length, message: '楼栋卡数或子区数与基准不一致。' });
   if (unknownSwitch.length) issues.push({ severity: 'P2', code: 'unknown_switch', count: unknownSwitch.length, message: '存在非 ON/OFF/- 的开关状态。' });
   if (duplicateCardsSamePage.length) issues.push({ severity: 'P2', code: 'duplicate_cards_same_page', count: duplicateCardsSamePage.length, message: '同一页面存在重复卡名。' });
   if (emptyNonInlineSubAreas.length) issues.push({ severity: 'P2', code: 'empty_sub_areas', count: emptyNonInlineSubAreas.length, message: '存在无页面/无卡片的空子区。' });
@@ -460,7 +460,7 @@ function buildReport(options = {}) {
   }
 
   return {
-    generated_at: new Date().toISOString(),
+    generated_at: formatLocalTimestamp(),
     generated_at_local: nowLocal(),
     db_path: DB_PATH,
     run_id: runId,
@@ -545,11 +545,9 @@ function renderText(report) {
   lines.push(`开关机页字段不完整: ${report.summary.active_field_incomplete_pages}`);
   lines.push(`统一完整页: ${report.summary.uniform_resolved_pages}`);
   lines.push('');
-  lines.push('楼栋基准对比');
+  lines.push('楼栋采集汇总');
   for (const b of report.buildings) {
-    const cardDelta = b.card_delta === 0 ? 'OK' : (b.card_delta > 0 ? `+${b.card_delta}` : String(b.card_delta));
-    const saDelta = b.sub_area_delta === 0 ? 'OK' : (b.sub_area_delta > 0 ? `+${b.sub_area_delta}` : String(b.sub_area_delta));
-    lines.push(`  ${b.building} ${b.name}: ${b.cards}/${b.baseline_cards} 卡 (${cardDelta}), ${b.sub_areas}/${b.baseline_sub_areas} 子区 (${saDelta})`);
+    lines.push(`  ${b.building} ${b.name}: ${b.cards} 卡, ${b.sub_areas} 子区`);
   }
   lines.push('');
   lines.push('问题摘要');

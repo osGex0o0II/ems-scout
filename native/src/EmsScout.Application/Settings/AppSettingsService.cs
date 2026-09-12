@@ -106,7 +106,28 @@ public sealed class AppSettingsService
             : 2.0;
         output.OfflineStatusColor = NormalizeHexColor(output.OfflineStatusColor, "#808080");
         output.TemperatureWarningColor = NormalizeHexColor(output.TemperatureWarningColor, "#D97706");
+        output.DashboardNormalMode = NormalizeOption(
+            output.DashboardNormalMode,
+            "制冷",
+            "制冷",
+            "制热",
+            "通风",
+            "送暖",
+            "地暖",
+            "制热+地暖");
+        output.DashboardTemperatureMin = NormalizeDashboardTemperature(output.DashboardTemperatureMin, 22);
+        output.DashboardTemperatureMax = NormalizeDashboardTemperature(output.DashboardTemperatureMax, 26);
+        if (output.DashboardTemperatureMin > output.DashboardTemperatureMax)
+        {
+            output.DashboardTemperatureMin = 22;
+            output.DashboardTemperatureMax = 26;
+        }
         return output;
+    }
+
+    private static double NormalizeDashboardTemperature(double value, double fallback)
+    {
+        return double.IsFinite(value) ? Math.Clamp(value, 5, 40) : fallback;
     }
 
     private static string NormalizeHexColor(string? value, string fallback)

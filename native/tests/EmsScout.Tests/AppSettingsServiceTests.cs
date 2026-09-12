@@ -99,6 +99,29 @@ public sealed class AppSettingsServiceTests
     }
 
     [Fact]
+    public void PersistsDashboardAnomalySettings()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "ems-scout-settings-tests", Guid.NewGuid().ToString("N"));
+        var settingsPath = Path.Combine(tempDir, "settings.json");
+        var service = new AppSettingsService(settingsPath);
+
+        service.Save(new AppSettings
+        {
+            DashboardNormalMode = "制热",
+            DashboardTemperatureMin = 21,
+            DashboardTemperatureMax = 28,
+        });
+
+        var loaded = new AppSettingsService(settingsPath).Load();
+
+        Assert.Equal("制热", loaded.DashboardNormalMode);
+        Assert.Equal(21, loaded.DashboardTemperatureMin);
+        Assert.Equal(28, loaded.DashboardTemperatureMax);
+
+        Directory.Delete(tempDir, recursive: true);
+    }
+
+    [Fact]
     public void PersistsAndNormalizesCollectionParameters()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "ems-scout-settings-tests", Guid.NewGuid().ToString("N"));

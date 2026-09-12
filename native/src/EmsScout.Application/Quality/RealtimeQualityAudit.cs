@@ -3,6 +3,11 @@ namespace EmsScout.Application.Quality;
 public interface IRealtimeQualityAuditService
 {
     Task<RealtimeQualityAuditReport?> LoadLatestAsync(CancellationToken cancellationToken = default);
+
+    Task<RealtimeQualityAuditReport?> LoadForRunAsync(
+        long runId,
+        CancellationToken cancellationToken = default)
+        => LoadLatestAsync(cancellationToken);
 }
 
 public sealed record RealtimeQualityAuditReport(
@@ -18,7 +23,10 @@ public sealed record RealtimeQualityAuditReport(
     IReadOnlyList<RealtimeQualityCategory> CollectionErrorCategories,
     IReadOnlyList<RealtimeQualityCategory> DeviceAnomalyCategories,
     IReadOnlyList<RealtimeQualityBuilding> Buildings,
-    string Note);
+    string Note,
+    long? RunId = null,
+    bool IsStale = false,
+    string StaleReason = "");
 
 public sealed record RealtimeQualityCategory(
     string Code,

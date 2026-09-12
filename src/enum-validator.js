@@ -1,7 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
-const { BLDG_META, BLDG_ORDER, assessBuildingIdentity } = require('./rules');
+const { BLDG_ORDER, assessBuildingIdentity, isAcceptedCaptureQualityReason } = require('./rules');
 
 function cardCountForPage(page) {
   return Array.isArray(page && page.cards) ? page.cards.length : 0;
@@ -56,9 +56,9 @@ function normalizeSelection(data, selectedBuildings) {
   return wanted ? buildings.filter(b => wanted.has(b.building)) : buildings;
 }
 
-function fmtRatio(value) {
-  if (!Number.isFinite(value)) return '--';
-  return value.toFixed(value >= 10 ? 1 : 2) + 'x';
+function isInlinePlaceholderSubArea(building, subArea) {
+  return building === '6号' && Number(subArea && subArea.floor) === -2 &&
+    String(subArea && subArea.text || '').trim() === 'BM';
 }
 
 function validateEnumData(data, options = {}) {
@@ -73,7 +73,6 @@ function validateEnumData(data, options = {}) {
   }
 
   for (const s of stats) {
-    const meta = BLDG_META[s.building] || {};
     const building = buildings.find(item => item.building === s.building);
     const flatCards = building ? flattenBuilding(building).cards.map(row => row.card || {}) : [];
     const identity = assessBuildingIdentity(s.building, flatCards, s.subAreas);
@@ -83,6 +82,22 @@ function validateEnumData(data, options = {}) {
     if (s.cards === 0) {
       errors.push(`${s.building}: 采集卡片数为 0。`);
       continue;
+    }
+
+    const emptySubAreas = (building.subAreas || []).filter(subArea => {
+      if (isInlinePlaceholderSubArea(s.building, subArea)) return false;
+      const pages = Array.isArray(subArea.pages) ? subArea.pages : [];
+      const cards = pages.reduce((total, page) => total + cardCountForPage(page), 0);
+      return pages.length === 0 || cards === 0;
+    });
+    for (const subArea of emptySubAreas) {
+      errors.push(`${s.building}/${subArea.text || subArea.floor || '-'}: 存在空子区，未采集到任何页面或卡片。`);
+    }
+
+    const erroredSubAreas = (building.subAreas || []).filter(subArea =>
+      !isInlinePlaceholderSubArea(s.building, subArea) && String(subArea.err || '').trim());
+    for (const subArea of erroredSubAreas) {
+      errors.push(`${s.building}/${subArea.text || subArea.floor || '-'}: 子区采集失败 (${subArea.err})。`);
     }
 
     const flat = building ? flattenBuilding(building) : { pages: [], cards: [] };
@@ -112,31 +127,16 @@ function validateEnumData(data, options = {}) {
       if (rejectedCount > 0) {
         warnings.push(`${s.building}/${row.sa.text}/${page.page || 'default'}: 已过滤 ${rejectedCount} 个无卡片结构的 SVG 名称候选。`);
       }
-    }
 
-    if (meta.baselineCards) {
-      const ratio = s.cards / meta.baselineCards;
-      if (s.cards > meta.baselineCards * 2.5 + 50) {
-        errors.push(`${s.building}: 卡片数 ${s.cards} 明显高于基准 ${meta.baselineCards} (${fmtRatio(ratio)})。`);
-      } else if (s.cards > meta.baselineCards * 1.25 + 50) {
-        warnings.push(`${s.building}: 卡片数 ${s.cards} 高于基准 ${meta.baselineCards} (${fmtRatio(ratio)})。`);
-      } else if (s.cards < meta.baselineCards * 0.35) {
-        errors.push(`${s.building}: 卡片数 ${s.cards} 明显低于基准 ${meta.baselineCards} (${fmtRatio(ratio)})。`);
-      } else if (s.cards < meta.baselineCards * 0.75) {
-        warnings.push(`${s.building}: 卡片数 ${s.cards} 低于基准 ${meta.baselineCards} (${fmtRatio(ratio)})。`);
+      const qualityReason = String(page.qualityReason || page.quality_reason || '').trim();
+      if (qualityReason && !isAcceptedCaptureQualityReason(qualityReason)) {
+        errors.push(`${s.building}/${row.sa.text}/${page.page || 'default'}: 质量原因“${qualityReason}”未达到可导入条件。`);
+      }
+      if (String(page.err || '').trim()) {
+        errors.push(`${s.building}/${row.sa.text}/${page.page || 'default'}: 页面采集失败 (${page.err})。`);
       }
     }
 
-    if (meta.baselineSubAreas) {
-      const ratio = s.subAreas / meta.baselineSubAreas;
-      if (s.subAreas > meta.baselineSubAreas * 2 + 2) {
-        errors.push(`${s.building}: 子区数 ${s.subAreas} 明显高于基准 ${meta.baselineSubAreas} (${fmtRatio(ratio)})。`);
-      } else if (s.subAreas > meta.baselineSubAreas * 1.4 + 2) {
-        warnings.push(`${s.building}: 子区数 ${s.subAreas} 高于基准 ${meta.baselineSubAreas} (${fmtRatio(ratio)})。`);
-      } else if (s.subAreas < meta.baselineSubAreas * 0.45) {
-        errors.push(`${s.building}: 子区数 ${s.subAreas} 明显低于基准 ${meta.baselineSubAreas} (${fmtRatio(ratio)})。`);
-      }
-    }
   }
 
   const bySignature = new Map();

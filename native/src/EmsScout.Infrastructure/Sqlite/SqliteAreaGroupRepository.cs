@@ -1,3 +1,4 @@
+using EmsScout.Application;
 using EmsScout.Application.Groups;
 using Microsoft.Data.Sqlite;
 
@@ -173,7 +174,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
 
         var floorLabel = NormalizeFloorLabel(Require(edit.FloorLabel, "floor"));
         var floorValue = ParseFloorValue(floorLabel) ?? throw new ArgumentException("Invalid floor: " + floorLabel);
-        var now = DateTimeOffset.UtcNow.ToString("O");
+        var now = StoredTimestamp.FormatLocal(DateTimeOffset.Now);
         await using var command = connection.CreateCommand();
         command.CommandText = """
             INSERT INTO floor_catalog (building, floor_label, floor_value, source, enabled, note, created_at, updated_at)
@@ -214,7 +215,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             SET enabled = 0, updated_at = $updated_at
             WHERE id = $id
             """;
-        command.Parameters.AddWithValue("$updated_at", DateTimeOffset.UtcNow.ToString("O"));
+        command.Parameters.AddWithValue("$updated_at", StoredTimestamp.FormatLocal(DateTimeOffset.Now));
         command.Parameters.AddWithValue("$id", id);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -228,7 +229,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
         var name = Require(edit.Name, "group name");
         var priority = NormalizePriority(edit.Priority);
-        var now = DateTimeOffset.UtcNow.ToString("O");
+        var now = StoredTimestamp.FormatLocal(DateTimeOffset.Now);
 
         if (edit.Id is not null)
         {
@@ -385,7 +386,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             throw new ArgumentException("name target requires a name pattern.");
         }
 
-        var now = DateTimeOffset.UtcNow.ToString("O");
+        var now = StoredTimestamp.FormatLocal(DateTimeOffset.Now);
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         var existingItem = edit.Id is null
             ? null
@@ -560,8 +561,8 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
                 system_key TEXT,
                 locked INTEGER NOT NULL DEFAULT 0,
                 enabled INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60))
             );
             CREATE TABLE IF NOT EXISTS monitor_group_items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -573,8 +574,8 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
                 sub_area_text TEXT,
                 card_name TEXT,
                 note TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60))
             );
             CREATE TABLE IF NOT EXISTS floor_catalog (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -584,8 +585,8 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
                 source TEXT NOT NULL DEFAULT 'manual',
                 enabled INTEGER NOT NULL DEFAULT 1,
                 note TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60))
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_floor_catalog_key
                 ON floor_catalog(building, floor_label);
@@ -635,7 +636,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             }
         }
 
-        var now = DateTimeOffset.UtcNow.ToString("O");
+        var now = StoredTimestamp.FormatLocal(DateTimeOffset.Now);
         foreach (var row in rows)
         {
             await using var upsert = connection.CreateCommand();

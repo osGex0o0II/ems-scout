@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
+const { formatLocalTimestamp } = require('../src/time');
 const { installRealtimeLog } = require('./realtime-logger');
 const { DEFAULT_REALTIME_CDP_PORT, ensureRealtimeBrowser } = require('./realtime-browser');
 
@@ -64,7 +65,7 @@ let _overallDoneBase = 0;
 
 function progress(event) {
   console.log(`[PROGRESS] ${JSON.stringify({
-    ts: new Date().toISOString(),
+    ts: formatLocalTimestamp(),
     elapsedMs: _runStartedAt ? Date.now() - _runStartedAt : undefined,
     ...(typeof event.overallTotal === 'number' ? {} : (_overallTotal > 0 ? { overallTotal: _overallTotal } : {})),
     ...(typeof event.overallDone === 'number' ? {} : (_overallDoneBase > 0 ? { overallDone: _overallDoneBase + (event.deviceDone || 0) } : {})),
@@ -355,7 +356,7 @@ async function main() {
       console.log(JSON.stringify(validation.issues.slice(0, 20), null, 2));
       const failedOutPath = path.join(OUT_DIR, `realtime_all_buildings_batch_failure_${timestamp()}.json`);
       const failedReport = {
-        createdAt: new Date().toISOString(),
+        createdAt: formatLocalTimestamp(),
         wallElapsedMs: Date.now() - startedAt,
         failedBuilding: building,
         completedBuildings: BUILDINGS.slice(0, results.length).map(b => {
@@ -400,7 +401,7 @@ async function main() {
 
     const outPath = path.join(OUT_DIR, `realtime_all_buildings_batch_summary_${timestamp()}.json`);
     const summary = {
-    createdAt: new Date().toISOString(),
+    createdAt: formatLocalTimestamp(),
     runId: RUN_ID > 0 ? RUN_ID : null,
     wallElapsedMs: Date.now() - startedAt,
     options: {

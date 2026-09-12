@@ -21,7 +21,8 @@ public sealed record RealtimeDetailRecord(
     string CardSwitch,
     string CardIndicator,
     IReadOnlyDictionary<string, string> Fields,
-    IReadOnlyDictionary<string, bool> ValidFields)
+    IReadOnlyDictionary<string, bool> ValidFields,
+    IReadOnlyDictionary<string, string>? RawFields = null)
 {
     public string PowerState => Field("当前开关机状态");
 
@@ -34,6 +35,8 @@ public sealed record RealtimeDetailRecord(
     public string Mode => Field("系统模式设置");
 
     public string LockState => Field("集控锁定");
+
+    public string RawLockState => RawField("集控锁定");
 
     public bool LockStateValid =>
         (LockState == "开启" || LockState == "关闭") &&
@@ -55,5 +58,12 @@ public sealed record RealtimeDetailRecord(
     public string Field(string name)
     {
         return Fields.TryGetValue(name, out var value) ? value : string.Empty;
+    }
+
+    public string RawField(string name)
+    {
+        return RawFields?.TryGetValue(name, out var value) == true
+            ? value
+            : Field(name);
     }
 }

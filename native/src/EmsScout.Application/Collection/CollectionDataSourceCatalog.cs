@@ -9,7 +9,8 @@ public static class CollectionDataSourceCatalog
     public static CollectionDataSourceCatalogResult Build(IEnumerable<CollectionRunRecord> runs)
     {
         var ordered = runs
-            .Where(run => run.Status.Equals("completed", StringComparison.OrdinalIgnoreCase))
+            .Where(run => run.Status.Equals("completed", StringComparison.OrdinalIgnoreCase) ||
+                          run.Status.Equals("needs_review", StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(run => ParseTimestamp(run.CompletedAt))
             .ThenByDescending(run => run.Id)
             .ToArray();
@@ -22,7 +23,7 @@ public static class CollectionDataSourceCatalog
 
     private static DateTimeOffset ParseTimestamp(string value)
     {
-        return DateTimeOffset.TryParse(value, out var parsed)
+        return StoredTimestamp.TryParse(value, out var parsed)
             ? parsed
             : DateTimeOffset.MinValue;
     }

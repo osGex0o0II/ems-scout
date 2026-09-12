@@ -30,6 +30,17 @@ public sealed class CollectionRunMetadataTests
         Assert.False((filter with { Keyword = "不存在" }).Matches(run));
     }
 
+    [Fact]
+    public void ShowsNeedsReviewWhenCompletedRunContainsBlockingQualityFindings()
+    {
+        var run = CreateRun() with
+        {
+            QualitySummary = "{\"summary\":{\"invalid_card_fields\":1472}}"
+        };
+
+        Assert.Equal("需复核", run.StatusLabel);
+    }
+
     private static CollectionRunRecord CreateRun(
         IReadOnlyList<string>? buildings = null,
         string note = "") =>

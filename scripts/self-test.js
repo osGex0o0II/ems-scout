@@ -6,6 +6,9 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 const Database = require('better-sqlite3');
 const { checkCardQuality, classifyAreaType, getZone, assessBuildingIdentity, labelSamePageDuplicateCards, classifyPersistentDeviceAnomalyPage, normalizeCardValues, normalizeKnownSourceDefects, classifyKnownMissingIndicatorPage, isAcceptedCaptureQualityReason } = require('../src/rules');
+const { validateEnumData } = require('../src/enum-validator');
+const { ensureHistorySchema, restoreCurrentFromRun } = require('../src/data-history');
+const { parseTimestampMillis } = require('../src/time');
 
 const ROOT = path.join(__dirname, '..');
 
@@ -13,10 +16,29 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg);
 }
 
-function runImport(jsonPath, dbPath, args = []) {
+function expectedLocalTimestamp(value) {
+  const instant = new Date(value);
+  const offsetMinutes = -instant.getTimezoneOffset();
+  const localWallTime = new Date(instant.getTime() + offsetMinutes * 60_000)
+    .toISOString()
+    .slice(0, 23);
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const absoluteMinutes = Math.abs(offsetMinutes);
+  const hours = String(Math.floor(absoluteMinutes / 60)).padStart(2, '0');
+  const minutes = String(absoluteMinutes % 60).padStart(2, '0');
+  return `${localWallTime}${sign}${hours}:${minutes}`;
+}
+
+function runImport(jsonPath, dbPath, args = [], envOverrides = {}) {
   const result = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'import.js'), ...args], {
     cwd: ROOT,
-    env: { ...process.env, EMS_JSON_PATH: jsonPath, EMS_DB_PATH: dbPath, EMS_SKIP_ENUM_VALIDATION: '1' },
+    env: {
+      ...process.env,
+      EMS_JSON_PATH: jsonPath,
+      EMS_DB_PATH: dbPath,
+      EMS_SKIP_ENUM_VALIDATION: '1',
+      ...envOverrides,
+    },
     encoding: 'utf8',
   });
   if (result.status !== 0) {
@@ -117,7 +139,7 @@ function testRules() {
   assert(assessBuildingIdentity('6号', [{ name: '6-1F-KT-1' }, { name: '6-2F-KT-1' }], 30).ok, '6号楼 BM 内联缺席时30个普通子区仍应通过身份校验');
   assert(!assessBuildingIdentity('1号', building3Cards, 30).ok, '3号楼卡片不得通过1号楼身份校验');
   assert(!assessBuildingIdentity('2号', building3Cards, 30).ok, '3号楼卡片不得通过2号楼身份校验');
-  assert(!assessBuildingIdentity('2号', [{ name: '2-DTT-KT' }], 30).ok, '2号楼子区数异常应阻断');
+  assert(!assessBuildingIdentity('2号', [{ name: '3-DTT-KT-1' }, { name: '3-DTT-KT-2' }], 30).ok, '楼栋身份校验应阻断跨楼栋卡片');
   assert(sanitizedInvalid[0].indoor === '-' && sanitizedInvalid[0].setTemp === '-', '超范围温度必须归一化为缺失值');
   assert(labeledDuplicates.cards[0].name === '2-GQ-KT-1#2' && labeledDuplicates.cards[1].name === '2-GQ-KT-1#1', '同页重名卡片必须按页面坐标稳定编号');
   assert(labeledDuplicates.cards.every(card => card.sourceName === '2-GQ-KT-1'), '重名编号后必须保留 EMS 原始名称');
@@ -128,6 +150,75 @@ function testRules() {
   assert(classifyAreaType('QL-101-KT', 'grid') === '非公区', 'QL-NNN 应识别为非公区');
   assert(classifyAreaType('ANY', 'group') === '公区', 'group layout 应识别为公区');
   assert(getZone(695, '5号') === 2, '5号 x=695 应为 C座 zone');
+}
+
+function testCollectionValidationBlocksIncompleteResults() {
+  const makeCards = (prefix, count, overrides = {}) => Array.from({ length: count }, (_, index) => ({
+    name: `${prefix}-${index + 1}-KT`,
+    switch: 'OFF',
+    mode: '制冷',
+    indoor: '26',
+    setTemp: '25',
+    fan: '中',
+    comm: '关机',
+    ...overrides,
+  }));
+
+  const completeSixBuilding = {
+    building: '6号',
+    subAreas: Array.from({ length: 31 }, (_, index) => ({
+      idx: index,
+      text: index === 19 ? 'BM' : index === 13 ? '6F' : `${index + 1}F`,
+      floor: index === 19 ? -2 : index + 1,
+      x: index * 10,
+      y: 20,
+      pages: index === 0
+        ? [{ page: '一页', qualityReason: 'quality_pass', cards: makeCards('6', 2480) }]
+        : index === 13
+          ? []
+        : index === 19
+          ? []
+          : [{ page: '一页', qualityReason: 'quality_pass', cards: [] }],
+    })),
+  };
+  const emptyResult = validateEnumData({ buildings: [completeSixBuilding] }, { buildings: ['6号'] });
+  assert(!emptyResult.ok && emptyResult.errors.some(error => error.includes('空子区')), '非 BM 空子区必须阻断导入');
+
+  const templateBuilding = {
+    building: '1号',
+    subAreas: Array.from({ length: 30 }, (_, index) => ({
+      idx: index,
+      text: `${index + 1}F`,
+      floor: index + 1,
+      x: index * 10,
+      y: 20,
+      pages: [{
+        page: '一页',
+        qualityReason: index === 0 ? 'template_values_unconfirmed' : 'quality_pass',
+        cards: makeCards('1', index === 0 ? 50 : 50),
+      }],
+    })),
+  };
+  const templateResult = validateEnumData({ buildings: [templateBuilding] }, { buildings: ['1号'] });
+  assert(!templateResult.ok && templateResult.errors.some(error => error.includes('质量原因')), '未确认模板页必须阻断导入');
+
+  const dynamicBuilding = {
+    building: '1号',
+    subAreas: [{
+      idx: 0,
+      text: '现场新增子区',
+      floor: 99,
+      x: 10,
+      y: 20,
+      pages: [{
+        page: '一页',
+        qualityReason: 'quality_pass',
+        cards: makeCards('1-现场新增', 1),
+      }],
+    }],
+  };
+  const dynamicResult = validateEnumData({ buildings: [dynamicBuilding] }, { buildings: ['1号'] });
+  assert(dynamicResult.ok, '卡片数和子区数可以随现场配置变化，但批次内部结构完整时必须通过');
 }
 
 function testPartialImport() {
@@ -190,10 +281,126 @@ function testPartialImport() {
   assert(rows[1].building === '2号' && rows[1].cards === 4 && rows[1].names.includes('2F-B-KT#1') && rows[1].names.includes('2F-B-KT#2'), '2号同页重名设备应编号后全部入库');
   assert(pageMeta.count === 4 && pageMeta.raw_count === 4 && pageMeta.unique_count === 4, '同页重名卡片编号后应作为独立页面卡片入库');
   assert(pageMeta.duplicate_names.includes('2F-B-KT'), '重复渲染设备名应入库');
-  assert(pageMeta.collected_at === '2026-07-12T00:20:15.000Z', '页面必须保存实际通过采集质量门槛的时间');
+  assert(pageMeta.collected_at === expectedLocalTimestamp('2026-07-12T00:20:15.000Z'), '页面必须保存实际通过采集质量门槛的时间');
   assert(runPage.collected_at === pageMeta.collected_at, '历史批次必须保留页面采集时间');
   assert(latestRun.card_count === 4 && latestRun.on_count === 2 && latestRun.off_count === 1 && latestRun.offline_count === 0 && latestRun.unknown_count === 1, 'run 统计必须按 comm 区分状态，switch=OFF 不得掩盖未知通讯');
-  assert(building2.updated_at === '2026-07-12T00:30:00.000Z', '部分导入必须保留楼栋独立采集时间，不能套用顶层时间');
+  assert(building2.updated_at === expectedLocalTimestamp('2026-07-12T00:30:00.000Z'), '部分导入必须保留楼栋独立采集时间，不能套用顶层时间');
+}
+
+function testTimestampNormalizationOnImport() {
+  const tmp = path.join(ROOT, 'out', 'self-test-timestamps');
+  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.mkdirSync(tmp, { recursive: true });
+  const jsonPath = path.join(tmp, 'enum-legacy-timestamps.json');
+  const dbPath = path.join(tmp, 'ac-timestamps.db');
+  writeJson(jsonPath, {
+    completedAt: '2026-08-31T03:00:00',
+    buildings: [{
+      building: '1号',
+      completedAt: '2026-08-31T03:01:00+08:00',
+      subAreas: [{
+        idx: 0,
+        text: '1F',
+        floor: 1,
+        x: 10,
+        y: 20,
+        pages: [{
+          page: 'default',
+          collectedAt: '2026-08-31T03:02:00',
+          cards: [{ name: '1F-A-KT', switch: 'OFF', mode: '制冷', indoor: '26', setTemp: '25', fan: '中', comm: '关机' }],
+        }],
+      }],
+    }],
+  });
+
+  runImport(jsonPath, dbPath, [], { EMS_RUN_STARTED_AT: '2026-08-31T02:59:00+08:00' });
+  const db = new Database(dbPath, { readonly: true });
+  const values = db.prepare(`
+    SELECT r.started_at, r.completed_at, r.imported_at, b.updated_at, p.collected_at, rp.collected_at AS run_collected_at
+    FROM collection_runs r
+    JOIN buildings b ON b.building = '1号'
+    JOIN pages p ON p.id = 1
+    JOIN run_pages rp ON rp.source_page_id = p.id
+    ORDER BY r.id DESC
+    LIMIT 1
+  `).get();
+  db.close();
+  fs.rmSync(tmp, { recursive: true, force: true });
+
+  assert(values.started_at === expectedLocalTimestamp('2026-08-30T18:59:00Z'), '采集开始时间必须使用本机时区保存');
+  assert(values.completed_at === expectedLocalTimestamp('2026-08-31T03:00:00Z'), '无时区批次时间必须按 UTC 兼容解析后使用本机时区保存');
+  assert(/(?:Z|[+-][0-9]{2}:?[0-9]{2})$/i.test(values.imported_at), '导入时间必须包含明确时区');
+  assert(values.updated_at === expectedLocalTimestamp('2026-08-30T19:01:00Z'), '+08:00 楼栋时间必须转换为本机时区');
+  assert(values.collected_at === expectedLocalTimestamp('2026-08-31T03:02:00Z'), '无时区页面时间必须按 UTC 兼容解析后使用本机时区保存');
+  assert(values.run_collected_at === values.collected_at, '历史页面快照必须保留归一化后的采集时间');
+}
+
+function testTimestampEnvironmentParsing() {
+  const localTimestamp = '2026-08-31T03:00:00.000+08:00';
+  const expected = Date.parse(localTimestamp);
+
+  assert(parseTimestampMillis(localTimestamp) === expected, '带本机偏移的采集开始时间必须可用于计算耗时');
+  assert(parseTimestampMillis(String(expected)) === expected, '历史数字形式的采集开始时间必须保持兼容');
+  assert(parseTimestampMillis('') === 0, '空采集开始时间必须按未提供处理');
+}
+
+function testSqliteDefaultTimestampUsesLocalOffset() {
+  const db = new Database(':memory:');
+  ensureHistorySchema(db);
+  db.prepare("INSERT INTO floor_catalog (building, floor_label) VALUES ('1号', '1F')").run();
+  const row = db.prepare('SELECT created_at, updated_at FROM floor_catalog LIMIT 1').get();
+  db.close();
+
+  const localOffset = expectedLocalTimestamp(new Date()).slice(-6);
+  assert(row.created_at.endsWith(localOffset), 'SQLite 默认创建时间必须使用本机时区偏移');
+  assert(row.updated_at.endsWith(localOffset), 'SQLite 默认更新时间必须使用本机时区偏移');
+}
+
+function testTimestampNormalizationOnRestore() {
+  const tmp = path.join(ROOT, 'out', 'self-test-restore-timestamps');
+  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.mkdirSync(tmp, { recursive: true });
+  const jsonPath = path.join(tmp, 'enum.json');
+  const dbPath = path.join(tmp, 'ac-restore-timestamps.db');
+  writeJson(jsonPath, {
+    completedAt: '2026-08-31T03:00:00.000Z',
+    buildings: [{
+      building: '1号',
+      completedAt: '2026-08-31T03:01:00.000Z',
+      subAreas: [{
+        idx: 0,
+        text: '1F',
+        floor: 1,
+        x: 10,
+        y: 20,
+        pages: [{
+          page: 'default',
+          collectedAt: '2026-08-31T03:02:00.000Z',
+          cards: [{ name: '1F-A-KT', switch: 'OFF', mode: '制冷', indoor: '26', setTemp: '25', fan: '中', comm: '关机' }],
+        }],
+      }],
+    }],
+  });
+
+  runImport(jsonPath, dbPath);
+  const db = new Database(dbPath);
+  db.prepare("UPDATE collection_runs SET completed_at = '2026-08-31T03:00:00' WHERE id = 1").run();
+  db.prepare("UPDATE run_buildings SET updated_at = '2026-08-31T03:01:00+08:00' WHERE run_id = 1").run();
+  db.prepare("UPDATE run_pages SET collected_at = '2026-08-31T03:02:00' WHERE run_id = 1").run();
+  const restored = restoreCurrentFromRun(db, 1);
+  const values = db.prepare(`
+    SELECT b.updated_at, p.collected_at
+    FROM buildings b
+    JOIN sub_areas sa ON sa.building = b.building
+    JOIN pages p ON p.sub_area_id = sa.id
+    LIMIT 1
+  `).get();
+  db.close();
+  fs.rmSync(tmp, { recursive: true, force: true });
+
+  assert(restored.completed_at === expectedLocalTimestamp('2026-08-31T03:00:00Z'), '恢复结果时间必须使用本机时区');
+  assert(values.updated_at === expectedLocalTimestamp('2026-08-30T19:01:00Z'), '恢复后的楼栋时间必须转换为本机时区');
+  assert(values.collected_at === expectedLocalTimestamp('2026-08-31T03:02:00Z'), '恢复后的页面时间必须按 UTC 兼容解析后使用本机时区');
 }
 
 function testQualityReportFailsInvalidFields() {
@@ -242,6 +449,13 @@ function testQualityReportFailsInvalidFields() {
   });
 
   runImport(jsonPath, dbPath);
+  const latestSelectionDb = new Database(dbPath);
+  latestSelectionDb.prepare(`
+    INSERT INTO collection_runs
+      (run_key, completed_at, imported_at, status, scope, buildings, card_count)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run('failed-newer', '2099-01-01T00:00:00+08:00', '2099-01-01T00:00:00+08:00', 'failed', 'full', '[]', 0);
+  latestSelectionDb.close();
   const result = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'quality-report.js'), '--run-id=latest-imported'], {
     cwd: ROOT,
     env: { ...process.env, EMS_DB_PATH: dbPath, EMS_QUALITY_OUT: qualityOut },
@@ -252,9 +466,15 @@ function testQualityReportFailsInvalidFields() {
   }
   const report = JSON.parse(fs.readFileSync(path.join(qualityOut, 'quality_report_run1.json'), 'utf8'));
   const latestAlias = JSON.parse(fs.readFileSync(path.join(qualityOut, 'quality_report.json'), 'utf8'));
+  const firstQualityDb = new Database(dbPath, { readonly: true });
+  const firstQualityRun = firstQualityDb.prepare('SELECT status FROM collection_runs WHERE id = ?').get(report.run_id);
+  firstQualityDb.close();
   assert(latestAlias.run_id === report.run_id, 'latest-run 质量审计必须同步 canonical 报告供原生界面刷新');
+  assert(firstQualityRun.status === 'needs_review', '存在阻断质量问题的批次必须标记为需复核');
   assert(report.summary.invalid_card_fields === 1, '质量报告应标记异常/缺失卡字段');
   assert(report.summary.active_field_incomplete_pages === 1, '质量报告应标记开关机页字段不完整');
+  assert(report.run_id === 1, 'latest-imported 不得选择 failed 批次');
+  assert(/(?:Z|[+-][0-9]{2}:[0-9]{2})$/i.test(report.generated_at_local), '质量报告时间必须包含本机时区偏移');
 
   const knownPath = path.join(tmp, 'known-findings.json');
   writeJson(knownPath, {
@@ -294,14 +514,72 @@ function testQualityReportFailsInvalidFields() {
     env: { ...process.env, EMS_DB_PATH: dbPath, EMS_QUALITY_OUT: acceptedOut, EMS_QUALITY_KNOWN_FINDINGS: knownPath },
     encoding: 'utf8',
   });
-  if (acceptedResult.status !== 2) {
-    throw new Error(`accepted known finding test should still fail on baseline delta only\nSTDOUT:\n${acceptedResult.stdout}\nSTDERR:\n${acceptedResult.stderr}`);
+  if (acceptedResult.status !== 0) {
+    throw new Error(`accepted known finding test should pass without a fixed data baseline\nSTDOUT:\n${acceptedResult.stdout}\nSTDERR:\n${acceptedResult.stderr}`);
   }
   const acceptedReport = JSON.parse(fs.readFileSync(path.join(acceptedOut, 'quality_report_run1.json'), 'utf8'));
   assert(acceptedReport.summary.invalid_card_fields === 0, '已接受 EMS 源异常应从异常卡字段阻断项移出');
   assert(acceptedReport.summary.active_field_incomplete_pages === 0, '已接受 EMS 源异常应从页面字段不完整阻断项移出');
   assert(acceptedReport.summary.known_findings === 2, '已接受 EMS 源异常仍应在报告中可见');
+  assert(!acceptedReport.issues.some(issue => issue.code === 'baseline_delta'), '质量报告不得把历史数量差异生成阻断项');
+  assert(!Object.prototype.hasOwnProperty.call(acceptedReport.buildings[0], 'baseline_cards'), '楼栋报告不得输出固定卡数基准');
+  const acceptedDb = new Database(dbPath, { readonly: true });
+  const acceptedStatus = acceptedDb.prepare('SELECT status FROM collection_runs WHERE id = ?').get(report.run_id);
+  acceptedDb.close();
+  assert(acceptedStatus.status === 'completed', '没有阻断问题的批次不得因卡数变化被降级');
 
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+function testQualityReportUsesNativePlaceholderCode() {
+  const tmp = path.join(ROOT, 'out', 'self-test-quality-placeholder');
+  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.mkdirSync(tmp, { recursive: true });
+  const jsonPath = path.join(tmp, 'enum-placeholder.json');
+  const dbPath = path.join(tmp, 'ac-placeholder.db');
+  const qualityOut = path.join(tmp, 'quality');
+
+  writeJson(jsonPath, {
+    buildings: [{
+      building: '1号',
+      menuClicked: '1号楼',
+      subAreas: [{
+        idx: 0,
+        text: '1F',
+        floor: 1,
+        x: 10,
+        y: 20,
+        pages: [{
+          page: 'default',
+          layout: 'grid',
+          qualityReason: 'quality_pass',
+          cards: [{
+            name: '0-0001-KT',
+            switch: 'OFF',
+            mode: '制冷',
+            indoor: '26',
+            setTemp: '25',
+            fan: '中',
+            indicator: '3bdc38eda0ae77f26807b2b6cdde4456.png',
+            comm: '关机',
+          }],
+        }],
+      }],
+    }],
+  });
+
+  runImport(jsonPath, dbPath);
+  const result = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'quality-report.js'), '--run-id=latest-run'], {
+    cwd: ROOT,
+    env: { ...process.env, EMS_DB_PATH: dbPath, EMS_QUALITY_OUT: qualityOut },
+    encoding: 'utf8',
+  });
+  if (result.status !== 2) {
+    throw new Error(`quality-report.js should block placeholder cards\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`);
+  }
+  const report = JSON.parse(fs.readFileSync(path.join(qualityOut, 'quality_report_run1.json'), 'utf8'));
+  assert(report.summary.placeholder_cards === 1, '质量报告应标记占位符卡片');
+  assert(report.issues.some(issue => issue.code === 'placeholder_cards'), '占位符问题码必须与原生质量门禁一致');
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
@@ -337,8 +615,14 @@ function testNativeOnlyContract() {
 
 function main() {
   testRules();
+  testCollectionValidationBlocksIncompleteResults();
   testPartialImport();
+  testTimestampEnvironmentParsing();
+  testSqliteDefaultTimestampUsesLocalOffset();
+  testTimestampNormalizationOnImport();
+  testTimestampNormalizationOnRestore();
   testQualityReportFailsInvalidFields();
+  testQualityReportUsesNativePlaceholderCode();
   testNativeOnlyContract();
   console.log('Self-test passed.');
 }

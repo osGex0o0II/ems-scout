@@ -100,6 +100,26 @@ public sealed class DashboardOverviewServiceTests
             metric => Assert.Equal("25.0%", metric.Detail));
     }
 
+    [Fact]
+    public async Task CarriesRealtimeUnavailabilityIntoOverviewWhenOnlineRowsHaveNoDetails()
+    {
+        var devices = new[]
+        {
+            TestDevice(1, isVirtual: false, state: DeviceCommunicationState.Running),
+            TestDevice(2, isVirtual: false, state: DeviceCommunicationState.Stopped),
+        };
+        var repository = new CapturingDeviceRepository(
+            new DeviceListResult(devices.Length, devices, DeviceFacets.From(devices)));
+        var service = new DashboardOverviewService(
+            repository,
+            new FailingAreaGroupRepository());
+
+        var overview = await service.LoadAsync();
+
+        Assert.Equal(DashboardRealtimeAvailability.Unavailable, overview.RealtimeAvailability);
+        Assert.Contains("不可用", overview.RealtimeStatusText);
+    }
+
     private static DeviceRecord TestDevice(
         long id,
         bool isVirtual,

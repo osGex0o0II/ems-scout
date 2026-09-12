@@ -18,7 +18,8 @@ public sealed record DataNavigationRequest(
     string SubArea = "",
     string PageName = "",
     string Zuo = "",
-    long? AreaGroupId = null)
+    long? AreaGroupId = null,
+    long? RunId = null)
 {
     public static DataNavigationRequest From(DeviceNavigationTarget target)
     {
