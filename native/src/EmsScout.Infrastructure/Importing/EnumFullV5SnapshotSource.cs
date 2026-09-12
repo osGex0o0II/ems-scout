@@ -58,7 +58,7 @@ public sealed class EnumFullV5SnapshotSource(string path) : IInventorySnapshotSo
             }
         }
 
-        var updatedAt = new DateTimeOffset(File.GetLastWriteTime(path));
+        var updatedAt = new DateTimeOffset(File.GetLastWriteTimeUtc(path), TimeSpan.Zero);
         return new InventorySnapshot(path, updatedAt, cards);
     }
 

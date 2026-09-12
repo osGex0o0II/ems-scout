@@ -20,6 +20,7 @@ public sealed partial class HomeViewModel(
     private string _runningRate = "--";
     private string _offlineRate = "--";
     private string _currentBatchTimestamp = "--";
+    private string _realtimeStatusText = "正在读取实时详情状态";
     private string _areaGroupsStatus = "正在计算区域组公区状态";
     private string _areaGroupsError = string.Empty;
     private bool _isLoading;
@@ -60,6 +61,12 @@ public sealed partial class HomeViewModel(
     {
         get => _currentBatchTimestamp;
         private set => SetProperty(ref _currentBatchTimestamp, value);
+    }
+
+    public string RealtimeStatusText
+    {
+        get => _realtimeStatusText;
+        private set => SetProperty(ref _realtimeStatusText, value);
     }
 
     public string AreaGroupsStatus
@@ -290,6 +297,7 @@ public sealed partial class HomeViewModel(
         CurrentBatchTimestamp = overview.SourceUpdatedAt.HasValue
             ? overview.SourceUpdatedAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
             : SelectedDataSource?.Label ?? "--";
+        RealtimeStatusText = overview.RealtimeStatusText;
         Metrics.Clear();
         StatusDistribution.Clear();
         Buildings.Clear();
@@ -297,7 +305,7 @@ public sealed partial class HomeViewModel(
 
         foreach (var metric in overview.Metrics)
         {
-            Metrics.Add(new MetricItem(metric));
+            Metrics.Add(new MetricItem(metric, runId));
         }
 
         var summary = overview.Summary;
@@ -308,12 +316,12 @@ public sealed partial class HomeViewModel(
 
         foreach (var building in overview.Summary.Buildings)
         {
-            Buildings.Add(new BuildingSummaryRow(building));
+            Buildings.Add(new BuildingSummaryRow(building, runId));
         }
 
         foreach (var group in overview.AreaGroups)
         {
-            AreaGroups.Add(new DashboardAreaGroupRow(group));
+            AreaGroups.Add(new DashboardAreaGroupRow(group, runId));
         }
 
         OnlineDevices = summary.Online.ToString("N0");
@@ -401,7 +409,7 @@ public sealed class StatusDistributionRow(string label, int count, int total, st
     public double PercentValue { get; } = total == 0 ? 0 : count * 100.0 / total;
 }
 
-public sealed class MetricItem(OverviewMetric metric)
+public sealed class MetricItem(OverviewMetric metric, long? runId)
 {
     public string Label { get; } = metric.Label;
 
@@ -411,16 +419,14 @@ public sealed class MetricItem(OverviewMetric metric)
 
     public string Kind { get; } = metric.Kind.ToString().ToLowerInvariant();
 
-    public DataNavigationRequest? NavigationRequest => string.IsNullOrWhiteSpace(metric.CommunicationState) &&
-                                                       string.IsNullOrWhiteSpace(metric.AreaType)
-        ? null
-        : new DataNavigationRequest(
-            CommunicationState: metric.CommunicationState,
-            AreaType: metric.AreaType);
+    public DataNavigationRequest NavigationRequest { get; } = new(
+        CommunicationState: metric.CommunicationState,
+        AreaType: metric.AreaType,
+        RunId: runId);
 
 }
 
-public sealed class DashboardAreaGroupRow(DashboardAreaGroupSummary summary)
+public sealed class DashboardAreaGroupRow(DashboardAreaGroupSummary summary, long? runId = null)
 {
     public long Id { get; } = summary.Id;
 
@@ -441,8 +447,8 @@ public sealed class DashboardAreaGroupRow(DashboardAreaGroupSummary summary)
     public string AreaType { get; } = summary.AreaType;
 
     public DataNavigationRequest NavigationRequest { get; } = string.IsNullOrWhiteSpace(summary.AreaType)
-        ? new DataNavigationRequest(AreaGroupId: summary.Id)
-        : new DataNavigationRequest(AreaType: summary.AreaType);
+        ? new DataNavigationRequest(AreaGroupId: summary.Id, RunId: runId)
+        : new DataNavigationRequest(AreaType: summary.AreaType, RunId: runId);
 
     public string Total { get; } = summary.Total.ToString("N0");
 
@@ -468,6 +474,22 @@ public sealed class DashboardAreaGroupRow(DashboardAreaGroupSummary summary)
 
     public string PublicUnknown { get; } = summary.PublicUnknown.ToString("N0");
 
+    public string RealtimeStatusText { get; } = string.IsNullOrWhiteSpace(summary.RealtimeStatusText)
+        ? "实时详情不可用"
+        : summary.RealtimeStatusText;
+
+    public string ModeAbnormal { get; } = summary.ModeAbnormal.ToString("N0");
+
+    public string TemperatureAbnormal { get; } = summary.TemperatureAbnormal.ToString("N0");
+
+    public string LockOn { get; } = IsRealtimeMetricsAvailable(summary)
+        ? summary.LockOn.ToString("N0")
+        : "--";
+
+    public string LockOff { get; } = IsRealtimeMetricsAvailable(summary)
+        ? summary.LockOff.ToString("N0")
+        : "--";
+
     public string RunningRate { get; } = summary.PublicRunningRate.ToString("P1");
 
     public double RunningPercent { get; } = summary.PublicRunningRate * 100;
@@ -487,4 +509,10 @@ public sealed class DashboardAreaGroupRow(DashboardAreaGroupSummary summary)
             : "\uE930";
 
     public string AutomationName { get; } = $"区域组 {summary.Name}，设备 {summary.Total:N0} 台，在线 {summary.Online:N0} 台，离线 {summary.Offline:N0} 台，开机 {summary.Running:N0} 台，关机 {summary.Stopped:N0} 台，公区开机 {summary.PublicRunning:N0} 台，公区关机 {summary.PublicStopped:N0} 台";
+
+    private static bool IsRealtimeMetricsAvailable(DashboardAreaGroupSummary summary)
+    {
+        return summary.RealtimeAvailability is
+            DashboardRealtimeAvailability.Available or DashboardRealtimeAvailability.NotApplicable;
+    }
 }

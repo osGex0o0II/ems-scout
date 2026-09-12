@@ -52,6 +52,12 @@ public sealed class AppSettings
 
     public string TemperatureWarningColor { get; set; } = "#D97706";
 
+    public string DashboardNormalMode { get; set; } = "制冷";
+
+    public double DashboardTemperatureMin { get; set; } = 22;
+
+    public double DashboardTemperatureMax { get; set; } = 26;
+
     public AppSettings Clone() => new()
     {
         EmsUrl = EmsUrl,
@@ -79,6 +85,9 @@ public sealed class AppSettings
         TemperatureWarningThreshold = TemperatureWarningThreshold,
         OfflineStatusColor = OfflineStatusColor,
         TemperatureWarningColor = TemperatureWarningColor,
+        DashboardNormalMode = DashboardNormalMode,
+        DashboardTemperatureMin = DashboardTemperatureMin,
+        DashboardTemperatureMax = DashboardTemperatureMax,
     };
 }
 

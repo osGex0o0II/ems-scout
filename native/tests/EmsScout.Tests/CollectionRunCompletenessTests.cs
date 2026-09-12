@@ -5,7 +5,7 @@ namespace EmsScout.Tests;
 public sealed class CollectionRunCompletenessTests
 {
     [Fact]
-    public void AcceptsOnlyCompletedFullSnapshotsCoveringAllBuildings()
+    public void AcceptsCompletedFullSnapshotsWithAnySelfConsistentCardCount()
     {
         var run = CreateRun(
             status: "completed",
@@ -28,6 +28,22 @@ public sealed class CollectionRunCompletenessTests
             ["1号", "2号", "3号", "4号", "5号", "6号"],
             6471,
             6471);
+
+        Assert.False(CollectionRunCompleteness.IsCompleteFleetSnapshot(run));
+    }
+
+    [Fact]
+    public void RejectsFullSnapshotWhenBuildingCountsDoNotSumToDeclaredTotal()
+    {
+        var counts = CreateBuildingCounts(["1号", "2号", "3号", "4号", "5号", "6号"], 6573);
+        counts["6号"]--;
+        var run = CreateRun(
+            status: "completed",
+            scope: "full",
+            buildings: ["1号", "2号", "3号", "4号", "5号", "6号"],
+            cardCount: 6573,
+            snapshotCardCount: 6573,
+            buildingCardCounts: counts);
 
         Assert.False(CollectionRunCompleteness.IsCompleteFleetSnapshot(run));
     }
@@ -75,7 +91,7 @@ public sealed class CollectionRunCompletenessTests
     }
 
     [Fact]
-    public void RejectsFullSnapshotWithBaselineDelta()
+    public void IgnoresInformationalBaselineDelta()
     {
         var run = CreateRun(
             status: "completed",
@@ -85,7 +101,20 @@ public sealed class CollectionRunCompletenessTests
             snapshotCardCount: 6573,
             qualitySummary: "{\"summary\":{\"baseline_delta\":1}}");
 
-        Assert.False(CollectionRunCompleteness.IsCompleteFleetSnapshot(run));
+        Assert.True(CollectionRunCompleteness.IsCompleteFleetSnapshot(run));
+    }
+
+    [Fact]
+    public void AcceptsFullSnapshotWhoseTotalDiffersFromOtherRuns()
+    {
+        var run = CreateRun(
+            status: "completed",
+            scope: "full",
+            buildings: ["1号", "2号", "3号", "4号", "5号", "6号"],
+            cardCount: 6572,
+            snapshotCardCount: 6572);
+
+        Assert.True(CollectionRunCompleteness.IsCompleteFleetSnapshot(run));
     }
 
     [Theory]
@@ -98,8 +127,8 @@ public sealed class CollectionRunCompletenessTests
             status: "completed",
             scope: "full",
             buildings: ["1号", "2号", "3号", "4号", "5号", "6号"],
-            cardCount: 6471,
-            snapshotCardCount: 6471,
+            cardCount: 6573,
+            snapshotCardCount: 6573,
             qualitySummary: $"{{\"summary\":{{\"{qualityCode}\":1}}}}");
 
         Assert.False(CollectionRunCompleteness.IsCompleteFleetSnapshot(run));
@@ -112,8 +141,8 @@ public sealed class CollectionRunCompletenessTests
             status: "completed",
             scope: "full",
             buildings: ["1号", "2号", "3号", "4号", "5号", "6号"],
-            cardCount: 6471,
-            snapshotCardCount: 6471,
+            cardCount: 6573,
+            snapshotCardCount: 6573,
             qualitySummary: "{\"summary\":{\"invalid_card_fields\":0,\"known_findings\":1}}");
 
         Assert.True(CollectionRunCompleteness.IsCompleteFleetSnapshot(run));
@@ -126,7 +155,8 @@ public sealed class CollectionRunCompletenessTests
         int cardCount,
         int snapshotCardCount,
         string qualitySummary = "{}",
-        bool isAnomaly = false) => new(
+        bool isAnomaly = false,
+        IReadOnlyDictionary<string, int>? buildingCardCounts = null) => new(
         Id: 1,
         RunKey: "test",
         StartedAt: "2026-08-31T00:00:00Z",
@@ -145,5 +175,17 @@ public sealed class CollectionRunCompletenessTests
         QualitySummary: qualitySummary,
         IsAnomaly: isAnomaly,
         Note: string.Empty,
-        SnapshotCardCount: snapshotCardCount);
+        SnapshotCardCount: snapshotCardCount)
+        {
+            BuildingCardCounts = buildingCardCounts ?? CreateBuildingCounts(buildings, cardCount),
+        };
+
+    private static Dictionary<string, int> CreateBuildingCounts(
+        IReadOnlyList<string> buildings,
+        int cardCount)
+    {
+        var counts = buildings.ToDictionary(building => building, _ => 1, StringComparer.OrdinalIgnoreCase);
+        counts[buildings[0]] = cardCount - buildings.Count + 1;
+        return counts;
+    }
 }

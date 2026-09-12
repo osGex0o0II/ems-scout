@@ -84,6 +84,76 @@ public sealed class DashboardAreaGroupBuilderTests
     }
 
     [Fact]
+    public void CountsConfiguredOverviewAnomaliesWithoutTreatingOfflineDevicesAsRealtimeAnomalies()
+    {
+        var publicGroup = Group(1, "公区", enabled: true, groupKind: "system", systemKey: "public");
+        var set = new AreaGroupSet([publicGroup], []);
+        var devices = new[]
+        {
+            DeviceWithValues(1, "GQ-MODE-KT", DeviceCommunicationState.Running, "制热", "25", "开启"),
+            DeviceWithValues(2, "GQ-TEMP-LOW-KT", DeviceCommunicationState.Stopped, "制冷", "21", "关闭"),
+            DeviceWithValues(3, "GQ-TEMP-HIGH-KT", DeviceCommunicationState.Stopped, "制冷", "27", "关闭"),
+            DeviceWithValues(4, "GQ-OK-KT", DeviceCommunicationState.Running, "制冷", "22", "关闭"),
+            DeviceWithValues(5, "GQ-OFFLINE-KT", DeviceCommunicationState.Offline, "制热", "18", string.Empty),
+            DeviceWithValues(6, "GQ-NO-SNAPSHOT-KT", DeviceCommunicationState.Running, "制热", "18", string.Empty),
+        };
+
+        var summary = Assert.Single(
+            DashboardAreaGroupBuilder.Build(
+                devices,
+                set,
+                new DashboardAnomalySettings("制冷", 22, 26)));
+
+        Assert.Equal(2, summary.ModeAbnormal);
+        Assert.Equal(3, summary.TemperatureAbnormal);
+        Assert.Equal(1, summary.LockOn);
+        Assert.Equal(3, summary.LockOff);
+    }
+
+    [Fact]
+    public void CountsBaseAnomaliesWhenRealtimeSnapshotIsUnavailable()
+    {
+        var publicGroup = Group(1, "公区", enabled: true, groupKind: "system", systemKey: "public");
+        var devices = new[]
+        {
+            DeviceWithValues(1, "GQ-MODE-KT", DeviceCommunicationState.Running, "制热", "25", string.Empty),
+            DeviceWithValues(2, "GQ-TEMP-LOW-KT", DeviceCommunicationState.Stopped, "制冷", "21", string.Empty),
+            DeviceWithValues(3, "GQ-TEMP-HIGH-KT", DeviceCommunicationState.Stopped, "制冷", "27", string.Empty),
+            DeviceWithValues(4, "GQ-OK-KT", DeviceCommunicationState.Running, "制冷", "22", string.Empty),
+            DeviceWithValues(5, "GQ-OFFLINE-KT", DeviceCommunicationState.Offline, "制热", "18", string.Empty),
+        };
+
+        var summary = Assert.Single(
+            DashboardAreaGroupBuilder.Build(
+                devices,
+                new AreaGroupSet([publicGroup], []),
+                new DashboardAnomalySettings("制冷", 22, 26)));
+
+        Assert.Equal(1, summary.ModeAbnormal);
+        Assert.Equal(2, summary.TemperatureAbnormal);
+        Assert.Equal(0, summary.LockOn);
+        Assert.Equal(0, summary.LockOff);
+        Assert.Equal(DashboardRealtimeAvailability.Unavailable, summary.RealtimeAvailability);
+    }
+
+    [Fact]
+    public void MarksRealtimeAggregatesUnavailableWhenOnlineDevicesHaveNoDetails()
+    {
+        var publicGroup = Group(1, "公区", enabled: true, groupKind: "system", systemKey: "public");
+        var devices = new[]
+        {
+            Device(1, "GQ-0101-KT", 1, "1F A", DeviceCommunicationState.Running),
+            Device(2, "GQ-0102-KT", 1, "1F A", DeviceCommunicationState.Stopped),
+        };
+
+        var summary = Assert.Single(
+            DashboardAreaGroupBuilder.Build(devices, new AreaGroupSet([publicGroup], [])));
+
+        Assert.Equal(DashboardRealtimeAvailability.Unavailable, summary.RealtimeAvailability);
+        Assert.Contains("不可用", summary.RealtimeStatusText);
+    }
+
+    [Fact]
     public void MatchesDuplicateDeviceSuffixWithinTheConfiguredLocation()
     {
         var item = new AreaGroupItemRecord(
@@ -212,5 +282,45 @@ public sealed class DashboardAreaGroupBuilderTests
             CommunicationState: state,
             AreaTypeOverride: areaTypeOverride,
             IsVirtual: isVirtual);
+    }
+
+    private static DeviceRecord DeviceWithValues(
+        long id,
+        string name,
+        DeviceCommunicationState state,
+        string mode,
+        string setTemperature,
+        string lockState)
+    {
+        var device = Device(id, name, 1, "1F A", state);
+        return device with
+        {
+            Mode = mode,
+            SetTemperature = setTemperature,
+            Realtime = string.IsNullOrWhiteSpace(lockState)
+                ? null
+                : new RealtimeDetailRecord(
+                    RowId: $"row-{id}",
+                    SourceFile: "test.json",
+                    SourceUpdatedAt: DateTimeOffset.UtcNow,
+                    Building: "1号",
+                    Floor: 1,
+                    SubArea: "1F A",
+                    PageName: "default",
+                    Name: name,
+                    DevId: $"dev-{id}",
+                    MeterId: string.Empty,
+                    RtuId: string.Empty,
+                    FieldCount: 1,
+                    RealtimeTagCount: 1,
+                    RealtimeValidTagCount: 1,
+                    DefaultLike: false,
+                    Error: string.Empty,
+                    CardComm: "在线",
+                    CardSwitch: "ON",
+                    CardIndicator: string.Empty,
+                    Fields: new Dictionary<string, string> { ["集控锁定"] = lockState },
+                    ValidFields: new Dictionary<string, bool> { ["集控锁定"] = true }),
+        };
     }
 }

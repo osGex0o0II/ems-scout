@@ -1,4 +1,5 @@
 using System.Globalization;
+using EmsScout.Application;
 using EmsScout.Application.Devices;
 using EmsScout.Application.Watch;
 using Microsoft.Data.Sqlite;
@@ -104,7 +105,7 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
         await EnsureCustomGroupAsync(connection, edit.GroupId, cancellationToken).ConfigureAwait(false);
 
         var name = string.IsNullOrWhiteSpace(edit.Name) ? "关注设备" : edit.Name.Trim();
-        var now = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture);
+        var now = StoredTimestamp.FormatLocal(DateTimeOffset.Now);
         if (edit.Id is not null && edit.Id.Value > 0)
         {
             await EnsureRuleBelongsToGroupAsync(connection, edit.Id.Value, edit.GroupId, cancellationToken).ConfigureAwait(false);
@@ -117,8 +118,8 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
                 """;
             update.Parameters.AddWithValue("$group_id", edit.GroupId);
             update.Parameters.AddWithValue("$name", name);
-            update.Parameters.AddWithValue("$start_at", edit.StartAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
-            update.Parameters.AddWithValue("$end_at", edit.EndAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
+            update.Parameters.AddWithValue("$start_at", StoredTimestamp.FormatLocal(edit.StartAt));
+            update.Parameters.AddWithValue("$end_at", StoredTimestamp.FormatLocal(edit.EndAt));
             update.Parameters.AddWithValue("$enabled", edit.Enabled ? 1 : 0);
             update.Parameters.AddWithValue("$note", edit.Note ?? string.Empty);
             update.Parameters.AddWithValue("$updated_at", now);
@@ -140,8 +141,8 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
                 """;
             insert.Parameters.AddWithValue("$group_id", edit.GroupId);
             insert.Parameters.AddWithValue("$name", name);
-            insert.Parameters.AddWithValue("$start_at", edit.StartAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
-            insert.Parameters.AddWithValue("$end_at", edit.EndAt.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture));
+            insert.Parameters.AddWithValue("$start_at", StoredTimestamp.FormatLocal(edit.StartAt));
+            insert.Parameters.AddWithValue("$end_at", StoredTimestamp.FormatLocal(edit.EndAt));
             insert.Parameters.AddWithValue("$enabled", edit.Enabled ? 1 : 0);
             insert.Parameters.AddWithValue("$note", edit.Note ?? string.Empty);
             insert.Parameters.AddWithValue("$created_at", now);
@@ -219,8 +220,8 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
                 end_at TEXT NOT NULL,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 note TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
                 FOREIGN KEY(group_id) REFERENCES monitor_groups(id)
             );
             CREATE INDEX IF NOT EXISTS idx_device_watch_rules_enabled
@@ -508,11 +509,7 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
     private static DateTimeOffset ReadDateTimeOffset(SqliteDataReader reader, string column)
     {
         var value = ReadString(reader, column);
-        return DateTimeOffset.TryParse(
-            value,
-            CultureInfo.InvariantCulture,
-            DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-            out var parsed)
+        return StoredTimestamp.TryParse(value, out var parsed)
             ? parsed
             : DateTimeOffset.MinValue;
     }

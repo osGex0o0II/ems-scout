@@ -3,7 +3,7 @@ using EmsScout.Desktop.Services;
 
 namespace EmsScout.Desktop.ViewModels;
 
-public sealed class BuildingSummaryRow(BuildingSummary summary)
+public sealed class BuildingSummaryRow(BuildingSummary summary, long? runId = null)
 {
     public string Building { get; } = summary.Building;
 
@@ -23,5 +23,5 @@ public sealed class BuildingSummaryRow(BuildingSummary summary)
 
     public string OfflineRate { get; } = summary.OfflineRate.ToString("P1");
 
-    public DataNavigationRequest NavigationRequest { get; } = new(Building: summary.Building);
+    public DataNavigationRequest NavigationRequest { get; } = new(Building: summary.Building, RunId: runId);
 }

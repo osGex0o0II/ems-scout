@@ -10,6 +10,7 @@ using EmsScout.Application.Collection;
 using EmsScout.Application.Devices;
 using EmsScout.Application.Quality;
 using EmsScout.Application.Settings;
+using EmsScout.Application;
 using EmsScout.Desktop.Services;
 using Microsoft.UI.Dispatching;
 
@@ -1223,12 +1224,19 @@ public sealed partial class CollectionTaskViewModel(
 
             if (runRealtimeDetailsAfterImport)
             {
+                if (_targetRunId is not > 0)
+                {
+                    throw new InvalidOperationException("导入完成但未取得本次批次 ID，已阻止采集实时详情。");
+                }
+
+                var targetRunId = _targetRunId.Value;
                 SetStageState("realtime", "进行中", "正在更新实时详情");
                 var realtimeBase = Math.Max(ProgressValue, runImportAfterCollect || runQualityAfterImport ? 74 : enumProgressCeiling);
                 ProgressValue = realtimeBase;
                 ProgressText = "正在更新实时详情";
                 await RunRealtimeDetailsAsync(
                     selectedBuildings,
+                    targetRunId,
                     settings,
                     enableLogFile,
                     realtimeBatchSize,
@@ -1240,12 +1248,7 @@ public sealed partial class CollectionTaskViewModel(
                     realtimeBase,
                     23,
                     _activeTask.Token);
-                if (_targetRunId is null)
-                {
-                    throw new InvalidOperationException("导入完成但未取得本次批次 ID，已阻止保存实时详情。");
-                }
-
-                await PersistRealtimeSnapshotAsync(_targetRunId.Value, selectedBuildings, _activeTask.Token);
+                await PersistRealtimeSnapshotAsync(targetRunId, selectedBuildings, _activeTask.Token);
                 ProgressValue = Math.Max(ProgressValue, 97);
                 ProgressText = runRealtimeAuditAfterDetails ? "实时详情已更新，准备审计" : "实时详情已更新";
                 if (!runRealtimeAuditAfterDetails)
@@ -1569,7 +1572,7 @@ public sealed partial class CollectionTaskViewModel(
             Path.Combine("scripts", "import.js"),
             ["--bldg=" + string.Join(",", buildings)],
             cancellationToken,
-            pathService.BuildDataEnvironment());
+            BuildTaskEnvironment(settings));
     }
 
     private Task RunValidationAsync(
@@ -1604,6 +1607,7 @@ public sealed partial class CollectionTaskViewModel(
 
     private Task RunRealtimeDetailsAsync(
         IReadOnlyList<string> buildings,
+        long runId,
         AppSettings settings,
         bool enableLogFile,
         int batchSize,
@@ -1626,6 +1630,7 @@ public sealed partial class CollectionTaskViewModel(
             "--write-latest",
             "--skip-audit",
         };
+        args.Add("--run-id=" + runId);
         if (refreshInventory)
         {
             args.Add("--refresh-inventory");
@@ -1686,6 +1691,7 @@ public sealed partial class CollectionTaskViewModel(
             ["EMS_URL"] = settings.EmsUrl,
             ["CDP_URL"] = "http://127.0.0.1:" + settings.EdgeCdpPort,
             ["REALTIME_BROWSER_MODE"] = "cdp",
+            ["EMS_RUN_STARTED_AT"] = StoredTimestamp.FormatLocal(_taskStartedAt),
         };
         if (_targetRunId is > 0)
         {
@@ -2245,7 +2251,7 @@ public sealed partial class CollectionTaskViewModel(
 
     private static string FormatDateTime(string value)
     {
-        return DateTimeOffset.TryParse(value, out var parsed)
+        return StoredTimestamp.TryParse(value, out var parsed)
             ? parsed.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
             : value;
     }

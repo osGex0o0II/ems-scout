@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { formatLocalTimestamp, parseTimestampMillis } = require('../src/time');
 const { installRealtimeLog } = require('./realtime-logger');
 const { ensureRealtimeBrowser } = require('./realtime-browser');
 
@@ -109,12 +110,12 @@ function timestamp() {
 
 const EMS_OVERALL_TOTAL = Number(process.env.EMS_OVERALL_TOTAL || 0);
 const EMS_OVERALL_DONE_BASE = Number(process.env.EMS_OVERALL_DONE_BASE || 0);
-const EMS_RUN_STARTED_AT = Number(process.env.EMS_RUN_STARTED_AT || 0);
+const EMS_RUN_STARTED_AT = parseTimestampMillis(process.env.EMS_RUN_STARTED_AT);
 const EMS_RUN_ELAPSED = EMS_RUN_STARTED_AT ? Date.now() - EMS_RUN_STARTED_AT : 0;
 
 function progress(event) {
   console.log(`[PROGRESS] ${JSON.stringify({
-    ts: new Date().toISOString(),
+    ts: formatLocalTimestamp(),
     building: BUILDING,
     elapsedMs: EMS_RUN_STARTED_AT ? Date.now() - EMS_RUN_STARTED_AT : undefined,
     ...(EMS_OVERALL_TOTAL > 0 ? {
@@ -723,8 +724,8 @@ async function main() {
       ndjson.write(JSON.stringify(row) + '\n');
     }
     const partial = {
-      ...(RUN_ID > 0 ? { runId: RUN_ID } : {}),
-      capturedAt: new Date().toISOString(),
+      runId: RUN_ID > 0 ? RUN_ID : null,
+      capturedAt: formatLocalTimestamp(),
       summary: summarize(rows, startedAt),
       rows,
     };
@@ -743,9 +744,9 @@ async function main() {
   process.stdout.write('\n');
 
   await restoreBatchSubscription(page);
-  const capturedAt = new Date().toISOString();
+  const capturedAt = formatLocalTimestamp();
   const result = {
-    ...(RUN_ID > 0 ? { runId: RUN_ID } : {}),
+    runId: RUN_ID > 0 ? RUN_ID : null,
     capturedAt,
     summary: summarize(rows, startedAt),
     rows,

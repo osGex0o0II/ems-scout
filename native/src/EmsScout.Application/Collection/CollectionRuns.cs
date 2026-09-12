@@ -50,6 +50,14 @@ public sealed record CollectionRunRecord(
     string Operator = "本机",
     long? RestoredFromRunId = null)
 {
+    public IReadOnlyDictionary<string, int> BuildingCardCounts { get; init; } =
+        new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+    public bool RequiresReview =>
+        Status.Equals("needs_review", StringComparison.OrdinalIgnoreCase) ||
+        (Status.Equals("completed", StringComparison.OrdinalIgnoreCase) &&
+         CollectionRunCompleteness.HasBlockingQualityFailure(QualitySummary));
+
     public string ScopeLabel => Scope.Equals("partial", StringComparison.OrdinalIgnoreCase)
         ? string.Join("、", Buildings)
         : "全量";
@@ -58,9 +66,12 @@ public sealed record CollectionRunRecord(
 
     public string StatusLabel => IsAnomaly
         ? "异常隔离"
+        : RequiresReview
+            ? "需复核"
         : Status.ToLowerInvariant() switch
         {
             "completed" => "已完成",
+            "needs_review" => "需复核",
             "backup" => "恢复前备份",
             "failed" => "失败",
             "stopped" => "已停止",

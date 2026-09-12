@@ -8,7 +8,9 @@ public sealed record DashboardOverview(
     FleetSummary Summary,
     IReadOnlyList<OverviewMetric> Metrics,
     IReadOnlyList<DashboardAreaGroupSummary> AreaGroups,
-    string AreaGroupsError);
+    string AreaGroupsError,
+    DashboardRealtimeAvailability RealtimeAvailability = DashboardRealtimeAvailability.NotApplicable,
+    string RealtimeStatusText = "");
 
 public sealed record OverviewMetric(
     string Label,
@@ -38,7 +40,13 @@ public sealed record DashboardAreaGroupSummary(
     int PublicOffline,
     int PublicUnknown,
     int PublicCoveredAreas,
-    string AreaType = "")
+    int ModeAbnormal,
+    int TemperatureAbnormal,
+    int LockOn,
+    int LockOff,
+    string AreaType = "",
+    DashboardRealtimeAvailability RealtimeAvailability = DashboardRealtimeAvailability.NotApplicable,
+    string RealtimeStatusText = "")
 {
     public int Attention => Offline + Unknown;
 
@@ -55,6 +63,54 @@ public sealed record DashboardAreaGroupSummary(
     public int PrivateOffline => Math.Max(0, Offline - PublicOffline);
 
     public int PrivateUnknown => Math.Max(0, Unknown - PublicUnknown);
+}
+
+public enum DashboardRealtimeAvailability
+{
+    NotApplicable,
+    Available,
+    Partial,
+    Unavailable,
+}
+
+public static class DashboardRealtimeAvailabilityRules
+{
+    public static (DashboardRealtimeAvailability Availability, string StatusText) Evaluate(
+        int expectedOnline,
+        int matchedOnline,
+        string? unavailableReason = null)
+    {
+        if (expectedOnline <= 0)
+        {
+            return (DashboardRealtimeAvailability.NotApplicable, "当前没有在线设备可核对实时详情");
+        }
+
+        if (matchedOnline <= 0)
+        {
+            return (
+                DashboardRealtimeAvailability.Unavailable,
+                string.IsNullOrWhiteSpace(unavailableReason) ? "实时详情不可用" : unavailableReason);
+        }
+
+        if (matchedOnline < expectedOnline)
+        {
+            var missingCount = expectedOnline - matchedOnline;
+            var suffix = string.IsNullOrWhiteSpace(unavailableReason)
+                ? $"仍有 {missingCount:N0} 台在线设备未匹配"
+                : unavailableReason;
+            return (DashboardRealtimeAvailability.Partial, $"实时详情部分可用：{suffix}");
+        }
+
+        return (DashboardRealtimeAvailability.Available, "实时详情已完整匹配");
+    }
+}
+
+public sealed record DashboardAnomalySettings(
+    string NormalMode,
+    double TemperatureMin,
+    double TemperatureMax)
+{
+    public static DashboardAnomalySettings Default { get; } = new("制冷", 22, 26);
 }
 
 public enum OverviewMetricKind

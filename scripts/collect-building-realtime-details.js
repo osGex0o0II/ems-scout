@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { formatLocalTimestamp } = require('../src/time');
 const { installRealtimeLog } = require('./realtime-logger');
 const { ensureRealtimeBrowser } = require('./realtime-browser');
 
@@ -17,6 +18,9 @@ const EFFECTIVE_CDP_URL = CDP_ARG ? CDP_ARG.split('=').slice(1).join('=') : CDP_
 const STRICT_CDP = process.argv.includes('--strict-cdp');
 const MAX_SUBAREAS = Number((process.argv.find(a => a.startsWith('--max-subareas=')) || '').split('=')[1] || 0);
 const MAX_DEVICES = Number((process.argv.find(a => a.startsWith('--max-devices=')) || '').split('=')[1] || 0);
+const RUN_ID = Number(
+  ((process.argv.find(a => a.startsWith('--run-id=')) || '').split('=').slice(1).join('=') ||
+    process.env.EMS_RUN_ID || 0));
 const READY_TIMEOUT_MS = Number((process.argv.find(a => a.startsWith('--ready-timeout=')) || '').split('=')[1] || 6000);
 const FAILED_FROM = (process.argv.find(a => a.startsWith('--failed-from=')) || '').split('=').slice(1).join('=');
 const REUSE_MODAL = process.argv.includes('--reuse-modal');
@@ -1027,6 +1031,8 @@ async function collectCurrentPageDetails(page, pageMeta, rows, ndjsonStream, sta
       cardSwitchIndicator: dev.card_switch_indicator || '',
       cardStateSource: dev.card_state_source || '',
       fields: detail.fields || {},
+      rawFields: detail.rawFields || {},
+      validFields: detail.validFields || {},
     };
     rows.push(row);
     ndjsonStream.write(JSON.stringify(row) + '\n');
@@ -1221,12 +1227,12 @@ async function main() {
       }
     }
 
-    const result = { summary: summarize(rows, startedAt), rows };
+    const result = { runId: RUN_ID > 0 ? RUN_ID : null, capturedAt: formatLocalTimestamp(), summary: summarize(rows, startedAt), rows };
     fs.writeFileSync(jsonPath, JSON.stringify(result, null, 2), 'utf8');
   }
 
-  const capturedAt = new Date().toISOString();
-  let result = { capturedAt, summary: summarize(rows, startedAt), rows };
+  const capturedAt = formatLocalTimestamp();
+  let result = { runId: RUN_ID > 0 ? RUN_ID : null, capturedAt, summary: summarize(rows, startedAt), rows };
   if (failedTargets) {
     const mergedRows = failedTargets.source.rows || [];
     const index = new Map(mergedRows.map((row, idx) => [rowKey(row), idx]));
@@ -1238,6 +1244,7 @@ async function main() {
       replaced++;
     }
     result = {
+      runId: RUN_ID > 0 ? RUN_ID : null,
       capturedAt,
       summary: summarize(mergedRows, startedAt),
       recapture: {

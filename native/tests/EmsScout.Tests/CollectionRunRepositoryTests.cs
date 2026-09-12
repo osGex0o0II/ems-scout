@@ -29,6 +29,18 @@ public sealed class CollectionRunRepositoryTests
     }
 
     [Fact]
+    public async Task ListsSnapshotCardCountsByBuilding()
+    {
+        var databasePath = CreateDatabase();
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+
+        var run = Assert.Single(await repository.ListAsync());
+
+        Assert.Equal(1, run.BuildingCardCounts["1号"]);
+        Assert.DoesNotContain("2号", run.BuildingCardCounts.Keys);
+    }
+
+    [Fact]
     public async Task ComparesDuplicateNamesByStableLocationOccurrence()
     {
         var databasePath = CreateDatabase();
@@ -181,6 +193,20 @@ public sealed class CollectionRunRepositoryTests
     }
 
     [Fact]
+    public async Task QualityBlockedRunCannotBeRestored()
+    {
+        var databasePath = CreateDatabase();
+        await ExecuteAsync(
+            databasePath,
+            "UPDATE collection_runs SET quality_summary = '{\"summary\":{\"invalid_card_fields\":1}}' WHERE id = 1");
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => repository.RestoreCurrentAsync(1));
+
+        Assert.Contains("质量审计", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task BrokenSnapshotMappingCannotBeRestored()
     {
         var databasePath = CreateDatabase();
@@ -190,6 +216,46 @@ public sealed class CollectionRunRepositoryTests
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() => repository.RestoreCurrentAsync(1));
 
         Assert.Contains("快照计数不完整", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FullRestoreAcceptsDifferentPerBuildingCountsWhenSnapshotIsSelfConsistent()
+    {
+        var databasePath = CreateDatabase();
+        await ExecuteAsync(databasePath, """
+            UPDATE collection_runs
+            SET scope = 'full', buildings = '["1号","2号","3号","4号","5号","6号"]', card_count = 6
+            WHERE id = 1;
+            INSERT INTO run_buildings (run_id, building, sub_area_count, menu_clicked, updated_at)
+            VALUES (1, '2号', 1, 'yes', '2026-07-01T00:00:00Z'),
+                   (1, '3号', 1, 'yes', '2026-07-01T00:00:00Z'),
+                   (1, '4号', 1, 'yes', '2026-07-01T00:00:00Z'),
+                   (1, '5号', 1, 'yes', '2026-07-01T00:00:00Z'),
+                   (1, '6号', 1, 'yes', '2026-07-01T00:00:00Z');
+            INSERT INTO run_sub_areas (id, run_id, source_sub_area_id, building, sub_idx, floor, floor_label, text, x, y)
+            VALUES (12, 1, 2, '2号', 1, 1, '1F', '2F A', 10, 20),
+                   (13, 1, 3, '3号', 1, 1, '1F', '3F A', 10, 20),
+                   (14, 1, 4, '4号', 1, 1, '1F', '4F A', 10, 20),
+                   (15, 1, 5, '5号', 1, 1, '1F', '5F A', 10, 20),
+                   (16, 1, 6, '6号', 1, 1, '1F', '6F A', 10, 20);
+            INSERT INTO run_pages (id, run_id, run_sub_area_id, source_page_id, page_name, count, raw_count, unique_count, duplicate_names, on_href, off_href, layout, quality_reason, err)
+            VALUES (22, 1, 12, 2, '1F', 1, 1, 1, '', '', '', 'grid', 'quality_pass', ''),
+                   (23, 1, 13, 3, '1F', 1, 1, 1, '', '', '', 'grid', 'quality_pass', ''),
+                   (24, 1, 14, 4, '1F', 1, 1, 1, '', '', '', 'grid', 'quality_pass', ''),
+                   (25, 1, 15, 5, '1F', 1, 1, 1, '', '', '', 'grid', 'quality_pass', ''),
+                   (26, 1, 16, 6, '1F', 1, 1, 1, '', '', '', 'grid', 'quality_pass', '');
+            INSERT INTO run_cards (run_id, run_page_id, source_card_id, name, switch, mode, indoor, set_temp, fan, indicator, comm)
+            VALUES (1, 22, 2, '2-0101-KT', 'OFF', '制冷', '26', '25', '中', 'green.png', '关机'),
+                   (1, 23, 3, '3-0101-KT', 'OFF', '制冷', '26', '25', '中', 'green.png', '关机'),
+                   (1, 24, 4, '4-0101-KT', 'OFF', '制冷', '26', '25', '中', 'green.png', '关机'),
+                   (1, 25, 5, '5-0101-KT', 'OFF', '制冷', '26', '25', '中', 'green.png', '关机'),
+                   (1, 26, 6, '6-0101-KT', 'OFF', '制冷', '26', '25', '中', 'green.png', '关机');
+            """);
+
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+        var result = await repository.RestoreCurrentAsync(1);
+
+        Assert.Equal(6, result.RestoredCards);
     }
 
     [Fact]

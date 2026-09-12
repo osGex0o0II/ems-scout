@@ -1,3 +1,4 @@
+using EmsScout.Application;
 using EmsScout.Application.Collection;
 
 namespace EmsScout.Desktop.ViewModels;
@@ -42,7 +43,7 @@ public sealed class CollectionRunDetail(CollectionRunRecord record, bool isCurre
         : "已保存质量审计摘要";
 
     private static string FormatDateTime(string value) =>
-        DateTimeOffset.TryParse(value, out var parsed)
+        StoredTimestamp.TryParse(value, out var parsed)
             ? parsed.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
             : string.IsNullOrWhiteSpace(value) ? "--" : value;
 }

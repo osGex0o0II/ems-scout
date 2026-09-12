@@ -72,4 +72,18 @@ public sealed class AppSettingsValidatorTests
 
         Assert.Null(AppSettingsValidator.Validate(settings));
     }
+
+    [Fact]
+    public void RejectsInvertedDashboardTemperatureRange()
+    {
+        var settings = new AppSettings
+        {
+            DashboardTemperatureMin = 28,
+            DashboardTemperatureMax = 21,
+        };
+
+        var error = AppSettingsValidator.Validate(settings);
+
+        Assert.Contains("温度", error, StringComparison.Ordinal);
+    }
 }

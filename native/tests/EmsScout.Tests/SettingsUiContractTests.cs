@@ -15,12 +15,18 @@ public sealed class SettingsUiContractTests
         Assert.Contains("StartMinimized", settings);
         Assert.Contains("LaunchAtLogin", settings);
         Assert.Contains("ShowInSendTo", settings);
+        Assert.Contains("DashboardNormalMode", settings);
+        Assert.Contains("DashboardTemperatureMin", settings);
+        Assert.Contains("DashboardTemperatureMax", settings);
         Assert.Contains("PageTransitionStyleIndex", viewModel);
         Assert.DoesNotContain("LanguageIndex", viewModel);
         Assert.Contains("SaveWindowPlacement", viewModel);
         Assert.Contains("StartMinimized", viewModel);
         Assert.Contains("LaunchAtLogin", viewModel);
         Assert.Contains("ShowInSendTo", viewModel);
+        Assert.Contains("DashboardNormalMode", viewModel);
+        Assert.Contains("DashboardTemperatureMin", viewModel);
+        Assert.Contains("DashboardTemperatureMax", viewModel);
     }
 
     [Fact]
@@ -39,8 +45,13 @@ public sealed class SettingsUiContractTests
         Assert.DoesNotContain("Header=\"减少动效\"", xaml);
         Assert.DoesNotContain("IntegrationSection", xaml);
         Assert.Contains("OpenPaneLength=\"176\"", xaml);
-        Assert.Contains("MaxWidth=\"860\"", xaml);
-        Assert.Contains("MaxWidth=\"820\"", xaml);
+        Assert.Contains("HorizontalAlignment=\"Stretch\"", xaml);
+        Assert.Contains("HorizontalContentAlignment=\"Stretch\"", xaml);
+        Assert.DoesNotContain("MaxWidth=\"860\"", xaml);
+        Assert.DoesNotContain("MaxWidth=\"820\"", xaml);
+        Assert.Contains("x:Name=\"DataTableSection\"", xaml);
+        Assert.Contains("MaxWidth=\"560\"", xaml);
+        Assert.Contains("MaxWidth=\"420\"", xaml);
 
         var toggleSwitches = System.Text.RegularExpressions.Regex.Matches(
             xaml,
@@ -73,6 +84,10 @@ public sealed class SettingsUiContractTests
         Assert.Contains("实时批量设备数", settingsPage);
         Assert.Contains("单批超时（毫秒）", settingsPage);
         Assert.Contains("设备批次重开间隔", settingsPage);
+        Assert.Contains("总览异常判定", settingsPage);
+        Assert.Contains("正常运行模式", settingsPage);
+        Assert.Contains("Header=\"设定温度下限（℃）\"", settingsPage);
+        Assert.Contains("Header=\"设定温度上限（℃）\"", settingsPage);
         Assert.DoesNotContain("高级设置", tasksPage);
         Assert.DoesNotContain("日志筛选", tasksPage);
         Assert.DoesNotContain("RealtimeBatchSizeOptions", tasksPage);

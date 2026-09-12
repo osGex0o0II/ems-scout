@@ -18,6 +18,7 @@ public sealed class RealtimeLatestJsonSourceTests
         var path = Path.Combine(outDirectory, "realtime_1号_latest.json");
         await File.WriteAllTextAsync(path, """
             {
+              "runId": 1,
               "capturedAt": "2026-08-31T04:10:00.000Z",
               "rows": [{
                 "building": "1号",
@@ -33,6 +34,150 @@ public sealed class RealtimeLatestJsonSourceTests
         var details = await source.LoadAsync(["1号"]);
 
         Assert.Equal(DateTimeOffset.Parse("2026-08-31T04:10:00.000Z"), details.Rows[0].SourceUpdatedAt);
+    }
+
+    [Fact]
+    public async Task PreservesRawFieldValuesWhenARealtimeEnumIsUnmapped()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-realtime-source-tests", Guid.NewGuid().ToString("N"));
+        var outDirectory = Path.Combine(root, "out");
+        Directory.CreateDirectory(outDirectory);
+        await File.WriteAllTextAsync(Path.Combine(outDirectory, "realtime_1号_latest.json"), """
+            {
+              "runId": 1,
+              "capturedAt": "2026-08-31T04:10:00+08:00",
+              "rows": [{
+                "building": "1号",
+                "name": "1-0101-KT",
+                "fields": { "集控锁定": "32896" },
+                "rawFields": { "集控锁定": "32896" },
+                "validFields": { "集控锁定": true }
+              }]
+            }
+            """);
+
+        var details = await new RealtimeLatestJsonSource(root, outDirectory).LoadAsync(["1号"], expectedRunId: 1);
+        var row = Assert.Single(details.Rows);
+
+        Assert.Equal("32896", row.LockState);
+        Assert.Equal("32896", row.RawField("集控锁定"));
+        Assert.Equal("32896", row.RawLockState);
+        Assert.False(row.LockStateValid);
+    }
+
+    [Fact]
+    public async Task InterpretsLegacyTimestampWithoutOffsetAsUtc()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-realtime-source-tests", Guid.NewGuid().ToString("N"));
+        var outDirectory = Path.Combine(root, "out");
+        Directory.CreateDirectory(outDirectory);
+        await File.WriteAllTextAsync(Path.Combine(outDirectory, "realtime_1号_latest.json"), """
+            {
+              "runId": 1,
+              "capturedAt": "2026-08-31T03:00:00",
+              "rows": [{ "building": "1号", "name": "1-0101-KT" }]
+            }
+            """);
+
+        var source = new RealtimeLatestJsonSource(root, outDirectory);
+
+        var details = await source.LoadAsync(["1号"]);
+
+        Assert.Equal(DateTimeOffset.Parse("2026-08-31T03:00:00Z"), details.Rows[0].SourceUpdatedAt);
+    }
+
+    [Fact]
+    public async Task RejectsRealtimeFileWithoutRunId()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-realtime-source-tests", Guid.NewGuid().ToString("N"));
+        var outDirectory = Path.Combine(root, "out");
+        Directory.CreateDirectory(outDirectory);
+        await File.WriteAllTextAsync(Path.Combine(outDirectory, "realtime_1号_latest.json"), """
+            {
+              "capturedAt": "2026-08-31T03:00:00+08:00",
+              "rows": [{ "building": "1号", "name": "1-0101-KT" }]
+            }
+            """);
+
+        var details = await new RealtimeLatestJsonSource(root, outDirectory).LoadAsync(["1号"], expectedRunId: 1);
+
+        Assert.Equal(RealtimeDetailAvailability.MissingSnapshot, details.Availability);
+        Assert.Empty(details.Rows);
+        Assert.Contains("批次", details.StatusText);
+    }
+
+    [Fact]
+    public async Task RejectsMissingAndEmptyBuildingFilesInsteadOfReturningAvailable()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-realtime-source-tests", Guid.NewGuid().ToString("N"));
+        var outDirectory = Path.Combine(root, "out");
+        Directory.CreateDirectory(outDirectory);
+        var source = new RealtimeLatestJsonSource(root, outDirectory);
+
+        var missing = await source.LoadAsync(["1号"], expectedRunId: 1);
+
+        await File.WriteAllTextAsync(Path.Combine(outDirectory, "realtime_1号_latest.json"), """
+            {
+              "runId": 1,
+              "capturedAt": "2026-08-31T03:00:00+08:00",
+              "rows": []
+            }
+            """);
+        var empty = await source.LoadAsync(["1号"], expectedRunId: 1);
+
+        Assert.Equal(RealtimeDetailAvailability.MissingSnapshot, missing.Availability);
+        Assert.Equal(RealtimeDetailAvailability.MissingSnapshot, empty.Availability);
+        Assert.Contains("1号", missing.StatusText);
+        Assert.Contains("空", empty.StatusText);
+    }
+
+    [Fact]
+    public async Task RejectsRowsThatClaimAnotherBuilding()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-realtime-source-tests", Guid.NewGuid().ToString("N"));
+        var outDirectory = Path.Combine(root, "out");
+        Directory.CreateDirectory(outDirectory);
+        await File.WriteAllTextAsync(Path.Combine(outDirectory, "realtime_1号_latest.json"), """
+            {
+              "runId": 1,
+              "capturedAt": "2026-08-31T03:00:00+08:00",
+              "rows": [{ "building": "2号", "name": "2-0101-KT" }]
+            }
+            """);
+
+        var details = await new RealtimeLatestJsonSource(root, outDirectory).LoadAsync(["1号"], expectedRunId: 1);
+
+        Assert.Equal(RealtimeDetailAvailability.Unavailable, details.Availability);
+        Assert.Empty(details.Rows);
+        Assert.Contains("楼栋", details.StatusText);
+    }
+
+    [Fact]
+    public async Task ChoosesNewestValidTimestampFileWhenLatestAliasIsStale()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-realtime-source-tests", Guid.NewGuid().ToString("N"));
+        var outDirectory = Path.Combine(root, "out");
+        Directory.CreateDirectory(outDirectory);
+        await File.WriteAllTextAsync(Path.Combine(outDirectory, "realtime_1号_latest.json"), """
+            {
+              "runId": 1,
+              "capturedAt": "2026-08-31T03:00:00+08:00",
+              "rows": [{ "building": "1号", "name": "old" }]
+            }
+            """);
+        await File.WriteAllTextAsync(Path.Combine(outDirectory, "realtime_1号_20260831_040000.json"), """
+            {
+              "runId": 2,
+              "capturedAt": "2026-08-31T04:00:00+08:00",
+              "rows": [{ "building": "1号", "name": "new" }]
+            }
+            """);
+
+        var details = await new RealtimeLatestJsonSource(root, outDirectory).LoadAsync(["1号"], expectedRunId: 2);
+
+        Assert.Equal(RealtimeDetailAvailability.Available, details.Availability);
+        Assert.Equal(2, details.SourceRunId);
+        Assert.Equal("new", Assert.Single(details.Rows).Name);
     }
 
     [Fact]
@@ -60,16 +205,14 @@ public sealed class RealtimeLatestJsonSourceTests
     }
 
     [Fact]
-    public async Task LoadsRealtimeLatestFilesWithSelfConsistentCounts()
+    public async Task RejectsLegacyRealtimeFilesWithoutBatchMetadata()
     {
         var source = CurrentRealtimeSource();
 
-        var details = await source.LoadAsync(Buildings);
+        var details = await source.LoadAsync(Buildings, expectedRunId: 24);
 
-        Assert.True(details.Rows.Count > 0);
-        Assert.Contains(details.Rows, row => !string.IsNullOrWhiteSpace(row.LockState) && !row.LockStateValid);
-        Assert.Equal(details.Rows.Count, details.Rows.Count(row => row.PointsComplete) + details.Rows.Count(row => !row.PointsComplete));
-        Assert.All(Buildings, building => Assert.Contains(details.Rows, row => row.Building == building));
+        Assert.Equal(RealtimeDetailAvailability.MissingSnapshot, details.Availability);
+        Assert.Empty(details.Rows);
     }
 
     [Fact]

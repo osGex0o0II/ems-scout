@@ -9,23 +9,50 @@ public sealed class JsonRealtimeQualityAuditService(Func<string> qualityOutputDi
     public async Task<RealtimeQualityAuditReport?> LoadLatestAsync(CancellationToken cancellationToken = default)
     {
         var directory = qualityOutputDirectoryResolver();
-        if (!Directory.Exists(directory))
+        var file = EnumerateAuditFiles(directory).FirstOrDefault();
+        return file is null ? null : await LoadFileAsync(file, expectedRunId: null, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<RealtimeQualityAuditReport?> LoadForRunAsync(
+        long runId,
+        CancellationToken cancellationToken = default)
+    {
+        var directory = qualityOutputDirectoryResolver();
+        foreach (var file in EnumerateAuditFiles(directory))
         {
-            return null;
+            var report = await LoadFileAsync(file, runId, cancellationToken).ConfigureAwait(false);
+            if (report is not null)
+            {
+                return report;
+            }
         }
 
-        var file = Directory.EnumerateFiles(directory, "realtime_quality_classified_*.json")
-            .Select(path => new FileInfo(path))
-            .OrderByDescending(fileInfo => fileInfo.LastWriteTimeUtc)
-            .FirstOrDefault();
-        if (file is null)
-        {
-            return null;
-        }
+        return null;
+    }
 
-        await using var stream = file.OpenRead();
+    private static IEnumerable<string> EnumerateAuditFiles(string directory)
+    {
+        return !Directory.Exists(directory)
+            ? []
+            : Directory.EnumerateFiles(directory, "realtime_quality_classified_*.json")
+                .Select(path => new FileInfo(path))
+                .OrderByDescending(fileInfo => fileInfo.LastWriteTimeUtc)
+                .Select(fileInfo => fileInfo.FullName);
+    }
+
+    private static async Task<RealtimeQualityAuditReport?> LoadFileAsync(
+        string file,
+        long? expectedRunId,
+        CancellationToken cancellationToken)
+    {
+        await using var stream = File.OpenRead(file);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
         var root = document.RootElement;
+        var reportRunId = ReadNullableInt64(root, "runId");
+        if (expectedRunId is not null && reportRunId != expectedRunId)
+        {
+            return null;
+        }
         var collectionErrors = root.TryGetProperty("collectionErrors", out var collectionElement)
             ? collectionElement
             : default;
@@ -37,7 +64,7 @@ public sealed class JsonRealtimeQualityAuditService(Func<string> qualityOutputDi
             : default;
 
         return new RealtimeQualityAuditReport(
-            SourcePath: file.FullName,
+            SourcePath: file,
             CreatedAt: ReadString(root, "createdAt"),
             SummarySource: ReadSummarySource(root),
             TotalRows: ReadInt(root, "totalRows"),
@@ -49,7 +76,8 @@ public sealed class JsonRealtimeQualityAuditService(Func<string> qualityOutputDi
             CollectionErrorCategories: ReadCategories(collectionErrors, "byCategory"),
             DeviceAnomalyCategories: ReadCategories(deviceAnomalies, "byCategory"),
             Buildings: ReadBuildings(root),
-            Note: ReadString(conclusion, "note"));
+            Note: ReadString(conclusion, "note"),
+            RunId: reportRunId);
     }
 
     private static string ReadSummarySource(JsonElement root)
@@ -175,5 +203,22 @@ public sealed class JsonRealtimeQualityAuditService(Func<string> qualityOutputDi
         return property.ValueKind == JsonValueKind.String
             ? property.GetString() ?? string.Empty
             : property.ToString();
+    }
+
+    private static long? ReadNullableInt64(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property) || property.ValueKind == JsonValueKind.Null)
+        {
+            return null;
+        }
+
+        if (property.ValueKind == JsonValueKind.Number && property.TryGetInt64(out var number))
+        {
+            return number > 0 ? number : null;
+        }
+
+        return long.TryParse(property.ToString(), out var textValue) && textValue > 0
+            ? textValue
+            : null;
     }
 }

@@ -89,7 +89,7 @@ function Invoke-Checked {
     )
 
     Write-Step $Label
-    $startedAt = (Get-Date).ToUniversalTime().ToString("o")
+    $startedAt = (Get-Date).ToString("o")
     $old = @{}
     foreach ($key in $Environment.Keys) {
         $old[$key] = [Environment]::GetEnvironmentVariable($key, "Process")
@@ -108,7 +108,7 @@ function Invoke-Checked {
                 file = $FileName
                 arguments = $Arguments
                 started_at = $startedAt
-                ended_at = (Get-Date).ToUniversalTime().ToString("o")
+                ended_at = (Get-Date).ToString("o")
                 exit_code = $code
                 allow_failure = $AllowFailure.IsPresent
             }
@@ -490,7 +490,7 @@ if ($PrepareLoginSession -and -not $LaunchEdge) {
 
 Write-Host "Mode: verify=$(-not $SkipVerify); single-building=$($RunSingleBuilding.IsPresent); all-buildings=$($RunAllBuildings.IsPresent); launch-edge=$($LaunchEdge.IsPresent); prepare-login=$($PrepareLoginSession.IsPresent); building=$Building"
 Update-RunManifest $manifestPath @{
-    started_at = (Get-Date).ToUniversalTime().ToString("o")
+    started_at = (Get-Date).ToString("o")
     root = (Resolve-FullPath $root)
     run_dir = (Resolve-FullPath $runDir)
     ems_url = $EmsUrl
@@ -663,7 +663,7 @@ try {
     Write-Host "Quality: $qualityDir"
     Write-Host "Excel export: $exportDir"
     Update-RunManifest $manifestPath @{
-        completed_at = (Get-Date).ToUniversalTime().ToString("o")
+                completed_at = (Get-Date).ToString("o")
         status = "complete"
         json_path = (Resolve-FullPath $jsonPath)
         db_path = (Resolve-FullPath $dbPath)
@@ -679,7 +679,7 @@ try {
 catch {
     if (Test-Path $manifestPath) {
         Update-RunManifest $manifestPath @{
-            failed_at = (Get-Date).ToUniversalTime().ToString("o")
+                failed_at = (Get-Date).ToString("o")
             status = "failed"
             error = $_.Exception.Message
         }
@@ -695,7 +695,7 @@ finally {
     }
     if (Test-Path $manifestPath) {
         $statusPatch = @{
-            finished_at = (Get-Date).ToUniversalTime().ToString("o")
+                finished_at = (Get-Date).ToString("o")
             edge_profile_exists_after_cleanup = (Test-Path $edgeProfileDir)
         }
         Update-RunManifest $manifestPath $statusPatch

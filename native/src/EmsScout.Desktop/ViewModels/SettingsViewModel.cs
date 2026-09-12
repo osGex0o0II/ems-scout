@@ -81,6 +81,15 @@ public sealed partial class SettingsViewModel(AppSettingsService settingsService
     [ObservableProperty]
     public partial Color TemperatureWarningColor { get; set; } = Color.FromArgb(255, 217, 119, 6);
 
+    [ObservableProperty]
+    public partial string DashboardNormalMode { get; set; } = "制冷";
+
+    [ObservableProperty]
+    public partial double DashboardTemperatureMin { get; set; } = 22;
+
+    [ObservableProperty]
+    public partial double DashboardTemperatureMax { get; set; } = 26;
+
     public IReadOnlyList<ColorPresetOption> OfflineStatusColorOptions { get; } =
     [
         new("浅灰", Color.FromArgb(255, 154, 160, 166)),
@@ -100,6 +109,9 @@ public sealed partial class SettingsViewModel(AppSettingsService settingsService
     public IReadOnlyList<double> RealtimeReopenEveryOptions { get; } = [0, 1, 3, 5, 10];
 
     public IReadOnlyList<double> RealtimeTimeoutOptions { get; } = [5000, 10000, 15000, 30000, 60000];
+
+    public IReadOnlyList<string> DashboardNormalModeOptions { get; } =
+        ["制冷", "制热", "通风", "送暖", "地暖", "制热+地暖"];
 
     [ObservableProperty]
     public partial ColorPresetOption? SelectedOfflineStatusColor { get; set; }
@@ -188,6 +200,9 @@ public sealed partial class SettingsViewModel(AppSettingsService settingsService
         TemperatureWarningThreshold = settings.TemperatureWarningThreshold;
         OfflineStatusColor = ParseColor(settings.OfflineStatusColor, Color.FromArgb(255, 128, 128, 128));
         TemperatureWarningColor = ParseColor(settings.TemperatureWarningColor, Color.FromArgb(255, 217, 119, 6));
+        DashboardNormalMode = settings.DashboardNormalMode;
+        DashboardTemperatureMin = settings.DashboardTemperatureMin;
+        DashboardTemperatureMax = settings.DashboardTemperatureMax;
     }
 
     private AppSettings ToSettings()
@@ -233,6 +248,9 @@ public sealed partial class SettingsViewModel(AppSettingsService settingsService
             TemperatureWarningThreshold = TemperatureWarningThreshold,
             OfflineStatusColor = ToHex(OfflineStatusColor),
             TemperatureWarningColor = ToHex(TemperatureWarningColor),
+            DashboardNormalMode = DashboardNormalMode,
+            DashboardTemperatureMin = DashboardTemperatureMin,
+            DashboardTemperatureMax = DashboardTemperatureMax,
         };
     }
 

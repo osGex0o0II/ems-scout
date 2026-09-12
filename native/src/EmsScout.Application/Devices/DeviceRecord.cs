@@ -87,12 +87,12 @@ public sealed record DeviceRecord(
 
     public bool IsWatchAbnormal => WatchState.IsAbnormal;
 
+    public string TemperatureText => string.IsNullOrWhiteSpace(IndoorTemperature)
+        ? "--"
+        : $"{IndoorTemperature} C";
+
     private bool IsRealtimeLockUsable()
     {
         return Realtime is not null && Realtime.LockStateValid;
     }
-
-    public string TemperatureText => string.IsNullOrWhiteSpace(IndoorTemperature)
-        ? "--"
-        : $"{IndoorTemperature} C";
 }

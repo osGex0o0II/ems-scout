@@ -18,12 +18,12 @@ function getZuo6(x) {
 }
 
 const BLDG_META = {
-  '1号': { full: '1号科研综合楼', fullName: '1号科研综合楼', name: '1号科研综合楼', zuoFn: null, getZuo: null, baselineCards: 1493, baselineSubAreas: 30, estimateTime: '2分钟' },
-  '2号': { full: '2号学术交流中心', fullName: '2号学术交流中心', name: '2号学术交流中心', zuoFn: null, getZuo: null, baselineCards: 110, baselineSubAreas: 5, estimateTime: '15秒' },
-  '3号': { full: '3号公寓楼', fullName: '3号公寓楼', name: '3号公寓楼', zuoFn: null, getZuo: null, baselineCards: 1106, baselineSubAreas: 30, estimateTime: '2分钟' },
-  '4号': { full: '4号公寓楼', fullName: '4号公寓楼', name: '4号公寓楼', zuoFn: null, getZuo: null, baselineCards: 1096, baselineSubAreas: 30, estimateTime: '2分钟' },
-  '5号': { full: '5号综合服务中心', fullName: '5号综合服务中心', name: '5号综合服务中心', zuoFn: getZuo5, getZuo: getZuo5, baselineCards: 286, baselineSubAreas: 17, estimateTime: '30秒' },
-  '6号': { full: '6号科研楼', fullName: '6号科研楼', name: '6号科研楼', zuoFn: getZuo6, getZuo: getZuo6, baselineCards: 2480, baselineSubAreas: 31, estimateTime: '4分钟' },
+  '1号': { full: '1号科研综合楼', fullName: '1号科研综合楼', name: '1号科研综合楼', zuoFn: null, getZuo: null, estimateTime: '2分钟' },
+  '2号': { full: '2号学术交流中心', fullName: '2号学术交流中心', name: '2号学术交流中心', zuoFn: null, getZuo: null, estimateTime: '15秒' },
+  '3号': { full: '3号公寓楼', fullName: '3号公寓楼', name: '3号公寓楼', zuoFn: null, getZuo: null, estimateTime: '2分钟' },
+  '4号': { full: '4号公寓楼', fullName: '4号公寓楼', name: '4号公寓楼', zuoFn: null, getZuo: null, estimateTime: '2分钟' },
+  '5号': { full: '5号综合服务中心', fullName: '5号综合服务中心', name: '5号综合服务中心', zuoFn: getZuo5, getZuo: getZuo5, estimateTime: '30秒' },
+  '6号': { full: '6号科研楼', fullName: '6号科研楼', name: '6号科研楼', zuoFn: getZuo6, getZuo: getZuo6, estimateTime: '4分钟' },
 };
 
 const BUILDING_IDENTITY_RULES = {
@@ -79,18 +79,11 @@ function getZone(x, building) {
 }
 
 function assessBuildingIdentity(building, cards = [], subAreaCount = null) {
-  const meta = BLDG_META[building] || {};
   const rule = BUILDING_IDENTITY_RULES[building] || {};
   const names = Array.isArray(cards)
     ? cards.map(c => String(c && c.name || '').trim()).filter(Boolean)
     : [];
   const reasons = [];
-  const subAreaCountAccepted = building === '6号' && (subAreaCount === 30 || subAreaCount === meta.baselineSubAreas);
-  if (Number.isFinite(subAreaCount) && Number.isFinite(meta.baselineSubAreas) &&
-      subAreaCount !== meta.baselineSubAreas && !subAreaCountAccepted) {
-    reasons.push(`subAreas=${subAreaCount}, expected=${meta.baselineSubAreas}`);
-  }
-
   let prefixRatio = null;
   if (names.length >= 2) {
     const matched = rule.expectedPrefix

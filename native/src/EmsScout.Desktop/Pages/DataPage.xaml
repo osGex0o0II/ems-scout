@@ -50,6 +50,7 @@
                     </Grid>
                 </Button>
                 <ComboBox
+                    MaxWidth="420"
                     MaxDropDownHeight="420"
                     AutomationProperties.Name="选择数据批次"
                     HorizontalAlignment="Left"
@@ -139,18 +140,18 @@
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <TextBlock Grid.ColumnSpan="6" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="位置定位" />
-                        <ComboBox Grid.Row="1" Header="楼栋" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.BuildingOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedBuilding, Mode=TwoWay}" SelectionChanged="BuildingFilter_SelectionChanged" />
-                        <ComboBox Grid.Row="1" Grid.Column="1" Header="座号" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.ZuoOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedZuo, Mode=TwoWay}" IsEnabled="{x:Bind ViewModel.CanFilterByZuo, Mode=OneWay}" ToolTipService.ToolTip="仅适用于5号、6号楼" />
-                        <ComboBox Grid.Row="1" Grid.Column="2" Header="楼层" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.FloorOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedFloor, Mode=TwoWay}" SelectionChanged="FloorFilter_SelectionChanged" />
-                        <ComboBox Grid.Row="1" Grid.Column="3" Header="页面" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.PageNameOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedPageName, Mode=TwoWay}" />
-                        <TextBox Grid.Row="1" Grid.Column="4" Grid.ColumnSpan="2" Header="设备名" PlaceholderText="输入设备名" Text="{x:Bind ViewModel.DeviceNameText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                        <ComboBox Grid.Row="1" MaxWidth="220" Header="楼栋" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.BuildingOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedBuilding, Mode=TwoWay}" SelectionChanged="BuildingFilter_SelectionChanged" />
+                        <ComboBox Grid.Row="1" Grid.Column="1" MaxWidth="220" Header="座号" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.ZuoOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedZuo, Mode=TwoWay}" IsEnabled="{x:Bind ViewModel.CanFilterByZuo, Mode=OneWay}" ToolTipService.ToolTip="仅适用于5号、6号楼" />
+                        <ComboBox Grid.Row="1" Grid.Column="2" MaxWidth="220" Header="楼层" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.FloorOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedFloor, Mode=TwoWay}" SelectionChanged="FloorFilter_SelectionChanged" />
+                        <ComboBox Grid.Row="1" Grid.Column="3" MaxWidth="220" Header="页面" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.PageNameOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedPageName, Mode=TwoWay}" />
+                        <TextBox Grid.Row="1" Grid.Column="4" Grid.ColumnSpan="2" MaxWidth="420" Header="设备名" PlaceholderText="输入设备名" Text="{x:Bind ViewModel.DeviceNameText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                         <TextBlock Grid.Row="2" Grid.ColumnSpan="6" Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="状态筛选" />
-                        <ComboBox Grid.Row="3" Header="区域" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.AreaOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedArea, Mode=TwoWay}" />
-                        <ComboBox Grid.Row="3" Grid.Column="1" Header="开关机状态" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.CommunicationOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedCommunication, Mode=TwoWay}" />
-                        <ComboBox Grid.Row="3" Grid.Column="2" Header="模式" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.ModeOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedMode, Mode=TwoWay}" />
-                        <ComboBox Grid.Row="3" Grid.Column="3" Header="风速" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.FanOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedFan, Mode=TwoWay}" />
-                        <ComboBox Grid.Row="3" Grid.Column="4" Header="设置温度(℃)" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.SetTemperatureOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedSetTemperature, Mode=TwoWay}" />
-                        <ComboBox Grid.Row="3" Grid.Column="5" Header="集控锁定状态" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.RealtimeLockOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedRealtimeLock, Mode=TwoWay}" />
+                        <ComboBox Grid.Row="3" MaxWidth="220" Header="区域" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.AreaOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedArea, Mode=TwoWay}" />
+                        <ComboBox Grid.Row="3" Grid.Column="1" MaxWidth="220" Header="开关机状态" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.CommunicationOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedCommunication, Mode=TwoWay}" />
+                        <ComboBox Grid.Row="3" Grid.Column="2" MaxWidth="220" Header="模式" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.ModeOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedMode, Mode=TwoWay}" />
+                        <ComboBox Grid.Row="3" Grid.Column="3" MaxWidth="220" Header="风速" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.FanOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedFan, Mode=TwoWay}" />
+                        <ComboBox Grid.Row="3" Grid.Column="4" MaxWidth="220" Header="设置温度(℃)" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.SetTemperatureOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedSetTemperature, Mode=TwoWay}" />
+                        <ComboBox Grid.Row="3" Grid.Column="5" MaxWidth="220" Header="集控锁定状态" DisplayMemberPath="DisplayLabel" ItemsSource="{x:Bind ViewModel.RealtimeLockOptions, Mode=OneWay}" SelectedItem="{x:Bind ViewModel.SelectedRealtimeLock, Mode=TwoWay}" />
                     </Grid>
 
             </Grid>

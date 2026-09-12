@@ -54,7 +54,7 @@ public sealed record CollectionRunFilter(
     }
 
     private static DateTimeOffset ParseTimestamp(string value) =>
-        DateTimeOffset.TryParse(value, out var parsed)
+        StoredTimestamp.TryParse(value, out var parsed)
             ? parsed
             : DateTimeOffset.MinValue;
 }

@@ -1,3 +1,4 @@
+using EmsScout.Application;
 using EmsScout.Application.Collection;
 
 namespace EmsScout.Desktop.ViewModels;
@@ -50,7 +51,7 @@ public sealed class DataSourceOption
 
     private static string FormatDateTime(string value)
     {
-        return DateTimeOffset.TryParse(value, out var parsed)
+        return StoredTimestamp.TryParse(value, out var parsed)
             ? parsed.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
             : value;
     }

@@ -91,16 +91,17 @@
             <NavigationView.Content>
                 <ScrollViewer
                     Padding="14,0,0,12"
-                    HorizontalAlignment="Left"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch"
                     HorizontalScrollBarVisibility="Disabled"
-                    MaxWidth="860"
                     VerticalScrollBarVisibility="Auto">
-                    <Grid HorizontalAlignment="Stretch" MaxWidth="820">
-                        <StackPanel x:Name="ConnectionSection" Spacing="12">
+                    <Grid HorizontalAlignment="Stretch">
+                        <StackPanel x:Name="ConnectionSection" MaxWidth="640" HorizontalAlignment="Left" Spacing="12">
                             <TextBlock Style="{StaticResource SectionTitleStyle}" Text="EMS 连接" />
-                            <TextBox Header="EMS 地址" Text="{x:Bind ViewModel.EmsUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                            <TextBox Header="EMS 地址" MaxWidth="640" Text="{x:Bind ViewModel.EmsUrl, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                             <NumberBox
                                 Header="Edge CDP 端口"
+                                MaxWidth="220"
                                 LargeChange="100"
                                 Minimum="1"
                                 Maximum="65535"
@@ -109,14 +110,14 @@
                                 Value="{x:Bind ViewModel.EdgeCdpPort, Mode=TwoWay}" />
                         </StackPanel>
 
-                        <StackPanel x:Name="DirectoriesSection" Spacing="12" Visibility="Collapsed">
+                        <StackPanel x:Name="DirectoriesSection" MaxWidth="640" HorizontalAlignment="Left" Spacing="12" Visibility="Collapsed">
                             <TextBlock Style="{StaticResource SectionTitleStyle}" Text="目录" />
                             <Grid ColumnSpacing="8">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-                                <TextBox Header="数据目录" Text="{x:Bind ViewModel.DataDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                <TextBox Header="数据目录" MaxWidth="640" Text="{x:Bind ViewModel.DataDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                 <Button
                                     Grid.Column="1"
                                     VerticalAlignment="Bottom"
@@ -129,16 +130,48 @@
                                     </StackPanel>
                                 </Button>
                             </Grid>
-                            <TextBox Header="导出目录" Text="{x:Bind ViewModel.ExportDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                            <TextBox Header="导出目录" MaxWidth="640" Text="{x:Bind ViewModel.ExportDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                             <ToggleSwitch Header="记录最近导出" OnContent="开" OffContent="关" IsOn="{x:Bind ViewModel.TrackRecentExports, Mode=TwoWay}" />
                         </StackPanel>
 
-                        <StackPanel x:Name="DataTableSection" Spacing="12" Visibility="Collapsed">
+                        <StackPanel
+                            x:Name="DataTableSection"
+                            MaxWidth="560"
+                            HorizontalAlignment="Left"
+                            Spacing="12"
+                            Visibility="Collapsed">
                             <TextBlock Style="{StaticResource SectionTitleStyle}" Text="数据表" />
                             <ToggleSwitch Header="紧凑数据表" OnContent="开" OffContent="关" IsOn="{x:Bind ViewModel.CompactDataTable, Mode=TwoWay}" />
+                            <StackPanel Spacing="8">
+                                <TextBlock FontWeight="SemiBold" Text="总览异常判定" />
+                                <ComboBox
+                                    Header="正常运行模式"
+                                    MaxWidth="260"
+                                    ItemsSource="{x:Bind ViewModel.DashboardNormalModeOptions, Mode=OneWay}"
+                                    SelectedItem="{x:Bind ViewModel.DashboardNormalMode, Mode=TwoWay}" />
+                                <NumberBox
+                                    Header="设定温度下限（℃）"
+                                    MaxWidth="420"
+                                    Minimum="5"
+                                    Maximum="40"
+                                    SmallChange="0.5"
+                                    LargeChange="1"
+                                    SpinButtonPlacementMode="Inline"
+                                    Value="{x:Bind ViewModel.DashboardTemperatureMin, Mode=TwoWay}" />
+                                <NumberBox
+                                    Header="设定温度上限（℃）"
+                                    MaxWidth="420"
+                                    Minimum="5"
+                                    Maximum="40"
+                                    SmallChange="0.5"
+                                    LargeChange="1"
+                                    SpinButtonPlacementMode="Inline"
+                                    Value="{x:Bind ViewModel.DashboardTemperatureMax, Mode=TwoWay}" />
+                            </StackPanel>
                             <NumberBox
                                 Header="温差警告阈值（℃）"
                                 Description="环境温度与设置温度的差额超过此值时标记。"
+                                MaxWidth="420"
                                 Minimum="0"
                                 Maximum="50"
                                 SmallChange="0.5"
@@ -147,6 +180,7 @@
                                 Value="{x:Bind ViewModel.TemperatureWarningThreshold, Mode=TwoWay}" />
                             <ComboBox
                                 Header="离线状态颜色"
+                                MaxWidth="260"
                                 ItemsSource="{x:Bind ViewModel.OfflineStatusColorOptions, Mode=OneWay}"
                                 SelectedItem="{x:Bind ViewModel.SelectedOfflineStatusColor, Mode=TwoWay}">
                                 <ComboBox.ItemTemplate>
@@ -160,6 +194,7 @@
                             </ComboBox>
                             <ComboBox
                                 Header="温差警告颜色"
+                                MaxWidth="260"
                                 ItemsSource="{x:Bind ViewModel.TemperatureWarningColorOptions, Mode=OneWay}"
                                 SelectedItem="{x:Bind ViewModel.SelectedTemperatureWarningColor, Mode=TwoWay}">
                                 <ComboBox.ItemTemplate>
@@ -173,14 +208,14 @@
                             </ComboBox>
                         </StackPanel>
 
-                        <StackPanel x:Name="AppearanceSection" Spacing="12" Visibility="Collapsed">
+                        <StackPanel x:Name="AppearanceSection" MaxWidth="420" HorizontalAlignment="Left" Spacing="12" Visibility="Collapsed">
                             <TextBlock Style="{StaticResource SectionTitleStyle}" Text="外观" />
-                            <ComboBox Header="主题" SelectedIndex="{x:Bind ViewModel.ThemeIndex, Mode=TwoWay}">
+                            <ComboBox Header="主题" MaxWidth="260" SelectedIndex="{x:Bind ViewModel.ThemeIndex, Mode=TwoWay}">
                                 <ComboBoxItem Content="跟随系统" />
                                 <ComboBoxItem Content="浅色" />
                                 <ComboBoxItem Content="深色" />
                             </ComboBox>
-                            <ComboBox Header="页面切换" SelectedIndex="{x:Bind ViewModel.PageTransitionStyleIndex, Mode=TwoWay}">
+                            <ComboBox Header="页面切换" MaxWidth="260" SelectedIndex="{x:Bind ViewModel.PageTransitionStyleIndex, Mode=TwoWay}">
                                 <ComboBoxItem Content="无动画" />
                                 <ComboBoxItem Content="淡入" />
                                 <ComboBoxItem Content="轻微滑入" />
@@ -189,7 +224,7 @@
                             <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="降低动效会关闭页面位移，只保留必要的即时反馈。" TextWrapping="WrapWholeWords" />
                         </StackPanel>
 
-                        <StackPanel x:Name="BehaviorSection" Spacing="12" Visibility="Collapsed">
+                        <StackPanel x:Name="BehaviorSection" MaxWidth="560" HorizontalAlignment="Left" Spacing="12" Visibility="Collapsed">
                             <TextBlock Style="{StaticResource SectionTitleStyle}" Text="启动与窗口" />
                             <ToggleSwitch Header="关闭时最小化到系统托盘" OnContent="开" OffContent="关" IsOn="{x:Bind ViewModel.CloseToTray, Mode=TwoWay}" />
                             <ToggleSwitch Header="登录系统后自动启动" OnContent="开" OffContent="关" IsOn="{x:Bind ViewModel.LaunchAtLogin, Mode=TwoWay}" />
@@ -198,11 +233,11 @@
                             <ToggleSwitch Header="在“发送到”菜单中显示 EMS Scout" OnContent="开" OffContent="关" IsOn="{x:Bind ViewModel.ShowInSendTo, Mode=TwoWay}" />
                         </StackPanel>
 
-                        <StackPanel x:Name="AdvancedSection" Spacing="12" Visibility="Collapsed">
+                        <StackPanel x:Name="AdvancedSection" MaxWidth="560" HorizontalAlignment="Left" Spacing="12" Visibility="Collapsed">
                             <TextBlock Style="{StaticResource SectionTitleStyle}" Text="高级" />
                             <StackPanel Spacing="10">
                                 <TextBlock FontWeight="SemiBold" Text="日志与诊断" />
-                                <ComboBox Header="日志输出级别" SelectedIndex="{x:Bind ViewModel.LogLevelIndex, Mode=TwoWay}">
+                                <ComboBox Header="日志输出级别" MaxWidth="260" SelectedIndex="{x:Bind ViewModel.LogLevelIndex, Mode=TwoWay}">
                                     <ComboBoxItem Content="错误" />
                                     <ComboBoxItem Content="信息" />
                                     <ComboBoxItem Content="调试" />
@@ -218,16 +253,19 @@
                                     </Grid.ColumnDefinitions>
                                     <ComboBox
                                         Header="实时批量设备数"
+                                        MaxWidth="260"
                                         ItemsSource="{x:Bind ViewModel.RealtimeBatchSizeOptions, Mode=OneWay}"
                                         SelectedItem="{x:Bind ViewModel.RealtimeBatchSize, Mode=TwoWay}" />
                                     <ComboBox
                                         Grid.Column="1"
                                         Header="设备批次重开间隔"
+                                        MaxWidth="260"
                                         ItemsSource="{x:Bind ViewModel.RealtimeReopenEveryOptions, Mode=OneWay}"
                                         SelectedItem="{x:Bind ViewModel.RealtimeReopenEvery, Mode=TwoWay}" />
                                 </Grid>
                                 <ComboBox
                                     Header="单批超时（毫秒）"
+                                    MaxWidth="260"
                                     ItemsSource="{x:Bind ViewModel.RealtimeTimeoutOptions, Mode=OneWay}"
                                     SelectedItem="{x:Bind ViewModel.RealtimeTimeoutMs, Mode=TwoWay}" />
                             </StackPanel>

@@ -166,6 +166,35 @@ public sealed class QualityAuditServiceTests
         Assert.Contains("批次 #24", report.StaleReason);
     }
 
+    [Fact]
+    public async Task LoadsRealtimeAuditReportThatMatchesTheRequestedRun()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-realtime-quality-run-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        await File.WriteAllTextAsync(Path.Combine(root, "realtime_quality_classified_old.json"), RealtimeReportJson(7));
+        await File.WriteAllTextAsync(Path.Combine(root, "realtime_quality_classified_new.json"), RealtimeReportJson(8));
+
+        var service = new JsonRealtimeQualityAuditService(() => root);
+
+        var report = await service.LoadForRunAsync(8);
+
+        Assert.NotNull(report);
+        Assert.Equal(8, report.RunId);
+        Assert.False(report.IsStale);
+    }
+
+    [Fact]
+    public async Task MarksRealtimeAuditAsStaleWhenNoFileMatchesTheRequestedRun()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-realtime-quality-run-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        await File.WriteAllTextAsync(Path.Combine(root, "realtime_quality_classified_old.json"), RealtimeReportJson(7));
+
+        var report = await new JsonRealtimeQualityAuditService(() => root).LoadForRunAsync(8);
+
+        Assert.Null(report);
+    }
+
     private static string ReportJson(long runId, int totalCards) => JsonSerializer.Serialize(new
     {
         generated_at = "2026-07-01T10:51:56.564Z",
@@ -176,5 +205,18 @@ public sealed class QualityAuditServiceTests
             issue_count = 0,
         },
         issues = Array.Empty<object>(),
+    });
+
+    private static string RealtimeReportJson(long runId) => JsonSerializer.Serialize(new
+    {
+        runId,
+        createdAt = "2026-08-31T03:00:00+08:00",
+        input = new { summaryFile = "summary.json" },
+        totalRows = 1,
+        uniqueDevices = 1,
+        collectionErrors = new { count = 0, byCategory = new { } },
+        deviceAnomalies = new { rowCount = 0, eventCount = 0, byCategory = new { } },
+        byBuilding = new { },
+        conclusion = new { collectionOk = true, note = "ok" },
     });
 }

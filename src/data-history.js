@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { BLDG_ORDER } = require('./rules');
+const { formatLocalTimestamp } = require('./time');
 
 const ROOT = path.join(__dirname, '..');
 const DB_PATH = process.env.EMS_DB_PATH || path.join(ROOT, 'out', 'ac.db');
@@ -159,8 +160,8 @@ function ensureHistorySchema(db) {
       source TEXT NOT NULL DEFAULT 'manual',
       enabled INTEGER NOT NULL DEFAULT 1,
       note TEXT NOT NULL DEFAULT '',
-      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60))
     );
     CREATE UNIQUE INDEX IF NOT EXISTS idx_floor_catalog_key
       ON floor_catalog(building, floor_label);
@@ -191,6 +192,19 @@ function uniqueRunKey(db, base) {
   return key;
 }
 
+function normalizeStoredTimestamp(value, fallback = formatLocalTimestamp()) {
+  const text = value instanceof Date
+    ? value.toISOString()
+    : String(value ?? '').trim();
+  if (!text) return fallback;
+
+  // Legacy EMS exports omitted the offset. Treat those values as UTC once;
+  // new and offset-bearing values retain their represented instant.
+  const candidate = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(text) ? text : `${text}Z`;
+  const parsed = new Date(candidate);
+  return Number.isNaN(parsed.getTime()) ? fallback : formatLocalTimestamp(parsed);
+}
+
 function localRunKey(date = new Date()) {
   const pad = n => String(n).padStart(2, '0');
   return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
@@ -209,6 +223,9 @@ function listRuns(db, options = {}) {
     LIMIT ?
   `).all(limit).map(r => ({
     ...r,
+    started_at: r.started_at ? normalizeStoredTimestamp(r.started_at, r.started_at) : r.started_at,
+    completed_at: normalizeStoredTimestamp(r.completed_at, r.completed_at),
+    imported_at: normalizeStoredTimestamp(r.imported_at, r.imported_at),
     buildings: parseJsonArray(r.buildings),
     is_anomaly: Number(r.is_anomaly || 0),
     label: runLabel(r),
@@ -216,10 +233,11 @@ function listRuns(db, options = {}) {
 }
 
 function runLabel(run) {
-  const dt = new Date(run.completed_at);
+  const normalized = normalizeStoredTimestamp(run.completed_at, run.completed_at);
+  const dt = new Date(normalized);
   const pad = n => String(n).padStart(2, '0');
   const ts = Number.isNaN(dt.getTime())
-    ? run.completed_at
+    ? normalized
     : `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
   const buildings = parseJsonArray(run.buildings).join(',');
   return `${ts} ${run.scope === 'partial' ? buildings : '全量'} (${run.card_count || 0}张)`;
@@ -256,6 +274,7 @@ function restoreCurrentFromRun(db, runId) {
   if (!id) throw new Error('Run id is required');
   const run = db.prepare('SELECT id, run_key, completed_at, buildings FROM collection_runs WHERE id = ?').get(id);
   if (!run) throw new Error('Run not found: ' + runId);
+  const runCompletedAt = normalizeStoredTimestamp(run.completed_at);
 
   const tx = db.transaction(() => {
     db.exec('DELETE FROM cards; DELETE FROM pages; DELETE FROM sub_areas; DELETE FROM buildings;');
@@ -284,7 +303,11 @@ function restoreCurrentFromRun(db, runId) {
       ORDER BY building
     `).all(id);
     for (const b of bRows) {
-      insertBuilding.run(b.building, b.sub_area_count, b.menu_clicked, b.updated_at || run.completed_at);
+      insertBuilding.run(
+        b.building,
+        b.sub_area_count,
+        b.menu_clicked,
+        normalizeStoredTimestamp(b.updated_at, runCompletedAt));
     }
 
     const runSaRows = db.prepare(`
@@ -309,7 +332,19 @@ function restoreCurrentFromRun(db, runId) {
     for (const p of runPageRows) {
       const saId = saMap.get(p.run_sub_area_id);
       if (!saId) continue;
-      const res = insertPage.run(saId, p.page_name, p.count, p.raw_count, p.unique_count, p.duplicate_names, p.on_href, p.off_href, p.layout, p.quality_reason, p.collected_at, p.err);
+      const res = insertPage.run(
+        saId,
+        p.page_name,
+        p.count,
+        p.raw_count,
+        p.unique_count,
+        p.duplicate_names,
+        p.on_href,
+        p.off_href,
+        p.layout,
+        p.quality_reason,
+        normalizeStoredTimestamp(p.collected_at, runCompletedAt),
+        p.err);
       pageMap.set(p.id, Number(res.lastInsertRowid));
     }
 
@@ -332,7 +367,7 @@ function restoreCurrentFromRun(db, runId) {
   return {
     id,
     run_key: run.run_key,
-    completed_at: run.completed_at,
+    completed_at: runCompletedAt,
     buildings: parseJsonArray(run.buildings),
   };
 }
@@ -413,7 +448,10 @@ function createRunFromCurrent(db, options = {}) {
   `).get(...selected).c;
   if (!hasData) return null;
 
-  const now = options.completedAt || new Date().toISOString();
+  const now = normalizeStoredTimestamp(options.completedAt);
+  const startedAt = options.startedAt
+    ? normalizeStoredTimestamp(options.startedAt, now)
+    : null;
   const runKey = uniqueRunKey(db, options.runKey || localRunKey(new Date(now)));
   const scope = selected.length && selected.length < BLDG_ORDER.length ? 'partial' : 'full';
   const buildings = selected.length ? selected : db.prepare('SELECT DISTINCT building FROM sub_areas ORDER BY building').all().map(r => r.building);
@@ -450,9 +488,9 @@ function createRunFromCurrent(db, options = {}) {
   const tx = db.transaction(() => {
     const res = insertRun.run(
       runKey,
-      options.startedAt || null,
+      startedAt,
       now,
-      new Date().toISOString(),
+      formatLocalTimestamp(),
       options.status || 'completed',
       scope,
       JSON.stringify(buildings),
@@ -468,7 +506,12 @@ function createRunFromCurrent(db, options = {}) {
       ORDER BY building
     `).all(...buildings);
     for (const b of bRows) {
-      insertRunBuilding.run(runId, b.building, b.sub_area_count, b.menu_clicked, b.updated_at);
+      insertRunBuilding.run(
+        runId,
+        b.building,
+        b.sub_area_count,
+        b.menu_clicked,
+        normalizeStoredTimestamp(b.updated_at, now));
     }
 
     const saRows = db.prepare(`
@@ -488,7 +531,21 @@ function createRunFromCurrent(db, options = {}) {
         ORDER BY id
       `).all(sa.id);
       for (const p of pageRows) {
-        const pageRes = insertRunPage.run(runId, runSaId, p.id, p.page_name, p.count, p.raw_count, p.unique_count, p.duplicate_names, p.on_href, p.off_href, p.layout, p.quality_reason, p.collected_at, p.err);
+        const pageRes = insertRunPage.run(
+          runId,
+          runSaId,
+          p.id,
+          p.page_name,
+          p.count,
+          p.raw_count,
+          p.unique_count,
+          p.duplicate_names,
+          p.on_href,
+          p.off_href,
+          p.layout,
+          p.quality_reason,
+          normalizeStoredTimestamp(p.collected_at, now),
+          p.err);
         pageMap.set(p.id, Number(pageRes.lastInsertRowid));
       }
     }
@@ -547,10 +604,10 @@ function seedCurrentRun(db) {
     syncFloorCatalogFromCurrent(db);
     return null;
   }
-  let completedAt = new Date().toISOString();
+  let completedAt = formatLocalTimestamp();
   try {
     const row = db.prepare('SELECT MAX(updated_at) AS t FROM buildings WHERE updated_at IS NOT NULL').get();
-    if (row && row.t) completedAt = row.t;
+    if (row && row.t) completedAt = normalizeStoredTimestamp(row.t, completedAt);
   } catch {}
   return createRunFromCurrent(db, {
     completedAt,
@@ -566,7 +623,7 @@ function tableCount(db, table) {
 
 function syncFloorCatalogFromCurrent(db) {
   ensureHistorySchema(db);
-  const now = new Date().toISOString();
+  const now = formatLocalTimestamp();
   const rows = db.prepare(`
     SELECT building, floor
     FROM sub_areas
@@ -603,7 +660,7 @@ function saveFloorCatalog(db, input) {
   const enabled = input.enabled === false || input.enabled === 0 ? 0 : 1;
   if (!BLDG_ORDER.includes(building)) throw new Error('Invalid building: ' + building);
   if (!floorLabel || !Number.isFinite(Number(floorValue))) throw new Error('Invalid floor: ' + floorLabel);
-  const now = new Date().toISOString();
+  const now = formatLocalTimestamp();
   db.prepare(`
     INSERT INTO floor_catalog (building, floor_label, floor_value, source, enabled, note, created_at, updated_at)
     VALUES (?, ?, ?, 'manual', ?, ?, ?, ?)
@@ -650,6 +707,7 @@ module.exports = {
   restoreCurrentFromRun,
   deleteRun,
   resolveRunId,
+  normalizeStoredTimestamp,
   sourceForRun,
   createRunFromCurrent,
   seedCurrentRun,

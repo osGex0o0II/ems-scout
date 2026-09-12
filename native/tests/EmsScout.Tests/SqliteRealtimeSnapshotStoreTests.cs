@@ -96,6 +96,80 @@ public sealed class SqliteRealtimeSnapshotStoreTests
         Assert.Equal(0L, await command.ExecuteScalarAsync());
     }
 
+    [Fact]
+    public async Task DoesNotCommitPartialSnapshotWhenOneBuildingFileIsMissing()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-realtime-snapshot-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var databasePath = Path.Combine(root, "ac.db");
+        var outputDirectory = Path.Combine(root, "out");
+        Directory.CreateDirectory(outputDirectory);
+        await CreateDatabaseAsync(databasePath);
+        await File.WriteAllTextAsync(
+            Path.Combine(outputDirectory, "realtime_1号_latest.json"),
+            """
+            {
+              "runId": 1,
+              "capturedAt": "2026-08-31T03:00:00+08:00",
+              "rows": [{ "building": "1号", "name": "1-0101-KT" }]
+            }
+            """);
+
+        var store = new SqliteRealtimeSnapshotStore(() => databasePath);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.SaveAsync(1, outputDirectory, ["1号", "2号"]));
+
+        await using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM run_realtime_details";
+        Assert.Equal(0L, await command.ExecuteScalarAsync());
+    }
+
+    [Fact]
+    public async Task RejectsRealtimeSnapshotWhoseRowsDoNotMatchRunBuildingCount()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-realtime-snapshot-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var databasePath = Path.Combine(root, "ac.db");
+        var outputDirectory = Path.Combine(root, "out");
+        Directory.CreateDirectory(outputDirectory);
+        await CreateDatabaseAsync(databasePath);
+        await ExecuteAsync(databasePath, """
+            CREATE TABLE run_sub_areas (id INTEGER PRIMARY KEY, run_id INTEGER, building TEXT);
+            CREATE TABLE run_pages (id INTEGER PRIMARY KEY, run_id INTEGER, run_sub_area_id INTEGER);
+            CREATE TABLE run_cards (id INTEGER PRIMARY KEY, run_id INTEGER, run_page_id INTEGER);
+            INSERT INTO run_sub_areas VALUES (1, 1, '1号');
+            INSERT INTO run_pages VALUES (1, 1, 1);
+            INSERT INTO run_cards VALUES (1, 1, 1);
+            """);
+        await File.WriteAllTextAsync(
+            Path.Combine(outputDirectory, "realtime_1号_latest.json"),
+            """
+            {
+              "runId": 1,
+              "capturedAt": "2026-08-31T03:00:00+08:00",
+              "rows": [
+                { "building": "1号", "name": "1-0101-KT" },
+                { "building": "1号", "name": "1-0102-KT" }
+              ]
+            }
+            """);
+
+        var store = new SqliteRealtimeSnapshotStore(() => databasePath);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => store.SaveAsync(1, outputDirectory, ["1号"]));
+    }
+
+    private static async Task ExecuteAsync(string databasePath, string sql)
+    {
+        await using var connection = new SqliteConnection($"Data Source={databasePath}");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
+        await command.ExecuteNonQueryAsync();
+    }
+
     private static async Task CreateDatabaseAsync(string databasePath)
     {
         await using var connection = new SqliteConnection($"Data Source={databasePath}");

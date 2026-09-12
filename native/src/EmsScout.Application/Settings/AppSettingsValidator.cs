@@ -29,6 +29,19 @@ public static class AppSettingsValidator
             return "导出目录不能为空";
         }
 
+        if (settings.DashboardTemperatureMin > settings.DashboardTemperatureMax)
+        {
+            return "总览温度下限不能大于上限";
+        }
+
+        if (!double.IsFinite(settings.DashboardTemperatureMin) ||
+            !double.IsFinite(settings.DashboardTemperatureMax) ||
+            settings.DashboardTemperatureMin is < 5 or > 40 ||
+            settings.DashboardTemperatureMax is < 5 or > 40)
+        {
+            return "总览温度范围必须在 5-40℃ 之间";
+        }
+
         return null;
     }
 

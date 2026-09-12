@@ -1,4 +1,5 @@
 using System.Text.Json;
+using EmsScout.Application;
 using EmsScout.Application.Devices;
 using EmsScout.Infrastructure.Realtime;
 using Microsoft.Data.Sqlite;
@@ -31,7 +32,49 @@ public sealed class SqliteRealtimeSnapshotStore(Func<string> databasePathResolve
             .ToArray();
         if (selectedBuildings.Length == 0)
         {
-            return;
+            throw new InvalidOperationException("未指定需要保存的实时详情楼栋。");
+        }
+
+        var expectedCounts = await LoadRunCardCountsAsync(connection, runId, cancellationToken).ConfigureAwait(false);
+        var pendingRows = new Dictionary<string, IReadOnlyList<RealtimeDetailRecord>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var building in selectedBuildings)
+        {
+            var file = RealtimeLatestJsonSource.FindLatestFile(dataDirectory, building);
+            if (string.IsNullOrWhiteSpace(file))
+            {
+                throw new InvalidOperationException($"缺少 {building} 的实时详情文件，未保存任何快照数据。请重新采集实时详情。");
+            }
+
+            await using var stream = File.OpenRead(file);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var sourceFile = Path.GetRelativePath(dataDirectory, file);
+            var sourceRunId = RealtimeLatestJsonSource.ReadRunId(document.RootElement);
+            if (sourceRunId != runId)
+            {
+                var actual = sourceRunId is null ? "缺失" : $"#{sourceRunId}";
+                throw new InvalidOperationException(
+                    $"实时详情文件 {sourceFile} 批次不匹配：目标批次 #{runId}，文件批次 {actual}。请重新采集实时详情。");
+            }
+
+            if (!RealtimeLatestJsonSource.HasSourceTimestamp(document.RootElement))
+            {
+                throw new InvalidOperationException($"实时详情文件 {sourceFile} 缺少采集时间，未保存任何快照数据。");
+            }
+
+            var updatedAt = RealtimeLatestJsonSource.ReadSourceUpdatedAt(document.RootElement, file);
+            var rows = RealtimeLatestJsonSource.ReadRows(document.RootElement, building, sourceFile, updatedAt);
+            if (rows.Count == 0)
+            {
+                throw new InvalidOperationException($"{building} 的实时详情 rows 为空，未保存任何快照数据。");
+            }
+
+            if (expectedCounts.TryGetValue(building, out var expected) && rows.Count != expected)
+            {
+                throw new InvalidOperationException(
+                    $"{building} 实时详情数量 {rows.Count} 与批次 #{runId} 基础卡片数 {expected} 不一致，未保存任何快照数据。");
+            }
+
+            pendingRows[building] = rows;
         }
 
         await using (var delete = connection.CreateCommand())
@@ -70,25 +113,7 @@ public sealed class SqliteRealtimeSnapshotStore(Func<string> databasePathResolve
 
         foreach (var building in selectedBuildings)
         {
-            var file = RealtimeLatestJsonSource.FindLatestFile(dataDirectory, building);
-            if (string.IsNullOrWhiteSpace(file))
-            {
-                continue;
-            }
-
-            await using var stream = File.OpenRead(file);
-            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken).ConfigureAwait(false);
-            var sourceFile = Path.GetRelativePath(dataDirectory, file);
-            var sourceRunId = RealtimeLatestJsonSource.ReadRunId(document.RootElement);
-            if (sourceRunId != runId)
-            {
-                var actual = sourceRunId is null ? "缺失" : $"#{sourceRunId}";
-                throw new InvalidOperationException(
-                    $"实时详情文件 {sourceFile} 批次不匹配：目标批次 #{runId}，文件批次 {actual}。请重新采集实时详情。");
-            }
-            var updatedAt = RealtimeLatestJsonSource.ReadSourceUpdatedAt(document.RootElement, file);
-            var rows = RealtimeLatestJsonSource.ReadRows(document.RootElement, building, sourceFile, updatedAt);
-            foreach (var row in rows)
+            foreach (var row in pendingRows[building])
             {
                 runIdParameter.Value = runId;
                 sourceRowIdParameter.Value = row.RowId;
@@ -98,7 +123,7 @@ public sealed class SqliteRealtimeSnapshotStore(Func<string> databasePathResolve
                 pageNameParameter.Value = row.PageName;
                 nameParameter.Value = row.Name;
                 sourceFileParameter.Value = row.SourceFile;
-                sourceUpdatedAtParameter.Value = row.SourceUpdatedAt.ToString("O");
+                sourceUpdatedAtParameter.Value = StoredTimestamp.FormatLocal(row.SourceUpdatedAt);
                 payloadParameter.Value = JsonSerializer.Serialize(row, JsonOptions);
                 await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             }
@@ -142,9 +167,68 @@ public sealed class SqliteRealtimeSnapshotStore(Func<string> databasePathResolve
             }
         }
 
-        return rows.Count == 0
-            ? new RealtimeDetailSet([], RealtimeDetailAvailability.MissingSnapshot)
-            : new RealtimeDetailSet(rows);
+        if (rows.Count == 0)
+        {
+            return new RealtimeDetailSet([], RealtimeDetailAvailability.MissingSnapshot,
+                $"批次 #{runId} 未保存实时详情快照。");
+        }
+
+        var expectedCounts = await LoadRunCardCountsAsync(connection, runId, cancellationToken).ConfigureAwait(false);
+        if (expectedCounts.Count > 0 && buildingSet.Count > 0)
+        {
+            var actualCounts = rows
+                .GroupBy(row => row.Building, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+            foreach (var building in buildingSet)
+            {
+                if (!expectedCounts.TryGetValue(building, out var expected))
+                {
+                    return new RealtimeDetailSet([], RealtimeDetailAvailability.Unavailable,
+                        $"批次 #{runId} 没有 {building} 的基础卡片范围，实时详情无法校验。");
+                }
+
+                var actual = actualCounts.GetValueOrDefault(building);
+                if (actual != expected)
+                {
+                    return new RealtimeDetailSet([], RealtimeDetailAvailability.Unavailable,
+                        $"批次 #{runId} 的 {building} 实时详情数量 {actual} 与基础卡片数 {expected} 不一致。");
+                }
+            }
+        }
+
+        return new RealtimeDetailSet(rows, RealtimeDetailAvailability.Available, null, runId);
+    }
+
+    private static async Task<Dictionary<string, int>> LoadRunCardCountsAsync(
+        SqliteConnection connection,
+        long runId,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, "run_cards", cancellationToken).ConfigureAwait(false) ||
+            !await TableExistsAsync(connection, "run_pages", cancellationToken).ConfigureAwait(false) ||
+            !await TableExistsAsync(connection, "run_sub_areas", cancellationToken).ConfigureAwait(false))
+        {
+            return new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT sa.building, COUNT(*)
+            FROM run_cards c
+            JOIN run_pages p ON p.id = c.run_page_id AND p.run_id = c.run_id
+            JOIN run_sub_areas sa ON sa.id = p.run_sub_area_id AND sa.run_id = c.run_id
+            WHERE c.run_id = $run_id
+            GROUP BY sa.building
+            """;
+        command.Parameters.AddWithValue("$run_id", runId);
+        var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            result[reader.GetString(0)] = reader.GetInt32(1);
+        }
+
+        return result;
     }
 
     private async Task<SqliteConnection> OpenConnectionAsync(

@@ -246,7 +246,7 @@
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBox Header="区域组名" Text="{x:Bind ViewModel.EditName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBox Header="区域组名" MaxWidth="520" Text="{x:Bind ViewModel.EditName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                     <ToggleSwitch Grid.Column="1" Header="首页显示" IsOn="{x:Bind ViewModel.EditEnabled, Mode=TwoWay}" />
                                 </Grid>
 
@@ -260,10 +260,11 @@
                                             <RowDefinition Height="Auto" />
                                             <RowDefinition Height="Auto" />
                                         </Grid.RowDefinitions>
-                                        <TextBox Header="用途" PlaceholderText="巡检 / 装修 / 未交付" Text="{x:Bind ViewModel.EditAreaLabel, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBox Header="用途" MaxWidth="360" PlaceholderText="巡检 / 装修 / 未交付" Text="{x:Bind ViewModel.EditAreaLabel, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                         <ComboBox
                                             Grid.Column="1"
                                             Header="优先级"
+                                            MaxWidth="220"
                                             SelectedValue="{x:Bind ViewModel.EditPriority, Mode=TwoWay}"
                                             SelectedValuePath="Content">
                                             <ComboBoxItem Content="普通" />
@@ -275,6 +276,7 @@
                                             Grid.ColumnSpan="2"
                                             Header="说明"
                                             AcceptsReturn="True"
+                                            MaxWidth="720"
                                             MinHeight="58"
                                             Text="{x:Bind ViewModel.EditDescription, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                     </Grid>
@@ -324,16 +326,19 @@
                                 </Grid.ColumnDefinitions>
                                 <ComboBox
                                     Header="楼栋"
+                                    MaxWidth="180"
                                     ItemsSource="{x:Bind ViewModel.BuildingOptions, Mode=OneWay}"
                                     SelectedItem="{x:Bind ViewModel.FloorCatalogBuilding, Mode=TwoWay}" />
                                 <TextBox
                                     Grid.Column="1"
                                     Header="楼层"
+                                    MaxWidth="180"
                                     PlaceholderText="1F / B1F / 2.5F"
                                     Text="{x:Bind ViewModel.FloorCatalogLabel, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                 <TextBox
                                     Grid.Column="2"
                                     Header="备注"
+                                    MaxWidth="420"
                                     PlaceholderText="人工新增楼层目录"
                                     Text="{x:Bind ViewModel.FloorCatalogNote, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                 <Button
@@ -442,6 +447,7 @@
                                 </Grid.RowDefinitions>
                                 <ComboBox
                                     Header="添加方式"
+                                    MaxWidth="220"
                                     DisplayMemberPath="Label"
                                     IsEnabled="{x:Bind ViewModel.CanEditMemberTarget, Mode=OneWay}"
                                     ItemsSource="{x:Bind ViewModel.TargetTypes, Mode=OneWay}"
@@ -450,6 +456,7 @@
                                 <ComboBox
                                     Grid.Column="1"
                                     Header="楼栋"
+                                    MaxWidth="220"
                                     IsEnabled="{x:Bind ViewModel.CanEditMemberTarget, Mode=OneWay}"
                                     ItemsSource="{x:Bind ViewModel.BuildingOptions, Mode=OneWay}"
                                     SelectedItem="{x:Bind ViewModel.TargetBuilding, Mode=TwoWay}"
@@ -457,6 +464,7 @@
                                 <ComboBox
                                     Grid.Column="2"
                                     Header="楼层"
+                                    MaxWidth="220"
                                     DisplayMemberPath="DisplayLabel"
                                     IsEnabled="{x:Bind ViewModel.CanEditMemberTarget, Mode=OneWay}"
                                     ItemsSource="{x:Bind ViewModel.FloorOptions, Mode=OneWay}"
@@ -467,6 +475,7 @@
                                     Grid.Row="1"
                                     Grid.ColumnSpan="3"
                                     Header="搜索"
+                                    MaxWidth="720"
                                     IsEnabled="{x:Bind ViewModel.CanSearchMemberOptions, Mode=OneWay}"
                                     PlaceholderText="输入设备名或位置"
                                      Text="{x:Bind ViewModel.TargetOptionSearchText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
@@ -475,6 +484,7 @@
                                     Grid.Row="1"
                                     Grid.ColumnSpan="3"
                                     Header="名称条件"
+                                    MaxWidth="720"
                                     IsEnabled="{x:Bind ViewModel.CanEditMemberTarget, Mode=OneWay}"
                                     PlaceholderText="例如：GQ、KT-01、会议室"
                                     Text="{x:Bind ViewModel.TargetNamePattern, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
@@ -483,6 +493,7 @@
                                     Grid.Row="2"
                                     Grid.ColumnSpan="3"
                                     Header="选择设备或区域"
+                                    MaxWidth="720"
                                     DisplayMemberPath="Label"
                                     IsEnabled="{x:Bind ViewModel.CanSelectMemberOption, Mode=OneWay}"
                                     ItemsSource="{x:Bind ViewModel.TargetOptions, Mode=OneWay}"
@@ -491,6 +502,7 @@
                                 <TextBox
                                     Grid.Row="3"
                                     Header="备注"
+                                    MaxWidth="720"
                                     IsEnabled="{x:Bind ViewModel.CanEditMemberTarget, Mode=OneWay}"
                                     PlaceholderText="可填写巡检原因或临时状态"
                                     Text="{x:Bind ViewModel.TargetNote, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />

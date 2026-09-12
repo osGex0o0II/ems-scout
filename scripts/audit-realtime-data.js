@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { formatLocalTimestamp } = require('../src/time');
 const { installRealtimeLog } = require('./realtime-logger');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -392,7 +393,8 @@ function main() {
   const byBuilding = {};
   const seenDevIds = new Map();
   const output = {
-    createdAt: new Date().toISOString(),
+    runId: Number(input.summary?.runId) > 0 ? Number(input.summary.runId) : null,
+    createdAt: formatLocalTimestamp(),
     input: {
       mode: input.mode,
       summaryFile: input.summaryFile ? path.relative(ROOT, input.summaryFile) : '',

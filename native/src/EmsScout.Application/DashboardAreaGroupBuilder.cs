@@ -8,8 +8,10 @@ public static class DashboardAreaGroupBuilder
 {
     public static IReadOnlyList<DashboardAreaGroupSummary> Build(
         IReadOnlyList<DeviceRecord> devices,
-        AreaGroupSet groupSet)
+        AreaGroupSet groupSet,
+        DashboardAnomalySettings? anomalySettings = null)
     {
+        anomalySettings ??= DashboardAnomalySettings.Default;
         var itemsByGroup = groupSet.Items
             .GroupBy(item => item.GroupId)
             .ToDictionary(group => group.Key, group => (IReadOnlyList<AreaGroupItemRecord>)group.ToArray());
@@ -23,7 +25,8 @@ public static class DashboardAreaGroupBuilder
             .Select(group => BuildSummary(
                 group,
                 devices,
-                itemsByGroup.GetValueOrDefault(group.Id, [])))
+                itemsByGroup.GetValueOrDefault(group.Id, []),
+                anomalySettings))
             .ToArray();
     }
 
@@ -35,7 +38,8 @@ public static class DashboardAreaGroupBuilder
     private static DashboardAreaGroupSummary BuildSummary(
         AreaGroupRecord group,
         IReadOnlyList<DeviceRecord> devices,
-        IReadOnlyList<AreaGroupItemRecord> items)
+        IReadOnlyList<AreaGroupItemRecord> items,
+        DashboardAnomalySettings anomalySettings)
     {
         var matches = IsSystemGroup(group)
             ? devices.Where(device => MatchesSystemGroup(device, group.SystemKey)).ToArray()
@@ -46,6 +50,20 @@ public static class DashboardAreaGroupBuilder
                 DeviceAreaClassifier.PublicArea,
                 StringComparison.OrdinalIgnoreCase))
             .ToArray();
+        var onlineMatches = matches
+            .Where(device => device.CommunicationState is DeviceCommunicationState.Running or DeviceCommunicationState.Stopped)
+            .ToArray();
+        var realtimeDevices = matches
+            .Where(device =>
+                (device.CommunicationState is DeviceCommunicationState.Running or DeviceCommunicationState.Stopped) &&
+                device.Realtime is not null)
+            .ToArray();
+        var realtimeStatus = DashboardRealtimeAvailabilityRules.Evaluate(
+            onlineMatches.Length,
+            realtimeDevices.Length,
+            onlineMatches
+                .Select(device => device.RealtimeUnavailableReason)
+                .FirstOrDefault(reason => !string.IsNullOrWhiteSpace(reason)));
 
         return new DashboardAreaGroupSummary(
             Id: group.Id,
@@ -73,12 +91,23 @@ public static class DashboardAreaGroupBuilder
                 .Select(device => (device.Building, device.Floor, device.SubArea))
                 .Distinct()
                 .Count(),
+            ModeAbnormal: onlineMatches.Count(device =>
+                !string.IsNullOrWhiteSpace(device.Mode) &&
+                !string.Equals(device.Mode.Trim(), anomalySettings.NormalMode, StringComparison.OrdinalIgnoreCase)),
+            TemperatureAbnormal: onlineMatches.Count(device =>
+                DeviceTemperatureRules.TryRead(device.SetTemperature, out var temperature) &&
+                (temperature < anomalySettings.TemperatureMin || temperature > anomalySettings.TemperatureMax)),
+            LockOn: realtimeDevices.Count(device => device.Realtime?.LockStateValid == true && device.Realtime.LockState == "开启"),
+            LockOff: realtimeDevices.Count(device => device.Realtime?.LockStateValid == true && device.Realtime.LockState == "关闭"),
             AreaType: group.SystemKey switch
             {
                 "public" => DeviceAreaClassifier.PublicArea,
                 "non_public" => DeviceAreaClassifier.PrivateArea,
                 _ => string.Empty,
-            });
+            },
+            RealtimeAvailability: realtimeStatus.Availability,
+            RealtimeStatusText: realtimeStatus.StatusText);
+
     }
 
     private static bool IsDashboardGroup(AreaGroupRecord group)

@@ -111,8 +111,7 @@ public sealed class DashboardUiContractTests
         Assert.Contains("<Setter Property=\"Padding\" Value=\"0\" />", wide);
         Assert.Contains("HorizontalAlignment=\"Stretch\"", wide);
         Assert.Contains("ColumnSpacing=\"8\"", wide);
-        Assert.Contains("<ColumnDefinition Width=\"64\"", wide);
-        Assert.Contains("<ColumnDefinition Width=\"80\"", wide);
+        Assert.Contains("<ColumnDefinition Width=\"72\"", wide);
         Assert.Contains("<ColumnDefinition Width=\"96\"", wide);
         Assert.Contains("e.NewSize.Width < 1250", codeBehind);
     }
@@ -165,21 +164,28 @@ public sealed class DashboardUiContractTests
         Assert.Contains("ViewModel.AreaGroups", xaml);
         Assert.Contains("Text=\"设备\"", xaml);
         Assert.Contains("Text=\"在线\"", xaml);
-        Assert.Contains("Total", xaml);
-        Assert.Contains("Text=\"公区\"", xaml);
-        Assert.Contains("Text=\"非公区\"", xaml);
-        Assert.Contains("PublicTotal", xaml);
-        Assert.Contains("PrivateTotal", xaml);
-        Assert.Contains("Online", xaml);
         Assert.Contains("Text=\"离线\"", xaml);
         Assert.Contains("Text=\"开机\"", xaml);
         Assert.Contains("Text=\"关机\"", xaml);
-        Assert.Contains("PublicRunning", xaml);
-        Assert.Contains("PublicStopped", xaml);
-        Assert.Contains("Text=\"公区开机\"", xaml);
-        Assert.Contains("Text=\"公区关机\"", xaml);
+        Assert.Contains("Total", xaml);
+        Assert.Contains("Online", xaml);
         Assert.Contains("Offline", xaml);
-        Assert.Contains("查看设备", xaml);
+        Assert.Contains("Running", xaml);
+        Assert.Contains("Stopped", xaml);
+        Assert.Contains("模式异常", xaml);
+        Assert.Contains("温度异常", xaml);
+        Assert.Contains("集控锁开", xaml);
+        Assert.Contains("集控锁关", xaml);
+        Assert.Contains("ModeAbnormal", xaml);
+        Assert.Contains("TemperatureAbnormal", xaml);
+        Assert.Contains("LockOn", xaml);
+        Assert.Contains("LockOff", xaml);
+        Assert.DoesNotContain("Text=\"公区开机\"", xaml);
+        Assert.DoesNotContain("Text=\"公区关机\"", xaml);
+        Assert.DoesNotContain("Text=\"公区\"", xaml);
+        Assert.DoesNotContain("Text=\"非公区\"", xaml);
+        Assert.DoesNotContain("PublicTotal", xaml);
+        Assert.DoesNotContain("PrivateTotal", xaml);
         Assert.Contains("AreaGroupsEmptyVisibility", xaml);
         Assert.Contains("AreaGroupsErrorVisibility", xaml);
         Assert.Contains("SizeChanged=\"Page_SizeChanged\"", xaml);
@@ -217,12 +223,18 @@ public sealed class DashboardUiContractTests
         Assert.Contains("RowSpacing=\"4\"", compact);
         Assert.Contains("ColumnSpacing=\"4\"", compact);
         Assert.DoesNotContain("Grid.Row=\"2\"", compact);
-        Assert.Contains("Text=\"公区\"", compact);
-        Assert.Contains("Text=\"非公区\"", compact);
+        Assert.Contains("模式异常", compact);
+        Assert.Contains("温度异常", compact);
+        Assert.Contains("集控锁开", compact);
+        Assert.Contains("集控锁关", compact);
+        Assert.Contains("Text=\"在线\"", compact);
+        Assert.Contains("Text=\"离线\"", compact);
+        Assert.Contains("Text=\"开机\"", compact);
+        Assert.Contains("Text=\"关机\"", compact);
     }
 
     [Fact]
-    public void DashboardDoesNotRenderPriorityItems()
+    public void DashboardRendersGroupPriorityAndStateSummary()
     {
         var root = LocateRepositoryRoot();
         var xaml = File.ReadAllText(Path.Combine(
@@ -248,6 +260,9 @@ public sealed class DashboardUiContractTests
             "AuditPage.xaml"));
 
         Assert.DoesNotContain("优先处理", xaml);
+        Assert.Contains("{x:Bind Priority}", xaml);
+        Assert.Contains("{x:Bind StateText}", xaml);
+        Assert.Contains("{x:Bind Glyph}", xaml);
         Assert.DoesNotContain("RiskPanel", xaml);
         Assert.DoesNotContain("Risks_ItemClick", codeBehind);
         Assert.Contains("基础质量审计", audit);
@@ -276,6 +291,77 @@ public sealed class DashboardUiContractTests
         Assert.Contains("navigationService.NavigateToData(row.NavigationRequest)", homeViewModel);
         Assert.Contains("long? AreaGroupId = null", navigation);
         Assert.Contains("void NavigateToGroups(long? groupId = null)", navigation);
+    }
+
+    [Fact]
+    public void DashboardAreaGroupRowsUseAnomalyAndLockMetrics()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(
+            root,
+            "native",
+            "src",
+            "EmsScout.Desktop",
+            "Pages",
+            "HomePage.xaml"));
+        var row = File.ReadAllText(Path.Combine(
+            root,
+            "native",
+            "src",
+            "EmsScout.Desktop",
+            "ViewModels",
+            "HomeViewModel.cs"));
+
+        Assert.Contains("模式异常", xaml);
+        Assert.Contains("温度异常", xaml);
+        Assert.Contains("集控锁开", xaml);
+        Assert.Contains("集控锁关", xaml);
+        Assert.Contains("ModeAbnormal", row);
+        Assert.Contains("TemperatureAbnormal", row);
+        Assert.Contains("LockOn", row);
+        Assert.Contains("LockOff", row);
+        Assert.DoesNotContain("公区开机", xaml);
+        Assert.DoesNotContain("非公区", xaml);
+    }
+
+    [Fact]
+    public void DashboardBaseAnomalyMetricsRemainVisibleWithoutRealtimeDetails()
+    {
+        var root = LocateRepositoryRoot();
+        var row = File.ReadAllText(Path.Combine(
+            root,
+            "native",
+            "src",
+            "EmsScout.Desktop",
+            "ViewModels",
+            "HomeViewModel.cs"));
+
+        Assert.Contains("public string ModeAbnormal { get; } = summary.ModeAbnormal.ToString(\"N0\");", row);
+        Assert.Contains("public string TemperatureAbnormal { get; } = summary.TemperatureAbnormal.ToString(\"N0\");", row);
+    }
+
+    [Fact]
+    public void TotalMetricCardNavigatesToTheSelectedDataBatch()
+    {
+        var root = LocateRepositoryRoot();
+        var viewModel = File.ReadAllText(Path.Combine(
+            root,
+            "native",
+            "src",
+            "EmsScout.Desktop",
+            "ViewModels",
+            "HomeViewModel.cs"));
+        var navigation = File.ReadAllText(Path.Combine(
+            root,
+            "native",
+            "src",
+            "EmsScout.Desktop",
+            "Services",
+            "INavigationService.cs"));
+
+        Assert.Contains("new MetricItem(metric, runId)", viewModel);
+        Assert.Contains("RunId: runId", viewModel);
+        Assert.Contains("long? RunId = null", navigation);
     }
 
     [Fact]
