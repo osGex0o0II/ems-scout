@@ -51,7 +51,7 @@ EMS ページ → 列挙 → 品質検証 → SQLite → リアルタイム監�
 ### アプリについて
 
 <p align="center">
-  <img src="docs/images/ems-scout-about.png" alt="EMS Scout About" width="100%" />
+  <img src="docs/images/ems-scout-about.png" alt="EMS Scout アプリについて" width="100%" />
 </p>
 
 ## プロジェクト構成
