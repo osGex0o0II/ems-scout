@@ -16,10 +16,6 @@
 | `scripts/schema.sql` | SQLite 建表语句 |
 | `out/ac.db` | SQLite 数据库 |
 | `out/enum_full_v5.json` | 全量枚举结果 |
-| `data/1号楼/` | 1号楼已验证数据归档 |
-| `data/2号楼/` | 2号楼当前数据归档 |
-| `CHANGELOG.md` | 修改记录 |
-| `.context-summary.md` | 上下文快照（每次会话更新） |
 
 ## 运行命令
 

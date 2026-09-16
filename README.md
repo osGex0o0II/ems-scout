@@ -71,14 +71,12 @@ EMS 页面 → 枚举 → 质量校验 → SQLite → 实时审计 → Excel
 │   ├── src/EmsScout.Domain/          # 设备、楼栋与状态模型
 │   ├── src/EmsScout.Infrastructure/ # SQLite、文件源与 Excel 导出
 │   └── tools/EmsScout.ExportSmoke/   # Excel 导出烟测工具
-├── data/                             # 本地楼栋数据归档（不纳入远端）
 ├── docs/                             # 架构、数据模型与软件截图
 ├── config/                           # 质量审计配置
 ├── README.md                         # 中文说明
 ├── README.en.md                      # English documentation
 ├── README.ja.md                      # 日本語ドキュメント
-├── package.json                      # Node.js 脚本与依赖
-└── CHANGELOG.md                      # 修改记录
+└── package.json                      # Node.js 脚本与依赖
 ```
 
 ## 文件说明
@@ -104,7 +102,6 @@ EMS 页面 → 枚举 → 质量校验 → SQLite → 实时审计 → Excel
 | `native/tests/EmsScout.Tests` | 原生应用、历史批次与导出契约测试。 |
 | [`docs/architecture.md`](docs/architecture.md) | 分层架构与数据流说明。 |
 | [`docs/data-model.md`](docs/data-model.md) | 数据库与 Excel 导出模型说明。 |
-| [`CHANGELOG.md`](CHANGELOG.md) | 版本修改与现场验证记录。 |
 
 ## 致谢
 
