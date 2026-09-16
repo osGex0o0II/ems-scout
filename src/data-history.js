@@ -192,6 +192,30 @@ function uniqueRunKey(db, base) {
   return key;
 }
 
+function nextCollectionRunId(db) {
+  const row = db.prepare(`
+    SELECT COALESCE(
+      (
+        SELECT MIN(candidate)
+        FROM (
+          SELECT 1 AS candidate
+          UNION ALL
+          SELECT id + 1
+          FROM collection_runs
+          WHERE id > 0
+        ) candidates
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM collection_runs existing
+          WHERE existing.id = candidates.candidate
+        )
+      ),
+      1
+    ) AS id
+  `).get();
+  return Number(row.id);
+}
+
 function normalizeStoredTimestamp(value, fallback = formatLocalTimestamp()) {
   const text = value instanceof Date
     ? value.toISOString()
@@ -454,14 +478,14 @@ function createRunFromCurrent(db, options = {}) {
   const startedAt = options.startedAt
     ? normalizeStoredTimestamp(options.startedAt, now)
     : null;
-  const runKey = uniqueRunKey(db, options.runKey || localRunKey(new Date(now)));
+  const requestedRunKey = options.runKey || localRunKey(new Date(now));
   const scope = selected.length && selected.length < BLDG_ORDER.length ? 'partial' : 'full';
   const buildings = selected.length ? selected : db.prepare('SELECT DISTINCT building FROM sub_areas ORDER BY building').all().map(r => r.building);
 
   const insertRun = db.prepare(`
     INSERT INTO collection_runs
-      (run_key, started_at, completed_at, imported_at, status, scope, buildings, json_path, db_snapshot_path, note)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, run_key, started_at, completed_at, imported_at, status, scope, buildings, json_path, db_snapshot_path, note)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertRunBuilding = db.prepare(`
     INSERT INTO run_buildings (run_id, building, sub_area_count, menu_clicked, updated_at)
@@ -488,7 +512,10 @@ function createRunFromCurrent(db, options = {}) {
   `);
 
   const tx = db.transaction(() => {
+    const runKey = uniqueRunKey(db, requestedRunKey);
+    const runId = nextCollectionRunId(db);
     const res = insertRun.run(
+      runId,
       runKey,
       startedAt,
       now,
@@ -500,7 +527,10 @@ function createRunFromCurrent(db, options = {}) {
       options.dbSnapshotPath || null,
       options.note || ''
     );
-    const runId = Number(res.lastInsertRowid);
+    const insertedRunId = Number(res.lastInsertRowid);
+    if (insertedRunId !== runId) {
+      throw new Error(`Allocated collection run id ${runId}, but SQLite inserted ${insertedRunId}`);
+    }
     const bRows = db.prepare(`
       SELECT building, sub_area_count, menu_clicked, updated_at
       FROM buildings
@@ -580,7 +610,7 @@ function createRunFromCurrent(db, options = {}) {
     return runId;
   });
 
-  return tx();
+  return tx.immediate();
 }
 
 function normalizeBuildings(buildings) {

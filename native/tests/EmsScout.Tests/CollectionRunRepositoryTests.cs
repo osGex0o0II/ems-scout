@@ -144,6 +144,8 @@ public sealed class CollectionRunRepositoryTests
                 INSERT INTO cards (id, page_id, name, switch, mode, indoor, set_temp, fan, indicator, comm)
                 VALUES (2, 2, '2-0201-KT', 'ON', '制冷', '27', '24', '高', 'red.png', '开机');
                 UPDATE cards SET name = 'STALE-1号' WHERE id = 1;
+                INSERT INTO collection_runs (id, run_key, completed_at, imported_at, status, scope, buildings)
+                VALUES (3, 'run_3', '2026-07-03T00:00:00Z', '2026-07-03T00:00:00Z', 'completed', 'partial', '["2号"]');
                 """;
             await command.ExecuteNonQueryAsync();
         }
@@ -152,7 +154,7 @@ public sealed class CollectionRunRepositoryTests
         var result = await repository.RestoreCurrentAsync(1);
 
         Assert.True(result.IsPartial);
-        Assert.NotNull(result.BackupRunId);
+        Assert.Equal(2L, result.BackupRunId);
         await using var verify = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
         verify.Open();
         Assert.Equal(2L, await ScalarLongAsync(verify, "SELECT COUNT(*) FROM buildings"));

@@ -149,9 +149,7 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             throw new InvalidOperationException("部分批次没有楼栋范围，无法安全恢复。");
         }
 
-        await using var transaction = (SqliteTransaction)await connection
-            .BeginTransactionAsync(cancellationToken)
-            .ConfigureAwait(false);
+        await using var transaction = connection.BeginTransaction(deferred: false);
         var backupRunId = await CreatePreRestoreBackupAsync(connection, transaction, run, cancellationToken).ConfigureAwait(false);
         if (isPartial)
         {
@@ -552,15 +550,19 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         }
 
         long backupRunId;
+        var allocatedRunId = await AllocateCollectionRunIdAsync(
+            connection,
+            transaction,
+            cancellationToken).ConfigureAwait(false);
         await using (var insertRun = connection.CreateCommand())
         {
             insertRun.Transaction = transaction;
             insertRun.CommandText = """
                 INSERT INTO collection_runs
-                    (run_key, started_at, completed_at, imported_at, status, scope, buildings,
+                    (id, run_key, started_at, completed_at, imported_at, status, scope, buildings,
                      card_count, on_count, off_count, offline_count, unknown_count, note,
                      source, data_version, operator_name, restored_from_run_id)
-                SELECT $run_key, $now, $now, $now, 'backup', 'full', $buildings,
+                SELECT $run_id, $run_key, $now, $now, $now, 'backup', 'full', $buildings,
                        COUNT(*),
                        SUM(comm = '开机' OR switch = 'ON'),
                        SUM(comm = '关机' OR switch = 'OFF'),
@@ -570,6 +572,7 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
                 FROM cards
                 RETURNING id;
                 """;
+            insertRun.Parameters.AddWithValue("$run_id", allocatedRunId);
             insertRun.Parameters.AddWithValue("$run_key", runKey);
             insertRun.Parameters.AddWithValue("$now", now);
             insertRun.Parameters.AddWithValue("$buildings", JsonSerializer.Serialize(buildings));
@@ -579,6 +582,12 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             backupRunId = Convert.ToInt64(
                 await insertRun.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
                 System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        if (backupRunId != allocatedRunId)
+        {
+            throw new InvalidOperationException(
+                $"Allocated collection run id {allocatedRunId}, but SQLite inserted {backupRunId}.");
         }
 
         await ExecuteSnapshotCopyAsync(
@@ -629,6 +638,37 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             cancellationToken).ConfigureAwait(false);
 
         return backupRunId;
+    }
+
+    private static async Task<long> AllocateCollectionRunIdAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT COALESCE(
+                (
+                    SELECT MIN(candidate)
+                    FROM (
+                        SELECT 1 AS candidate
+                        UNION ALL
+                        SELECT id + 1
+                        FROM collection_runs
+                        WHERE id > 0
+                    ) candidates
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM collection_runs existing
+                        WHERE existing.id = candidates.candidate
+                    )
+                ),
+                1
+            );
+            """;
+        var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
     }
 
     private static async Task ExecuteSnapshotCopyAsync(

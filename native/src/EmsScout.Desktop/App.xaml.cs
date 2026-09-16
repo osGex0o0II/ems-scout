@@ -139,7 +139,8 @@ public partial class App : Microsoft.UI.Xaml.Application
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
         services.AddSingleton<IRealtimeReconciliationService>(provider => new SqliteRealtimeReconciliationService(
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath,
-            provider.GetRequiredService<IRealtimeDetailSource>()));
+            provider.GetRequiredService<IRealtimeDetailSource>(),
+            provider.GetRequiredService<IRealtimeSnapshotStore>()));
         services.AddSingleton<IQualityAuditService>(provider => new JsonQualityAuditService(
             () => provider.GetRequiredService<AppDataPathService>().QualityOutputDirectory,
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath));

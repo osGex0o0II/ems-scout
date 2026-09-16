@@ -288,6 +288,17 @@ public sealed class SqliteDeviceReadRepository(
         }
 
         var expectedRunId = runId ?? await LoadCurrentRunIdAsync(connection, cancellationToken).ConfigureAwait(false);
+        if (realtimeSnapshotStore is not null && expectedRunId is not null)
+        {
+            var snapshot = await realtimeSnapshotStore
+                .LoadAsync(expectedRunId.Value, buildings, cancellationToken)
+                .ConfigureAwait(false);
+            if (snapshot.IsAvailable)
+            {
+                return snapshot;
+            }
+        }
+
         return await realtimeDetailSource.LoadAsync(buildings, expectedRunId, cancellationToken).ConfigureAwait(false);
     }
 

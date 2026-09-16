@@ -6,12 +6,14 @@ namespace EmsScout.Infrastructure.Sqlite;
 
 public sealed class SqliteRealtimeReconciliationService(
     string databasePath,
-    IRealtimeDetailSource realtimeDetailSource) : IRealtimeReconciliationService
+    IRealtimeDetailSource realtimeDetailSource,
+    IRealtimeSnapshotStore? realtimeSnapshotStore = null) : IRealtimeReconciliationService
 {
     public SqliteRealtimeReconciliationService(
         Func<string> databasePathResolver,
-        IRealtimeDetailSource realtimeDetailSource)
-        : this(string.Empty, realtimeDetailSource)
+        IRealtimeDetailSource realtimeDetailSource,
+        IRealtimeSnapshotStore? realtimeSnapshotStore = null)
+        : this(string.Empty, realtimeDetailSource, realtimeSnapshotStore)
     {
         DatabasePathResolver = databasePathResolver;
     }
@@ -30,7 +32,10 @@ public sealed class SqliteRealtimeReconciliationService(
         var buildings = ResolveBuildings(query.Building);
         var dbRows = await LoadDbRowsAsync(connection, buildings, cancellationToken).ConfigureAwait(false);
         var expectedRunId = await LoadCurrentRunIdAsync(connection, cancellationToken).ConfigureAwait(false);
-        var realtimeSet = await realtimeDetailSource.LoadAsync(buildings, expectedRunId, cancellationToken).ConfigureAwait(false);
+        var realtimeSet = await LoadCurrentRealtimeDetailsAsync(
+            buildings,
+            expectedRunId,
+            cancellationToken).ConfigureAwait(false);
         var realtimeRows = realtimeSet.Rows.ToList();
         var overrides = await LoadRealtimeMatchOverridesAsync(connection, cancellationToken).ConfigureAwait(false);
 
@@ -72,6 +77,27 @@ public sealed class SqliteRealtimeReconciliationService(
         return new RealtimeReconciliationResult(
             summary,
             filtered.Skip(offset).Take(limit).ToList());
+    }
+
+    private async Task<RealtimeDetailSet> LoadCurrentRealtimeDetailsAsync(
+        IReadOnlyList<string> buildings,
+        long? expectedRunId,
+        CancellationToken cancellationToken)
+    {
+        if (realtimeSnapshotStore is not null && expectedRunId is not null)
+        {
+            var snapshot = await realtimeSnapshotStore
+                .LoadAsync(expectedRunId.Value, buildings, cancellationToken)
+                .ConfigureAwait(false);
+            if (snapshot.IsAvailable)
+            {
+                return snapshot;
+            }
+        }
+
+        return await realtimeDetailSource
+            .LoadAsync(buildings, expectedRunId, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private SqliteConnection OpenConnection()
@@ -208,7 +234,7 @@ public sealed class SqliteRealtimeReconciliationService(
         var hasImportedAt = await ColumnExistsAsync(connection, "collection_runs", "imported_at", cancellationToken).ConfigureAwait(false);
         var hasStatus = await ColumnExistsAsync(connection, "collection_runs", "status", cancellationToken).ConfigureAwait(false);
         var orderColumn = hasImportedAt ? "imported_at" : "completed_at";
-        var statusClause = hasStatus ? "WHERE status = 'completed'" : string.Empty;
+        var statusClause = hasStatus ? "WHERE status IN ('completed', 'needs_review')" : string.Empty;
         await using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT id

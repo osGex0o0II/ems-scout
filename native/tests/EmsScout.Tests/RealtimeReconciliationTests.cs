@@ -42,6 +42,20 @@ public sealed class RealtimeReconciliationTests
     }
 
     [Fact]
+    public async Task UsesTheLatestNeedsReviewRunRealtimeSnapshotForCurrentReconciliation()
+    {
+        var root = LocateRepositoryRoot();
+        var service = new SqliteRealtimeReconciliationService(
+            Path.Combine(root, "out", "ac.db"),
+            new RealtimeLatestJsonSource(root, Path.Combine(root, "out")),
+            new SqliteRealtimeSnapshotStore(() => Path.Combine(root, "out", "ac.db")));
+
+        var result = await service.AnalyzeAsync(new(Building: "1号", Limit: 1));
+
+        Assert.True(result.Summary.RealtimeCount > 0);
+    }
+
+    [Fact]
     public async Task FiltersRealtimeSourceParityItems()
     {
         var service = CurrentService();

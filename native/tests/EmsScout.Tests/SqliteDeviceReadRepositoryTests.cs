@@ -431,6 +431,23 @@ public sealed class SqliteDeviceReadRepositoryTests
         Assert.Equal(1, result.Facets.RealtimeLocked);
     }
 
+    [Fact]
+    public async Task LoadsCurrentRealtimeDetailsFromTheCurrentRunSnapshotBeforeLegacyJson()
+    {
+        var repository = new SqliteDeviceReadRepository(
+            CurrentDatabasePath(),
+            new RealtimeLatestJsonSource(
+                LocateRepositoryRoot(),
+                Path.Combine(LocateRepositoryRoot(), "out")),
+            realtimeSnapshotStore: new SqliteRealtimeSnapshotStore(() => CurrentDatabasePath()));
+
+        var result = await repository.SearchAsync(new DeviceQuery(Limit: 50000));
+
+        Assert.DoesNotContain("缺少批次号", result.DataStatusText, StringComparison.Ordinal);
+        Assert.True(result.Facets.RealtimeRows > 0);
+        Assert.True(result.Facets.RealtimeMatched > 0);
+    }
+
     private static async Task CreateHistoricalDatabaseAsync(string databasePath)
     {
         await using var connection = new SqliteConnection($"Data Source={databasePath}");
