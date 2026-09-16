@@ -28,6 +28,11 @@ artifacts/
 data/ac.db
 data/*.backup.db
 
+# Field archives are local-only and must never be committed.
+data/*/*.db
+data/*/*.json
+data/*/*.ndjson
+
 # Agent tooling state
 .omo/
 .superpowers/
