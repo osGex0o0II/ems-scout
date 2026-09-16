@@ -5,6 +5,7 @@ $script:NativePublisher = 'CN=EMS Scout'
 $script:NativePublisherId = 'ggf25w21tn4m2'
 $script:NativeAppUserModelId = "$($script:NativePackageName)_$($script:NativePublisherId)!App"
 $script:NativeDisplayName = 'EMS Scout'
+$script:NativeWorkspaceMarkerFileName = 'workspace-root.txt'
 
 function Get-NativePackageIdentity {
     [pscustomobject]@{
@@ -188,37 +189,43 @@ function Get-NativeUserDataPath {
 }
 
 function Set-NativeWorkspaceMarker {
-    param([Parameter(Mandatory)][string]$PackageDirectory)
+    param(
+        [Parameter(Mandatory)][string]$PackageDirectory,
+        [Parameter(Mandatory)][string]$WorkspaceRoot
+    )
 
     $packageRoot = Resolve-NativePackageDirectory $PackageDirectory
     $userDataPath = Get-NativeUserDataPath
     New-Item -ItemType Directory -Path $userDataPath -Force | Out-Null
 
-    $markerPath = Join-Path $userDataPath 'workspace-root.txt'
-    if (Test-Path -LiteralPath $markerPath -PathType Leaf) {
-        $existing = (Get-Content -LiteralPath $markerPath -Raw).Trim()
-        if ($existing -and (Test-Path -LiteralPath (Join-Path $existing 'package.json') -PathType Leaf)) {
-            return $existing
+    $resolvedWorkspaceRoot = (Resolve-Path -LiteralPath $WorkspaceRoot -ErrorAction Stop).Path
+    if (-not (Test-Path -LiteralPath (Join-Path $resolvedWorkspaceRoot 'package.json') -PathType Leaf) -or
+        -not (Test-Path -LiteralPath (Join-Path $resolvedWorkspaceRoot 'out') -PathType Container)) {
+        throw "Workspace root is not an EMS Scout repository: $resolvedWorkspaceRoot"
+    }
+
+    $markerPaths = [System.Collections.Generic.List[string]]::new()
+    $markerPaths.Add((Join-Path $userDataPath $script:NativeWorkspaceMarkerFileName))
+
+    # Packaged WinUI can redirect LocalApplicationData into either of these
+    # LocalCache locations. Refresh both so switching checkouts cannot keep
+    # running an older repository through a stale package-local marker.
+    $identity = Get-NativePackageIdentity
+    $packageFamily = "$($identity.Name)_$($identity.PublisherId)"
+    $localAppData = [Environment]::GetEnvironmentVariable('LOCALAPPDATA')
+    if ($localAppData) {
+        $packageCacheRoot = Join-Path $localAppData "Packages\$packageFamily\LocalCache"
+        foreach ($relativeDirectory in @('EMS Scout', 'Local\EMS Scout')) {
+            $directory = Join-Path $packageCacheRoot $relativeDirectory
+            New-Item -ItemType Directory -Path $directory -Force | Out-Null
+            $markerPaths.Add((Join-Path $directory $script:NativeWorkspaceMarkerFileName))
         }
     }
 
-    $directory = Get-Item -LiteralPath $packageRoot
-    $workspaceRoot = $null
-    while ($null -ne $directory) {
-        if ((Test-Path -LiteralPath (Join-Path $directory.FullName 'package.json') -PathType Leaf) -and
-            (Test-Path -LiteralPath (Join-Path $directory.FullName 'out') -PathType Container)) {
-            $workspaceRoot = $directory.FullName
-            break
-        }
-        $directory = $directory.Parent
+    foreach ($markerPath in $markerPaths) {
+        Set-Content -LiteralPath $markerPath -Value $resolvedWorkspaceRoot -Encoding UTF8
     }
-
-    if ($null -eq $workspaceRoot) {
-        return $null
-    }
-
-    Set-Content -LiteralPath $markerPath -Value $workspaceRoot -Encoding UTF8
-    return $workspaceRoot
+    return $resolvedWorkspaceRoot
 }
 
 function Assert-NativeUserDataPath {

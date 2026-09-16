@@ -236,7 +236,7 @@ public sealed class SqliteRealtimeSnapshotStore(Func<string> databasePathResolve
         bool readOnly = false)
     {
         var mode = readOnly ? "ReadOnly" : "ReadWrite";
-        var connection = new SqliteConnection($"Data Source={databasePathResolver()};Mode={mode};Cache=Shared");
+        var connection = new SqliteConnection($"Data Source={databasePathResolver()};Mode={mode}");
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA busy_timeout = 10000; PRAGMA foreign_keys = ON;";

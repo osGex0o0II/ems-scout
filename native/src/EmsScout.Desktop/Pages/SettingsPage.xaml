@@ -67,6 +67,11 @@
                         <SymbolIcon Symbol="OpenFile" />
                     </NavigationViewItem.Icon>
                 </NavigationViewItem>
+                <NavigationViewItem Content="采集" Tag="collection">
+                    <NavigationViewItem.Icon>
+                        <SymbolIcon Symbol="Download" />
+                    </NavigationViewItem.Icon>
+                </NavigationViewItem>
                 <NavigationViewItem Content="数据表" Tag="data-table">
                     <NavigationViewItem.Icon>
                         <SymbolIcon Symbol="List" />
@@ -132,6 +137,35 @@
                             </Grid>
                             <TextBox Header="导出目录" MaxWidth="640" Text="{x:Bind ViewModel.ExportDirectory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                             <ToggleSwitch Header="记录最近导出" OnContent="开" OffContent="关" IsOn="{x:Bind ViewModel.TrackRecentExports, Mode=TwoWay}" />
+                        </StackPanel>
+
+                        <StackPanel x:Name="CollectionSection" MaxWidth="560" HorizontalAlignment="Left" Spacing="12" Visibility="Collapsed">
+                            <TextBlock Style="{StaticResource SectionTitleStyle}" Text="采集" />
+                            <StackPanel Spacing="10">
+                                <TextBlock FontWeight="SemiBold" Text="实时采集参数" />
+                                <Grid ColumnSpacing="8" RowSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox
+                                        Header="实时批量设备数"
+                                        MaxWidth="260"
+                                        ItemsSource="{x:Bind ViewModel.RealtimeBatchSizeOptions, Mode=OneWay}"
+                                        SelectedItem="{x:Bind ViewModel.RealtimeBatchSize, Mode=TwoWay}" />
+                                    <ComboBox
+                                        Grid.Column="1"
+                                        Header="设备批次重开间隔"
+                                        MaxWidth="260"
+                                        ItemsSource="{x:Bind ViewModel.RealtimeReopenEveryOptions, Mode=OneWay}"
+                                        SelectedItem="{x:Bind ViewModel.RealtimeReopenEvery, Mode=TwoWay}" />
+                                </Grid>
+                                <ComboBox
+                                    Header="单批超时（毫秒）"
+                                    MaxWidth="260"
+                                    ItemsSource="{x:Bind ViewModel.RealtimeTimeoutOptions, Mode=OneWay}"
+                                    SelectedItem="{x:Bind ViewModel.RealtimeTimeoutMs, Mode=TwoWay}" />
+                            </StackPanel>
                         </StackPanel>
 
                         <StackPanel
@@ -243,31 +277,6 @@
                                     <ComboBoxItem Content="调试" />
                                 </ComboBox>
                                 <ToggleSwitch Header="保存 NDJSON 日志" OnContent="开" OffContent="关" IsOn="{x:Bind ViewModel.SaveNdjsonLog, Mode=TwoWay}" />
-                            </StackPanel>
-                            <StackPanel Spacing="10">
-                                <TextBlock FontWeight="SemiBold" Text="采集参数" />
-                                <Grid ColumnSpacing="8" RowSpacing="8">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="*" />
-                                    </Grid.ColumnDefinitions>
-                                    <ComboBox
-                                        Header="实时批量设备数"
-                                        MaxWidth="260"
-                                        ItemsSource="{x:Bind ViewModel.RealtimeBatchSizeOptions, Mode=OneWay}"
-                                        SelectedItem="{x:Bind ViewModel.RealtimeBatchSize, Mode=TwoWay}" />
-                                    <ComboBox
-                                        Grid.Column="1"
-                                        Header="设备批次重开间隔"
-                                        MaxWidth="260"
-                                        ItemsSource="{x:Bind ViewModel.RealtimeReopenEveryOptions, Mode=OneWay}"
-                                        SelectedItem="{x:Bind ViewModel.RealtimeReopenEvery, Mode=TwoWay}" />
-                                </Grid>
-                                <ComboBox
-                                    Header="单批超时（毫秒）"
-                                    MaxWidth="260"
-                                    ItemsSource="{x:Bind ViewModel.RealtimeTimeoutOptions, Mode=OneWay}"
-                                    SelectedItem="{x:Bind ViewModel.RealtimeTimeoutMs, Mode=TwoWay}" />
                             </StackPanel>
                             <StackPanel Spacing="4">
                                 <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="设置文件" />

@@ -17,6 +17,11 @@ public static class CollectionTaskModeValues
     public const string RealtimeDetailsOnly = "realtime_details_only";
     public const string RealtimeAuditOnly = "realtime_audit_only";
     public const string Custom = "custom";
+    public const string StableRealtimeStrategy = "stable-full";
+    public const string FastRealtimeStrategy = "fast-batch";
+
+    public static string RealtimeStrategyForSelection(int selectedIndex) =>
+        selectedIndex == 1 ? FastRealtimeStrategy : StableRealtimeStrategy;
 }
 
 public sealed record CollectionTaskExecutionPlan(
@@ -30,6 +35,8 @@ public sealed record CollectionTaskExecutionPlan(
     bool RunRealtimeDetails,
     bool RunRealtimeAudit)
 {
+    public bool UsesExistingInventory { get; init; }
+
     public string RunningStatus => RunEnumeration
         ? "正在执行：" + Label
         : "正在运行：" + Label;
@@ -57,7 +64,7 @@ public static class CollectionTaskModeCatalog
 {
     public static IReadOnlyList<CollectionTaskModeOption> Options { get; } =
     [
-        new(CollectionTaskModeValues.Full, "完整采集并更新", "采集卡片与集控锁定等实时详情，并完成质量检查。", "开始采集"),
+        new(CollectionTaskModeValues.Full, "完整实时采集并更新", "按开始采集时选择的稳定或快速模式执行，并完成实时审计；更新卡片范围请使用基础卡片采集。", "开始采集"),
         new(CollectionTaskModeValues.CollectImport, "仅基础卡片采集", "只更新卡片状态，不更新集控锁定等实时详情。", "开始基础采集"),
         new(CollectionTaskModeValues.EnumerateOnly, "仅枚举 JSON", "只运行卡片枚举，生成 enum_full_v5.json，不更新 SQLite。", "开始枚举"),
         new(CollectionTaskModeValues.ValidateOnly, "仅校验 JSON", "只校验现有 enum_full_v5.json，不修改 SQLite。", "开始校验"),
@@ -169,6 +176,37 @@ public static class CollectionTaskModeCatalog
                 RunRealtimeDetails: customOptions.RunRealtimeDetailsAfterImport,
                 RunRealtimeAudit: customOptions.RunRealtimeDetailsAfterImport && customOptions.RunRealtimeAuditAfterDetails),
             _ => BuildPlan(CollectionTaskModeValues.Full, customOptions),
+        };
+    }
+
+    public static CollectionTaskExecutionPlan ApplyRealtimeCollectionStrategy(
+        CollectionTaskExecutionPlan plan,
+        string? strategy)
+    {
+        var normalizedStrategy = strategy?.Trim();
+        if (plan.Value != CollectionTaskModeValues.Full ||
+            !plan.RunRealtimeDetails ||
+            (!string.Equals(normalizedStrategy, CollectionTaskModeValues.StableRealtimeStrategy, StringComparison.OrdinalIgnoreCase) &&
+             !string.Equals(normalizedStrategy, CollectionTaskModeValues.FastRealtimeStrategy, StringComparison.OrdinalIgnoreCase)))
+        {
+            return plan;
+        }
+
+        var label = string.Equals(normalizedStrategy, CollectionTaskModeValues.FastRealtimeStrategy, StringComparison.OrdinalIgnoreCase)
+            ? "快速实时采集"
+            : "稳定实时采集";
+        var reuseExistingInventory = string.Equals(
+            normalizedStrategy,
+            CollectionTaskModeValues.FastRealtimeStrategy,
+            StringComparison.OrdinalIgnoreCase);
+        return plan with
+        {
+            Label = label,
+            RunEnumeration = false,
+            RunValidation = true,
+            RunImport = true,
+            RunQuality = true,
+            UsesExistingInventory = reuseExistingInventory,
         };
     }
 }

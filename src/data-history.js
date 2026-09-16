@@ -219,7 +219,7 @@ function listRuns(db, options = {}) {
            buildings, json_path, db_snapshot_path, card_count, on_count,
            off_count, offline_count, unknown_count, quality_summary, is_anomaly, note
     FROM collection_runs
-    ORDER BY datetime(completed_at) DESC, id DESC
+    ORDER BY datetime(COALESCE(imported_at, completed_at)) DESC, id DESC
     LIMIT ?
   `).all(limit).map(r => ({
     ...r,
@@ -233,7 +233,9 @@ function listRuns(db, options = {}) {
 }
 
 function runLabel(run) {
-  const normalized = normalizeStoredTimestamp(run.completed_at, run.completed_at);
+  const normalized = normalizeStoredTimestamp(
+    run.imported_at || run.completed_at,
+    run.completed_at);
   const dt = new Date(normalized);
   const pad = n => String(n).padStart(2, '0');
   const ts = Number.isNaN(dt.getTime())

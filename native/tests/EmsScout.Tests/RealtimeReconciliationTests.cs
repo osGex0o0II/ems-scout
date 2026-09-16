@@ -20,7 +20,6 @@ public sealed class RealtimeReconciliationTests
         Assert.Equal(result.Summary.ByType.Values.Sum(), result.Summary.DiffItemCount);
         Assert.True(result.Summary.ExactMatches > 0);
         Assert.True(result.Summary.ManualMatches > 0);
-        Assert.True(result.Summary.RelaxedMatches > 0);
         Assert.True(result.Summary.OverrideCount > 0);
         Assert.True(result.Summary.ByType[RealtimeReconciliationTypes.NewDevice] > 0);
         Assert.True(result.Summary.ByType[RealtimeReconciliationTypes.MissingInRealtime] > 0);

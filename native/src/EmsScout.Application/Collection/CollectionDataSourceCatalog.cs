@@ -11,7 +11,9 @@ public static class CollectionDataSourceCatalog
         var ordered = runs
             .Where(run => run.Status.Equals("completed", StringComparison.OrdinalIgnoreCase) ||
                           run.Status.Equals("needs_review", StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(run => ParseTimestamp(run.CompletedAt))
+            // Import time is when the current SQLite data became available. The
+            // enumeration completion time can be older when import runs later.
+            .OrderByDescending(run => ParseTimestamp(run.ImportedAt, run.CompletedAt))
             .ThenByDescending(run => run.Id)
             .ToArray();
         var current = ordered.FirstOrDefault();
@@ -21,10 +23,12 @@ public static class CollectionDataSourceCatalog
         return new CollectionDataSourceCatalogResult(current, historical);
     }
 
-    private static DateTimeOffset ParseTimestamp(string value)
+    private static DateTimeOffset ParseTimestamp(string primary, string fallback)
     {
-        return StoredTimestamp.TryParse(value, out var parsed)
+        return StoredTimestamp.TryParse(primary, out var parsed)
             ? parsed
-            : DateTimeOffset.MinValue;
+            : StoredTimestamp.TryParse(fallback, out parsed)
+                ? parsed
+                : DateTimeOffset.MinValue;
     }
 }

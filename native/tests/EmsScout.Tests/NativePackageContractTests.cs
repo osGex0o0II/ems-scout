@@ -33,6 +33,8 @@ public sealed class NativePackageContractTests
         Assert.Contains("Assert-NativeUserDataPath", uninstall, StringComparison.Ordinal);
         Assert.Contains("Set-NativeWorkspaceMarker", install, StringComparison.Ordinal);
         Assert.Contains("Set-NativeWorkspaceMarker", update, StringComparison.Ordinal);
+        Assert.Contains("LocalCache", common, StringComparison.Ordinal);
+        Assert.Contains("LOCALAPPDATA", common, StringComparison.Ordinal);
     }
 
     [Fact]

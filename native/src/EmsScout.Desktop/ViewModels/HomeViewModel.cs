@@ -513,6 +513,8 @@ public sealed class DashboardAreaGroupRow(DashboardAreaGroupSummary summary, lon
     private static bool IsRealtimeMetricsAvailable(DashboardAreaGroupSummary summary)
     {
         return summary.RealtimeAvailability is
-            DashboardRealtimeAvailability.Available or DashboardRealtimeAvailability.NotApplicable;
+            DashboardRealtimeAvailability.Available or
+            DashboardRealtimeAvailability.Partial or
+            DashboardRealtimeAvailability.NotApplicable;
     }
 }

@@ -101,6 +101,24 @@ function validateEnumData(data, options = {}) {
     }
 
     const flat = building ? flattenBuilding(building) : { pages: [], cards: [] };
+    if (options.requireDevId) {
+      const missingDevIds = flat.cards.filter(row => !row.card || row.card.devId === undefined || row.card.devId === null || row.card.devId === '').length;
+      const seenDevIds = new Set();
+      let duplicateDevIds = 0;
+      for (const row of flat.cards) {
+        const id = row.card && row.card.devId;
+        if (id === undefined || id === null || id === '') continue;
+        const key = String(id);
+        if (seenDevIds.has(key)) duplicateDevIds++;
+        seenDevIds.add(key);
+      }
+      if (missingDevIds > 0) {
+        errors.push(`${s.building}: ${missingDevIds} 张卡片缺少 devId，不能作为实时采集目标。`);
+      }
+      if (duplicateDevIds > 0) {
+        errors.push(`${s.building}: 存在 ${duplicateDevIds} 个重复 devId，不能作为实时采集目标。`);
+      }
+    }
     for (const row of flat.pages) {
       const page = row.page || {};
       const cards = Array.isArray(page.cards) ? page.cards : [];

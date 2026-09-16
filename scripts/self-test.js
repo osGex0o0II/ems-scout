@@ -7,6 +7,7 @@ const { spawnSync } = require('child_process');
 const Database = require('better-sqlite3');
 const { checkCardQuality, classifyAreaType, getZone, assessBuildingIdentity, labelSamePageDuplicateCards, classifyPersistentDeviceAnomalyPage, normalizeCardValues, normalizeKnownSourceDefects, classifyKnownMissingIndicatorPage, isAcceptedCaptureQualityReason } = require('../src/rules');
 const { validateEnumData } = require('../src/enum-validator');
+const { inspectRealtimeRow } = require('../src/realtime-quality');
 const { ensureHistorySchema, restoreCurrentFromRun } = require('../src/data-history');
 const { parseTimestampMillis } = require('../src/time');
 
@@ -150,6 +151,25 @@ function testRules() {
   assert(classifyAreaType('QL-101-KT', 'grid') === '非公区', 'QL-NNN 应识别为非公区');
   assert(classifyAreaType('ANY', 'group') === '公区', 'group layout 应识别为公区');
   assert(getZone(695, '5号') === 2, '5号 x=695 应为 C座 zone');
+}
+
+function testRealtimeQualityContract() {
+  const fields = Object.fromEntries(Array.from({ length: 25 }, (_, index) => [`field-${index}`, String(index)]));
+  fields['集控锁定'] = '32896';
+  const rawFields = { ...fields };
+  const anomaly = inspectRealtimeRow({
+    fields,
+    rawFields,
+    realtimeTagCount: 46,
+    realtimeValidTagCount: 46,
+  });
+  assert(anomaly.collectionComplete, '完整实时点位必须判定为采集完成');
+  assert(anomaly.preserveRawValues, '完整实时点位必须保留 EMS 原始值');
+  assert(anomaly.rawValueStatus === 'ems_raw_anomaly', '非法集控值必须分类为 EMS 原始异常');
+  assert(anomaly.categories.includes('invalidLock'), '非法集控值必须进入 invalidLock 分类');
+
+  const incomplete = inspectRealtimeRow({ fields: {}, rawFields: {}, realtimeTagCount: 0 });
+  assert(!incomplete.collectionComplete && incomplete.rawValueStatus === 'collection_incomplete', '缺字段实时结果不得伪装为完整采集');
 }
 
 function testCollectionValidationBlocksIncompleteResults() {
@@ -613,8 +633,33 @@ function testNativeOnlyContract() {
   assert(!fs.existsSync(path.join(ROOT, 'src', 'data-history.js')) || !fs.readFileSync(path.join(ROOT, 'src', 'data-history.js'), 'utf8').includes(path.join('src', 'panel')), 'data history must not depend on the panel');
 }
 
+function testRealtimeBatchProgressContract() {
+  const batchScript = path.join(ROOT, 'scripts', 'collect-building-realtime-batch.js');
+  const allScript = fs.readFileSync(path.join(ROOT, 'scripts', 'collect-realtime-all-batch.js'), 'utf8');
+  const { composeOverallDone } = require(batchScript);
+  assert(composeOverallDone(1495, 1096) === 2591, 'overall progress must add completed buildings exactly once');
+  assert(
+    allScript.includes('EMS_OVERALL_DONE_BASE: String(results.reduce((acc, r) => acc + (r.summary.devices || 0), 0))'),
+    'parent must pass completed-building total as the child progress base',
+  );
+  assert(
+    !allScript.includes('EMS_OVERALL_DONE_BASE: String(_overallDoneBase + results.reduce'),
+    'parent must not add the completed-building total twice',
+  );
+
+  const result = spawnSync(process.execPath, ['-e', [
+    'const { withHardTimeout } = require(' + JSON.stringify(batchScript) + ');',
+    "withHardTimeout(() => new Promise(() => {}), 20, 'contract').then(() => process.exit(2)).catch(err => {",
+    "  if (!String(err.message).includes('contract timed out')) process.exit(3);",
+    '  process.exit(0);',
+    '});',
+  ].join('\n')], { cwd: ROOT, encoding: 'utf8' });
+  assert(result.status === 0, 'batch hard timeout contract failed: ' + (result.stderr || result.stdout));
+}
+
 function main() {
   testRules();
+  testRealtimeQualityContract();
   testCollectionValidationBlocksIncompleteResults();
   testPartialImport();
   testTimestampEnvironmentParsing();
@@ -624,6 +669,7 @@ function main() {
   testQualityReportFailsInvalidFields();
   testQualityReportUsesNativePlaceholderCode();
   testNativeOnlyContract();
+  testRealtimeBatchProgressContract();
   console.log('Self-test passed.');
 }
 

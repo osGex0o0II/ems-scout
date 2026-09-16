@@ -13,7 +13,7 @@ public sealed class DataSourceOption
     private DataSourceOption(CollectionRunRecord run, bool isCurrent)
     {
         Value = run.Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        Label = FormatDateTime(run.CompletedAt);
+        Label = FormatDateTime(run.ImportedAt, run.CompletedAt);
         Detail = $"{run.ScopeLabel} · {run.CountLabel}";
         RunId = run.Id;
         IsCurrent = isCurrent;
@@ -33,7 +33,7 @@ public sealed class DataSourceOption
         return latestRun is null
             ? new DataSourceOption("暂无采集时间", "暂无批次")
             : new DataSourceOption(
-                FormatDateTime(latestRun.CompletedAt),
+                FormatDateTime(latestRun.ImportedAt, latestRun.CompletedAt),
                 $"{latestRun.ScopeLabel} · {latestRun.CountLabel}");
     }
 
@@ -49,10 +49,12 @@ public sealed class DataSourceOption
 
     public string DisplayLabel => $"{Label} · {Detail}";
 
-    private static string FormatDateTime(string value)
+    private static string FormatDateTime(string primary, string fallback)
     {
-        return StoredTimestamp.TryParse(value, out var parsed)
+        return StoredTimestamp.TryParse(primary, out var parsed)
             ? parsed.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
-            : value;
+            : StoredTimestamp.TryParse(fallback, out parsed)
+                ? parsed.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+                : primary;
     }
 }

@@ -20,6 +20,51 @@ public sealed class CollectionTaskModeCatalogTests
         Assert.True(plan.RunRealtimeAudit);
     }
 
+    [Theory]
+    [InlineData(CollectionTaskModeValues.StableRealtimeStrategy, "稳定实时采集")]
+    [InlineData(CollectionTaskModeValues.FastRealtimeStrategy, "快速实时采集")]
+    public void FullModeRealtimeStrategyUsesExpectedInventoryPolicy(string strategy, string expectedLabel)
+    {
+        var plan = CollectionTaskModeCatalog.ApplyRealtimeCollectionStrategy(
+            CollectionTaskModeCatalog.BuildPlan(
+                CollectionTaskModeValues.Full,
+                new CollectionCustomTaskOptions(false, false, false, false)),
+            strategy);
+
+        Assert.Equal(expectedLabel, plan.Label);
+        Assert.False(plan.RunEnumeration);
+        Assert.True(plan.RunValidation);
+        Assert.True(plan.RunImport);
+        Assert.True(plan.RunQuality);
+        Assert.True(plan.RunRealtimeDetails);
+        Assert.True(plan.RunRealtimeAudit);
+        Assert.Equal(strategy == CollectionTaskModeValues.FastRealtimeStrategy, plan.UsesExistingInventory);
+    }
+
+    [Theory]
+    [InlineData(-1, CollectionTaskModeValues.StableRealtimeStrategy)]
+    [InlineData(0, CollectionTaskModeValues.StableRealtimeStrategy)]
+    [InlineData(1, CollectionTaskModeValues.FastRealtimeStrategy)]
+    [InlineData(2, CollectionTaskModeValues.StableRealtimeStrategy)]
+    public void ConfirmationSelectionMapsToOneExplicitStrategy(int selectedIndex, string expected)
+    {
+        Assert.Equal(expected, CollectionTaskModeValues.RealtimeStrategyForSelection(selectedIndex));
+    }
+
+    [Fact]
+    public void NonFullModesKeepTheirExplicitPipeline()
+    {
+        var plan = CollectionTaskModeCatalog.ApplyRealtimeCollectionStrategy(
+            CollectionTaskModeCatalog.BuildPlan(
+                CollectionTaskModeValues.CollectImport,
+                new CollectionCustomTaskOptions(false, false, false, false)),
+            CollectionTaskModeValues.FastRealtimeStrategy);
+
+        Assert.True(plan.RunEnumeration);
+        Assert.True(plan.RunImport);
+        Assert.False(plan.UsesExistingInventory);
+    }
+
     [Fact]
     public void ValidateOnlyDoesNotRequireBuildingSelectionOrModifySqlite()
     {

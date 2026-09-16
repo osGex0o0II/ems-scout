@@ -29,7 +29,7 @@ try {
   process.exit(1);
 }
 
-const result = validateEnumData(data, { buildings: selectedBuildings });
+const result = validateEnumData(data, { buildings: selectedBuildings, requireDevId: true });
 for (const line of formatValidation(result)) console.log(line);
 
 if (!result.ok) {

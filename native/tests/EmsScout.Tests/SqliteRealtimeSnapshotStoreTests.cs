@@ -64,6 +64,10 @@ public sealed class SqliteRealtimeSnapshotStoreTests
             }
             """);
 
+        await using var readOnlyConnection = new SqliteConnection(
+            $"Data Source={databasePath};Mode=ReadOnly;Cache=Shared");
+        await readOnlyConnection.OpenAsync();
+
         var store = new SqliteRealtimeSnapshotStore(() => databasePath);
         await store.SaveAsync(1, outputDirectory, ["1号"]);
         await store.SaveAsync(1, outputDirectory, ["2号"]);

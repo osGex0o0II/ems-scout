@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { formatLocalTimestamp } = require('../src/time');
+const { inspectRealtimeRow } = require('../src/realtime-quality');
 const { installRealtimeLog } = require('./realtime-logger');
 const { ensureRealtimeBrowser } = require('./realtime-browser');
 
@@ -27,6 +28,7 @@ const REUSE_MODAL = process.argv.includes('--reuse-modal');
 const INVENTORY_ONLY = process.argv.includes('--inventory-only');
 const IS_PARTIAL_RUN = MAX_SUBAREAS > 0 || MAX_DEVICES > 0;
 const OUT_DIR = path.resolve(process.env.EMS_OUT_DIR || path.resolve(__dirname, '..', 'out'));
+const ENUM_PATH = process.env.EMS_ENUM_PATH || process.env.EMS_JSON_PATH || path.join(OUT_DIR, 'enum_full_v5.json');
 installRealtimeLog({ prefix: `realtime_${BUILDING}_details` });
 
 const FIELD_ORDER = [
@@ -155,8 +157,22 @@ function summarize(rows, startedAt) {
   };
 }
 
+function subAreaKey(meta) {
+  const x = Number(meta.subAreaX);
+  const y = Number(meta.subAreaY);
+  if (Number.isFinite(x) && Number.isFinite(y)) {
+    return `xy:${Math.round(x)}:${Math.round(y)}`;
+  }
+  if (meta.subAreaIdx !== undefined && meta.subAreaIdx !== null && meta.subAreaIdx !== '') {
+    return `idx:${meta.subAreaIdx}`;
+  }
+  return `floor:${meta.floor ?? ''}:${meta.subAreaText || ''}`;
+}
+
 function rowKey(row) {
   return [
+    subAreaKey(row),
+    row.floor ?? '',
     row.subAreaText || '',
     row.tab || '',
     row.pageName || '',
@@ -167,10 +183,80 @@ function rowKey(row) {
 
 function pageKey(meta) {
   return [
+    subAreaKey(meta),
+    meta.floor ?? '',
     meta.subAreaText || '',
     meta.tab || '',
     meta.pageName || '',
   ].join('|');
+}
+
+function loadEnumTargets() {
+  if (!fs.existsSync(ENUM_PATH)) return null;
+  try {
+    const data = JSON.parse(fs.readFileSync(ENUM_PATH, 'utf8'));
+    const building = (data.buildings || []).find(item => item.building === BUILDING);
+    if (!building) return null;
+    const targets = new Map();
+    const expectedDeviceIds = new Set();
+    let missingIds = 0;
+    for (const subArea of building.subAreas || []) {
+      for (const page of subArea.pages || []) {
+        const rawPage = String(page.page || 'default');
+        const slash = rawPage.indexOf('/');
+        const tab = slash >= 0 ? rawPage.slice(0, slash) : '';
+        const pageName = slash >= 0 ? rawPage.slice(slash + 1) : rawPage;
+        const cards = page.cards || [];
+        missingIds += cards.filter(card => !card.devId).length;
+        const ids = new Set(cards.map(card => String(card.devId || '')).filter(Boolean));
+        for (const id of ids) expectedDeviceIds.add(id);
+        if (!ids.size) continue;
+        targets.set(pageKey({
+          subAreaIdx: subArea.idx,
+          floor: subArea.floor,
+          subAreaText: subArea.text || '',
+          subAreaX: subArea.x,
+          subAreaY: subArea.y,
+          tab,
+          pageName,
+        }), ids);
+      }
+    }
+    if (missingIds > 0) {
+      throw new Error(`枚举快照缺少 ${missingIds} 台设备的 devId，拒绝使用不完整实时清单。`);
+    }
+    targets.expectedDeviceIds = expectedDeviceIds;
+    return targets;
+  } catch (error) {
+    console.log(`[WARN] enum snapshot unavailable: ${error.message}`);
+    return null;
+  }
+}
+
+function reconcileRowsToEnum(rows, enumTargets) {
+  const expected = enumTargets.expectedDeviceIds instanceof Set
+    ? new Set(enumTargets.expectedDeviceIds)
+    : new Set([...enumTargets.values()].flatMap(ids => [...ids]));
+  const seen = new Set();
+  const kept = [];
+  let filtered = 0;
+  let duplicate = 0;
+
+  for (const row of rows) {
+    const id = String(row.devId || '');
+    if (!expected.has(id)) {
+      filtered++;
+      continue;
+    }
+    if (seen.has(id)) {
+      duplicate++;
+      continue;
+    }
+    seen.add(id);
+    kept.push(row);
+  }
+
+  return { expected, kept, filtered, duplicate };
 }
 
 function buildFailedTargets(file) {
@@ -923,13 +1009,14 @@ async function captureDeviceDetail(page, dev) {
   return last;
 }
 
-async function collectCurrentPageDetails(page, pageMeta, rows, ndjsonStream, startedAt, targetNames = null) {
+async function collectCurrentPageDetails(page, pageMeta, rows, ndjsonStream, startedAt, targetNames = null, targetDevIds = null) {
   let devices = await waitForDevices(page);
   const uniqueNames = new Set(devices.map(d => d.name)).size;
   if (devices.length >= 3 && uniqueNames <= Math.max(1, Math.floor(devices.length * 0.5))) {
     throw new Error(`device name collapse: ${pageMeta.subAreaText} ${pageMeta.pageName} ${uniqueNames}/${devices.length}`);
   }
   if (targetNames) devices = devices.filter(d => targetNames.has(d.name));
+  if (targetDevIds) devices = devices.filter(d => targetDevIds.has(String(d.devId)));
   if (MAX_DEVICES > 0) devices = devices.slice(0, Math.max(0, MAX_DEVICES - rows.length));
   if (INVENTORY_ONLY) {
     console.log(`[PAGE] ${pageMeta.subAreaText} ${pageMeta.pageName}: ${devices.length} devices (inventory)`);
@@ -1034,6 +1121,10 @@ async function collectCurrentPageDetails(page, pageMeta, rows, ndjsonStream, sta
       rawFields: detail.rawFields || {},
       validFields: detail.validFields || {},
     };
+    const realtimeQuality = inspectRealtimeRow(row);
+    row.rawValueStatus = realtimeQuality.rawValueStatus;
+    row.preserveRawValues = realtimeQuality.preserveRawValues;
+    row.rawFieldCount = realtimeQuality.rawFieldCount;
     rows.push(row);
     ndjsonStream.write(JSON.stringify(row) + '\n');
   }
@@ -1042,7 +1133,7 @@ async function collectCurrentPageDetails(page, pageMeta, rows, ndjsonStream, sta
   await closeModals(page);
 }
 
-async function collectPagesForCurrentArea(page, pageMetaBase, rows, ndjsonStream, startedAt, targetPages = null) {
+async function collectPagesForCurrentArea(page, pageMetaBase, rows, ndjsonStream, startedAt, targetPages = null, enumTargets = null) {
   await waitForReady(page);
   await waitForDevices(page);
   let btns = await page.evaluate(() => window.__ems_rt.findPageBtns()).catch(() => ({}));
@@ -1067,7 +1158,7 @@ async function collectPagesForCurrentArea(page, pageMetaBase, rows, ndjsonStream
         const meta = { ...pageMetaBase, pageName: `${cn}页` };
         const beforeCount = rows.length;
         if (!targetPages || targetPages.has(pageKey(meta))) {
-          await collectCurrentPageDetails(page, meta, rows, ndjsonStream, startedAt, targetPages && targetPages.get(pageKey(meta)));
+          await collectCurrentPageDetails(page, meta, rows, ndjsonStream, startedAt, targetPages && targetPages.get(pageKey(meta)), enumTargets && enumTargets.get(pageKey(meta)));
         }
         const pageRows = rows.slice(beforeCount);
         const sig = pageRows.map(r => `${r.devId}:${r.name}`).join('|');
@@ -1093,7 +1184,7 @@ async function collectPagesForCurrentArea(page, pageMetaBase, rows, ndjsonStream
     }
     const meta = { ...pageMetaBase, pageName: 'default' };
     if (!targetPages || targetPages.has(pageKey(meta))) {
-      await collectCurrentPageDetails(page, meta, rows, ndjsonStream, startedAt, targetPages && targetPages.get(pageKey(meta)));
+      await collectCurrentPageDetails(page, meta, rows, ndjsonStream, startedAt, targetPages && targetPages.get(pageKey(meta)), enumTargets && enumTargets.get(pageKey(meta)));
     }
     return;
   }
@@ -1101,7 +1192,7 @@ async function collectPagesForCurrentArea(page, pageMetaBase, rows, ndjsonStream
   const firstLabel = pageLabels[0] || '一页';
   const firstMeta = { ...pageMetaBase, pageName: firstLabel };
   if (!targetPages || targetPages.has(pageKey(firstMeta))) {
-    await collectCurrentPageDetails(page, firstMeta, rows, ndjsonStream, startedAt, targetPages && targetPages.get(pageKey(firstMeta)));
+    await collectCurrentPageDetails(page, firstMeta, rows, ndjsonStream, startedAt, targetPages && targetPages.get(pageKey(firstMeta)), enumTargets && enumTargets.get(pageKey(firstMeta)));
   }
   for (const label of pageLabels.slice(1)) {
     const meta = { ...pageMetaBase, pageName: label };
@@ -1117,7 +1208,7 @@ async function collectPagesForCurrentArea(page, pageMetaBase, rows, ndjsonStream
     await pause(150);
     await waitForReady(page, 20);
     await waitForDevices(page);
-    await collectCurrentPageDetails(page, meta, rows, ndjsonStream, startedAt, targetPages && targetPages.get(pageKey(meta)));
+    await collectCurrentPageDetails(page, meta, rows, ndjsonStream, startedAt, targetPages && targetPages.get(pageKey(meta)), enumTargets && enumTargets.get(pageKey(meta)));
   }
 }
 
@@ -1129,6 +1220,10 @@ async function main() {
   const ndjsonPath = path.join(OUT_DIR, `${prefix}_${BUILDING}_${ts}.ndjson`);
   const latestPath = path.join(OUT_DIR, `${prefix}_${BUILDING}_latest.json`);
   const failedTargets = buildFailedTargets(FAILED_FROM);
+  const enumTargets = loadEnumTargets();
+  if (enumTargets) {
+    console.log(`[SOURCE] ${BUILDING}: using enum snapshot ${ENUM_PATH} (${enumTargets.size} pages, ${enumTargets.expectedDeviceIds?.size || 0} devices)`);
+  }
   const ndjsonStream = fs.createWriteStream(ndjsonPath, { flags: 'a' });
   const startedAt = Date.now();
   const rows = [];
@@ -1148,7 +1243,13 @@ async function main() {
   let selectedSubAreas = MAX_SUBAREAS > 0 ? subAreas.slice(0, MAX_SUBAREAS) : subAreas;
   if (failedTargets) {
     const failedSubAreas = new Set([...failedTargets.pages.keys()].map(k => k.split('|')[0]));
-    selectedSubAreas = selectedSubAreas.filter(sa => failedSubAreas.has(sa.text));
+    selectedSubAreas = selectedSubAreas.filter(sa => failedSubAreas.has(subAreaKey({
+      subAreaIdx: sa.idx,
+      floor: sa.floor,
+      subAreaText: sa.text,
+      subAreaX: sa.x,
+      subAreaY: sa.y,
+    })) || failedSubAreas.has(sa.text));
     console.log(`[RECAPTURE] failed rows=${failedTargets.failedRows.length}, failed pages=${failedTargets.pages.size}`);
   }
   console.log(`[START] ${BUILDING}: ${selectedSubAreas.length}/${subAreas.length} sub-areas, out=${jsonPath}`);
@@ -1200,12 +1301,21 @@ async function main() {
       elapsedMs: Date.now() - startedAt,
       message: `${BUILDING} ${target.text} 设备清单 ${saIdx + 1}/${selectedSubAreas.length}`,
     }) + '\n');
-    const baseMeta = { subAreaIdx: saIdx, floor: target.floor, subAreaText: target.text, tab: '' };
-    await collectPagesForCurrentArea(page, baseMeta, rows, ndjsonStream, startedAt, failedTargets && failedTargets.pages);
+    const baseMeta = {
+      subAreaIdx: target.idx ?? saIdx,
+      floor: target.floor,
+      subAreaText: target.text,
+      subAreaX: target.x,
+      subAreaY: target.y,
+      tab: '',
+    };
+    await collectPagesForCurrentArea(page, baseMeta, rows, ndjsonStream, startedAt, failedTargets && failedTargets.pages, enumTargets);
 
     const tabs = await page.evaluate(() => window.__ems_rt.findSubTabs()).catch(() => []);
     if (tabs.length > 0) {
-      const defaultNames = new Set(rows.filter(r => r.subAreaIdx === saIdx).map(r => r.name));
+      const defaultIds = new Set(rows.filter(r =>
+        subAreaKey(r) === subAreaKey(baseMeta) && !r.tab
+      ).map(r => String(r.devId || '')));
       for (const tab of tabs.sort((a, b) => b.txt.localeCompare(a.txt))) {
         if (MAX_DEVICES > 0 && rows.length >= MAX_DEVICES) break;
         if (tab.isActive) continue;
@@ -1218,8 +1328,8 @@ async function main() {
         await waitForReady(page, 30);
         await waitForDevices(page);
         const beforeCount = rows.length;
-        await collectPagesForCurrentArea(page, { ...baseMeta, tab: tab.txt }, rows, ndjsonStream, startedAt, failedTargets && failedTargets.pages);
-        const added = rows.slice(beforeCount).filter(r => !defaultNames.has(r.name));
+        await collectPagesForCurrentArea(page, { ...baseMeta, tab: tab.txt }, rows, ndjsonStream, startedAt, failedTargets && failedTargets.pages, enumTargets);
+        const added = rows.slice(beforeCount).filter(r => !defaultIds.has(String(r.devId || '')));
         if (added.length !== rows.length - beforeCount) {
           rows.splice(beforeCount, rows.length - beforeCount, ...added);
           console.log(`[TAB] ${target.text} ${tab.txt}: removed duplicate rows`);
@@ -1233,6 +1343,21 @@ async function main() {
 
   const capturedAt = formatLocalTimestamp();
   let result = { runId: RUN_ID > 0 ? RUN_ID : null, capturedAt, summary: summarize(rows, startedAt), rows };
+  if (enumTargets && !IS_PARTIAL_RUN) {
+    const reconciled = reconcileRowsToEnum(rows, enumTargets);
+    if (reconciled.filtered > 0 || reconciled.duplicate > 0) {
+      console.log(`[RECONCILE] removed ${reconciled.filtered} non-enumerated and ${reconciled.duplicate} duplicate realtime rows`);
+    }
+    rows.splice(0, rows.length, ...reconciled.kept);
+    const expected = reconciled.expected;
+    const actual = new Set(rows.map(row => String(row.devId || '')).filter(Boolean));
+    const missing = [...expected].filter(id => !actual.has(id));
+    const extra = [...actual].filter(id => !expected.has(id));
+    if (missing.length || extra.length || actual.size !== expected.size) {
+      throw new Error(`枚举与实时清单不一致：期望 ${expected.size} 台，实际 ${actual.size} 台，缺失 ${missing.length}，新增 ${extra.length}`);
+    }
+    result = { runId: RUN_ID > 0 ? RUN_ID : null, capturedAt, summary: summarize(rows, startedAt), rows };
+  }
   if (failedTargets) {
     const mergedRows = failedTargets.source.rows || [];
     const index = new Map(mergedRows.map((row, idx) => [rowKey(row), idx]));

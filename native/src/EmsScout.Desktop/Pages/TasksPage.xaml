@@ -85,7 +85,7 @@
                     FontSize="18"
                     Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
                     Glyph="{x:Bind ViewModel.ReadinessGlyph, Mode=OneWay}" />
-                <StackPanel Grid.Column="1" HorizontalAlignment="Left" Spacing="2">
+                <StackPanel Grid.Column="1" HorizontalAlignment="Left" VerticalAlignment="Center" Spacing="2">
                     <TextBlock
                         HorizontalAlignment="Left"
                         TextAlignment="Left"

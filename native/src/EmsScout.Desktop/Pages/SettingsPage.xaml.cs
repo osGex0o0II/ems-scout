@@ -40,6 +40,7 @@ public sealed partial class SettingsPage : Page
     {
         ConnectionSection.Visibility = section == "connection" ? Visibility.Visible : Visibility.Collapsed;
         DirectoriesSection.Visibility = section == "directories" ? Visibility.Visible : Visibility.Collapsed;
+        CollectionSection.Visibility = section == "collection" ? Visibility.Visible : Visibility.Collapsed;
         DataTableSection.Visibility = section == "data-table" ? Visibility.Visible : Visibility.Collapsed;
         AppearanceSection.Visibility = section == "appearance" ? Visibility.Visible : Visibility.Collapsed;
         BehaviorSection.Visibility = section == "behavior" ? Visibility.Visible : Visibility.Collapsed;

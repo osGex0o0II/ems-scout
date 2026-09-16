@@ -11,7 +11,7 @@ public sealed class CollectionRunRow(CollectionRunRecord record, bool isCurrent 
 
     public string RunKey { get; } = record.RunKey;
 
-    public string CompletedAt { get; } = FormatDateTime(record.CompletedAt);
+    public string CompletedAt { get; } = FormatDateTime(record.ImportedAt, record.CompletedAt);
 
     public string Scope { get; } = record.Scope;
 
@@ -55,10 +55,12 @@ public sealed class CollectionRunRow(CollectionRunRecord record, bool isCurrent 
         return "已记录";
     }
 
-    private static string FormatDateTime(string value)
+    private static string FormatDateTime(string primary, string fallback)
     {
-        return StoredTimestamp.TryParse(value, out var parsed)
+        return StoredTimestamp.TryParse(primary, out var parsed)
             ? parsed.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
-            : value;
+            : StoredTimestamp.TryParse(fallback, out parsed)
+                ? parsed.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+                : primary;
     }
 }

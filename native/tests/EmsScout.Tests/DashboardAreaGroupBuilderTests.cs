@@ -154,6 +154,26 @@ public sealed class DashboardAreaGroupBuilderTests
     }
 
     [Fact]
+    public void KeepsValidLockCountsVisibleWhenRealtimeDetailsArePartial()
+    {
+        var publicGroup = Group(1, "公区", enabled: true, groupKind: "system", systemKey: "public");
+        var devices = new[]
+        {
+            DeviceWithValues(1, "GQ-0101-KT", DeviceCommunicationState.Running, "制冷", "25", "开启"),
+            DeviceWithValues(2, "GQ-0102-KT", DeviceCommunicationState.Stopped, "制冷", "25", "关闭"),
+            Device(3, "GQ-0103-KT", 1, "1F A", DeviceCommunicationState.Running),
+        };
+
+        var summary = Assert.Single(
+            DashboardAreaGroupBuilder.Build(devices, new AreaGroupSet([publicGroup], [])));
+
+        Assert.Equal(DashboardRealtimeAvailability.Partial, summary.RealtimeAvailability);
+        Assert.Equal(1, summary.LockOn);
+        Assert.Equal(1, summary.LockOff);
+        Assert.Contains("部分可用", summary.RealtimeStatusText);
+    }
+
+    [Fact]
     public void MatchesDuplicateDeviceSuffixWithinTheConfiguredLocation()
     {
         var item = new AreaGroupItemRecord(

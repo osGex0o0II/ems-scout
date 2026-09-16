@@ -180,7 +180,16 @@ function isOfflineTemplateStable(cards, qc, prev = {}, elapsedMs = 0) {
   if (!cards || cards.length < 2 || !qc || !qc.uniformTemplate || !qc.allOffline) {
     return { accept: false, signature: '', rounds: 0 };
   }
-  const signature = buildPartialSignature(cards);
+  // Indicator hrefs can be refreshed independently of the offline state. Keep
+  // them out of this stability key and sort by name so DOM reorder does not
+  // prevent a genuine all-offline page from reaching its stable state.
+  const signature = cards
+    .map(c => [
+      c.name || '', c.switch || '', c.indoor || '', c.setTemp || '',
+      c.mode || '', c.fan || '', c.comm || '',
+    ].join('|'))
+    .sort()
+    .join('||');
   const rounds = signature && signature === prev.signature ? (prev.rounds || 0) + 1 : 1;
   const accept = rounds >= 3 && elapsedMs >= 600;
   return { accept, signature, rounds };
@@ -205,6 +214,28 @@ function isAcceptableCapture(data, qc = null, quality = null) {
   return currentQc.ok && currentQuality.isGood;
 }
 
+function assessFallbackCapture(data, prevOfflineTemplate, elapsedMs) {
+  const cards = data && Array.isArray(data.cards) ? data.cards : [];
+  const qc = checkCardQuality(cards, data || {});
+  const quality = assessDataQuality(cards);
+  const offlineTemplate = isOfflineTemplateStable(
+    cards,
+    qc,
+    prevOfflineTemplate,
+    elapsedMs,
+  );
+  return {
+    qc,
+    quality,
+    offlineTemplate,
+    prevOfflineTemplate: {
+      signature: offlineTemplate.signature,
+      rounds: offlineTemplate.rounds,
+    },
+    acceptable: isAcceptableCapture(data, qc, quality) || offlineTemplate.accept,
+  };
+}
+
 async function qualityCheckWithProgressiveRetry(page, extractCards, description, maxAttempts = 5) {
   const RETRY_DELAYS = [200, 500, 1000, 2000, 5000];
   let prevOfflineTemplate = { signature: '', rounds: 0 };
@@ -212,6 +243,14 @@ async function qualityCheckWithProgressiveRetry(page, extractCards, description,
   const startTime = Date.now();
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) {
+      await waitForCaptureReady(page, {
+        readyRetries: 8,
+        cards: { maxRetries: 8, waitMs: 250 },
+        ws: { maxRetries: 8, waitMs: 200 },
+        svg: { maxRetries: 8, waitMs: 200 },
+      });
+    }
     const data = await extractCards();
     const qc = checkCardQuality(data.cards, data);
     const quality = assessDataQuality(data.cards);
@@ -819,8 +858,11 @@ async function injectHelpers(page) {
             const sl = d.svgListDraw || [];
             const sr2 = (document.querySelector('.pi-svg-container') || {}).shadowRoot;
 
-            // Build ptId → deviceName map from CabinetId draws
+            // Build point identity and screen position maps from CabinetId draws.
+            // The realtime collector uses this identity to reconcile every card
+            // with the current enumeration snapshot.
             const ptIdToName = {};
+            const deviceVisuals = [];
             for (const e of sl) {
               if (!e.dyn || !e.dyn.listDyn) continue;
               for (const ld of e.dyn.listDyn) {
@@ -829,7 +871,37 @@ async function injectHelpers(page) {
                 if (!pid) continue;
                 const el = sr2 ? (sr2.getElementById(e.id) || sr2.querySelector('#' + CSS.escape(e.id))) : null;
                 const nm = el ? (el.textContent || '').trim() : '';
-                if (nm) ptIdToName[pid] = nm;
+                if (nm) {
+                  ptIdToName[pid] = nm;
+                  const rect = el.getBoundingClientRect();
+                  if (rect.width > 0 && rect.height > 0) {
+                    deviceVisuals.push({
+                      devId: Number(pid),
+                      name: nm,
+                      x: rect.left + rect.width / 2,
+                      y: rect.top + rect.height / 2,
+                    });
+                  }
+                }
+              }
+            }
+
+            // Bind rendered cards to their point identity before duplicate names
+            // are labeled. Names alone are not unique across floors or tabs.
+            const claimedVisuals = new Set();
+            for (const card of cards) {
+              const candidates = deviceVisuals
+                .map((visual, index) => ({ visual, index }))
+                .filter(item => item.visual.name === card.name && !claimedVisuals.has(item.index))
+                .sort((a, b) => {
+                  const ad = Math.hypot(a.visual.x - (card._sourceX || 0), a.visual.y - (card._sourceY || 0));
+                  const bd = Math.hypot(b.visual.x - (card._sourceX || 0), b.visual.y - (card._sourceY || 0));
+                  return ad - bd;
+                });
+              const match = candidates[0];
+              if (match) {
+                card.devId = match.visual.devId;
+                claimedVisuals.add(match.index);
               }
             }
 
@@ -866,7 +938,7 @@ async function injectHelpers(page) {
 
             // Enrich SVG cards with Vue values (prefer SVG fallback over Vue)
             for (const card of cards) {
-              const devId = nameToDev[card.name];
+              const devId = card.devId || nameToDev[card.name];
               if (!devId || !devFields[devId]) continue;
               const f = devFields[devId];
               if (f.switch) card.switch = f.switch;
@@ -1969,13 +2041,14 @@ async function main() {
                 data = retryResult.data;
                 log(`      RECAPTURE PROGRESSIVE RETRY OK: ${retryResult.qc.details}`);
               } else {
-                log(`      PROGRESSIVE RETRY FAILED — deeper WS wait fallback (total cap 5s)...`);
+                log(`      PROGRESSIVE RETRY FAILED — deeper WS wait fallback (total cap 30s)...`);
                 const fallbackStart = Date.now();
-                const FALLBACK_DEADLINE = 5000;
-                for (let f = 0; f < 10 && Date.now() - fallbackStart < FALLBACK_DEADLINE; f++) {
+                const FALLBACK_DEADLINE = 30000;
+                let fallbackOfflineTemplate = { signature: '', rounds: 0 };
+                for (let f = 0; f < 30 && Date.now() - fallbackStart < FALLBACK_DEADLINE; f++) {
                   await Promise.all([
-                    waitForDataReady(page, { maxRetries: 6, waitMs: 200 }),
-                    waitForSvgStable(page, { maxRetries: 6, waitMs: 200 }),
+                    waitForDataReady(page, { maxRetries: 8, waitMs: 200 }),
+                    waitForSvgStable(page, { maxRetries: 8, waitMs: 200 }),
                   ]);
                   let dataN = await page.evaluate(() => window.__ems.extractCards()).catch(() => ({ cards: [], count: 0 }));
                   if (!dataN.cards || dataN.cards.length === 0) {
@@ -1983,11 +2056,18 @@ async function main() {
                     dataN = await page.evaluate(() => window.__ems.extractCards()).catch(() => ({ cards: [], count: 0 }));
                     if (!dataN.cards || dataN.cards.length === 0) continue;
                   }
-                  const qcN = checkCardQuality(dataN.cards, dataN);
-                  const qualityN = assessDataQuality(dataN.cards);
-                  if (isAcceptableCapture(dataN, qcN, qualityN)) {
+                  const fallbackQuality = assessFallbackCapture(
+                    dataN,
+                    fallbackOfflineTemplate,
+                    Date.now() - fallbackStart,
+                  );
+                  fallbackOfflineTemplate = fallbackQuality.prevOfflineTemplate;
+                  const { qc: qcN, quality: qualityN } = fallbackQuality;
+                  if (fallbackQuality.acceptable) {
                     data = dataN;
-                    data.qualityReason = 'quality_pass';
+                    data.qualityReason = fallbackQuality.offlineTemplate.accept
+                      ? 'offline_template_stable'
+                      : 'quality_pass';
                     log(`      RECAPTURE FALLBACK OK after round ${f+1}: ${qcN.details} ${qualityN.details}`);
                     break;
                   }
@@ -2468,10 +2548,15 @@ async function main() {
                 data = retryResult.data;
                 log(`      PROGRESSIVE RETRY OK: ${retryResult.qc.details}`);
               } else {
-                log(`      PROGRESSIVE RETRY FAILED — deeper WS wait fallback...`);
-                for (let f = 0; f < 10; f++) {
-                  await waitForDataReady(page, { maxRetries: 8, waitMs: 200 });
-                  await waitForSvgStable(page, { maxRetries: 8, waitMs: 200 });
+                log(`      PROGRESSIVE RETRY FAILED — deeper WS wait fallback (total cap 30s)...`);
+                const fallbackStart = Date.now();
+                const fallbackDeadline = 30000;
+                let fallbackOfflineTemplate = { signature: '', rounds: 0 };
+                for (let f = 0; f < 30 && Date.now() - fallbackStart < fallbackDeadline; f++) {
+                  await Promise.all([
+                    waitForDataReady(page, { maxRetries: 8, waitMs: 200 }),
+                    waitForSvgStable(page, { maxRetries: 8, waitMs: 200 }),
+                  ]);
                   let dataN = await page.evaluate(() => {
                     if (!window.__ems || !window.__ems.extractCards) return { cards: [], count: 0 };
                     return window.__ems.extractCards();
@@ -2484,11 +2569,18 @@ async function main() {
                     }).catch(() => ({ cards: [], count: 0 }));
                     if (!dataN.cards || dataN.cards.length === 0) continue;
                   }
-                  const qcN = checkCardQuality(dataN.cards, dataN);
-                  const qualityN = assessDataQuality(dataN.cards);
-                  if (isAcceptableCapture(dataN, qcN, qualityN)) {
+                  const fallbackQuality = assessFallbackCapture(
+                    dataN,
+                    fallbackOfflineTemplate,
+                    Date.now() - fallbackStart,
+                  );
+                  fallbackOfflineTemplate = fallbackQuality.prevOfflineTemplate;
+                  const { qc: qcN, quality: qualityN } = fallbackQuality;
+                  if (fallbackQuality.acceptable) {
                     data = dataN;
-                    data.qualityReason = 'quality_pass';
+                    data.qualityReason = fallbackQuality.offlineTemplate.accept
+                      ? 'offline_template_stable'
+                      : 'quality_pass';
                     log(`      FALLBACK OK after round ${f+1}: ${qcN.details} ${qualityN.details}`);
                     break;
                   }
@@ -2727,13 +2819,14 @@ async function main() {
                 data = retryResult.data;
                 log(`      PROGRESSIVE RETRY OK: ${retryResult.qc.details}`);
               } else {
-                log(`      PROGRESSIVE RETRY FAILED — deeper WS wait fallback (total cap 5s)...`);
+                log(`      PROGRESSIVE RETRY FAILED — deeper WS wait fallback (total cap 30s)...`);
                 const fallbackStart = Date.now();
-                const FALLBACK_DEADLINE = 5000;
-                for (let f = 0; f < 10 && Date.now() - fallbackStart < FALLBACK_DEADLINE; f++) {
+                const FALLBACK_DEADLINE = 30000;
+                let fallbackOfflineTemplate = { signature: '', rounds: 0 };
+                for (let f = 0; f < 30 && Date.now() - fallbackStart < FALLBACK_DEADLINE; f++) {
                   await Promise.all([
-                    waitForDataReady(page, { maxRetries: 6, waitMs: 200 }),
-                    waitForSvgStable(page, { maxRetries: 6, waitMs: 200 }),
+                    waitForDataReady(page, { maxRetries: 8, waitMs: 200 }),
+                    waitForSvgStable(page, { maxRetries: 8, waitMs: 200 }),
                   ]);
                   let dataN = await page.evaluate(() => {
                     if (!window.__ems || !window.__ems.extractCards) return { cards: [], count: 0 };
@@ -2747,11 +2840,18 @@ async function main() {
                     }).catch(() => ({ cards: [], count: 0 }));
                     if (!dataN.cards || dataN.cards.length === 0) continue;
                   }
-                  const qcN = checkCardQuality(dataN.cards, dataN);
-                  const qualityN = assessDataQuality(dataN.cards);
-                  if (isAcceptableCapture(dataN, qcN, qualityN)) {
+                  const fallbackQuality = assessFallbackCapture(
+                    dataN,
+                    fallbackOfflineTemplate,
+                    Date.now() - fallbackStart,
+                  );
+                  fallbackOfflineTemplate = fallbackQuality.prevOfflineTemplate;
+                  const { qc: qcN, quality: qualityN } = fallbackQuality;
+                  if (fallbackQuality.acceptable) {
                     data = dataN;
-                    data.qualityReason = 'quality_pass';
+                    data.qualityReason = fallbackQuality.offlineTemplate.accept
+                      ? 'offline_template_stable'
+                      : 'quality_pass';
                     log(`      FALLBACK OK after round ${f+1}: ${qcN.details} ${qualityN.details}`);
                     break;
                   }
@@ -2936,7 +3036,10 @@ async function main() {
   }
 
   const output = { buildings: allResults, completedAt: formatLocalTimestamp() };
-  const validation = validateEnumData(output, { buildings: bldgs.map(b => b.building) });
+  const validation = validateEnumData(output, {
+    buildings: bldgs.map(b => b.building),
+    requireDevId: true,
+  });
   for (const line of formatValidation(validation)) log(`  ${line}`);
   const qualityGateIssues = auditCollectedOutput(output);
   for (const issue of qualityGateIssues.slice(0, 20)) {

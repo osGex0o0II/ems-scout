@@ -46,8 +46,22 @@ public static class RealtimeKeyBuilder
     {
         var floorKey = FloorKey(floor);
         var subAreaKey = KeyPart(string.IsNullOrWhiteSpace(subArea) ? floorKey : subArea);
-        var pageKey = KeyPart(string.IsNullOrWhiteSpace(pageName) ? "default" : pageName);
+        var pageKey = KeyPart(NormalizePageName(pageName));
         return $"{floorKey}|{subAreaKey}|{pageKey}";
+    }
+
+    private static string NormalizePageName(string pageName)
+    {
+        var normalized = string.IsNullOrWhiteSpace(pageName) ? "default" : pageName.Trim();
+        foreach (var prefix in new[] { "裙楼/", "塔楼/" })
+        {
+            if (normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return normalized[prefix.Length..].Trim();
+            }
+        }
+
+        return normalized;
     }
 
     private static string FloorKey(double? floor)

@@ -25,7 +25,8 @@ public sealed partial class CollectionTaskViewModel(
     IRealtimeQualityAuditService realtimeQualityAuditService,
     IRealtimeReconciliationService realtimeReconciliationService,
     ICollectionRunRepository collectionRunRepository,
-    IRealtimeSnapshotStore realtimeSnapshotStore) : ObservableObject
+    IRealtimeSnapshotStore realtimeSnapshotStore,
+    IDeviceReadRepository deviceReadRepository) : ObservableObject
 {
     private CancellationTokenSource? _activeTask;
     private bool _stopRequested;
@@ -55,6 +56,7 @@ public sealed partial class CollectionTaskViewModel(
     private bool _realtimeAuditScriptReady;
     private bool _databaseReady;
     private bool _jsonReady;
+    private string _nextRealtimeCollectionStrategy = CollectionTaskModeValues.StableRealtimeStrategy;
     private bool _emsUrlReady;
     private bool _cdpReachable;
     private int _emsPageCount;
@@ -182,9 +184,6 @@ public sealed partial class CollectionTaskViewModel(
 
     [ObservableProperty]
     public partial string SelectedBuildingsText { get; private set; } = "已选择 6 栋楼";
-
-    [ObservableProperty]
-    public partial string CurrentDataImpactText { get; private set; } = "采集成功后将更新所选楼栋的当前数据";
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(TaskModeDescription))]
@@ -354,6 +353,21 @@ public sealed partial class CollectionTaskViewModel(
 
     public bool CanStartTask => CanStart();
 
+    public void SetNextRealtimeCollectionStrategy(string? strategy)
+    {
+        if (IsRunning)
+        {
+            return;
+        }
+
+        _nextRealtimeCollectionStrategy = string.Equals(
+            strategy,
+            CollectionTaskModeValues.FastRealtimeStrategy,
+            StringComparison.OrdinalIgnoreCase)
+            ? CollectionTaskModeValues.FastRealtimeStrategy
+            : CollectionTaskModeValues.StableRealtimeStrategy;
+    }
+
     partial void OnSelectedTaskModeChanged(CollectionTaskModeOption? value)
     {
         ApplyTaskModePreset(value);
@@ -506,9 +520,6 @@ public sealed partial class CollectionTaskViewModel(
         SelectedBuildingsText = selected.Count == 0
             ? "尚未选择楼栋"
             : $"已选择 {selected.Count} 栋：{string.Join("、", selected)}";
-        CurrentDataImpactText = selected.Count == 0
-            ? "选择至少一栋楼后才能开始"
-            : $"成功后只更新 {string.Join("、", selected)}，其他楼栋保持不变";
     }
 
     private void InitializeProgressBuildings(IReadOnlyList<string> buildings)
@@ -963,6 +974,7 @@ public sealed partial class CollectionTaskViewModel(
         if (plan.RunRealtimeDetails && !_realtimeScriptReady) missing.Add("实时详情脚本");
         if (plan.RunRealtimeAudit && !_realtimeAuditScriptReady) missing.Add("实时审计脚本");
         if (!plan.RunEnumeration && (plan.RunValidation || plan.RunImport) && !_jsonReady) missing.Add("已有采集结果");
+        if (plan.UsesExistingInventory && !_jsonReady) missing.Add("已有采集快照");
         if (!plan.RunImport && (plan.RunQuality || plan.RunRealtimeDetails || plan.RunRealtimeAudit) && !_databaseReady) missing.Add("当前数据库");
         if ((plan.RunEnumeration || plan.RunRealtimeDetails) && !_emsUrlReady) missing.Add("有效 EMS 地址");
 
@@ -1006,22 +1018,29 @@ public sealed partial class CollectionTaskViewModel(
         StartCommand.NotifyCanExecuteChanged();
     }
 
-    private CollectionTaskExecutionPlan BuildExecutionPlan(CollectionTaskModeOption? mode)
+    private CollectionTaskExecutionPlan BuildExecutionPlan(
+        CollectionTaskModeOption? mode,
+        string? realtimeCollectionStrategy = null)
     {
-        return CollectionTaskModeCatalog.BuildPlan(
+        var plan = CollectionTaskModeCatalog.BuildPlan(
             mode?.Value,
             new CollectionCustomTaskOptions(
                 RunImportAfterCollect,
                 RunQualityAfterImport,
                 RunRealtimeDetailsAfterImport,
                 RunRealtimeAuditAfterDetails));
+        return CollectionTaskModeCatalog.ApplyRealtimeCollectionStrategy(
+            plan,
+            realtimeCollectionStrategy ?? CollectionTaskModeValues.StableRealtimeStrategy);
     }
 
     [RelayCommand(CanExecute = nameof(CanStart))]
     private async Task StartAsync()
     {
         var selectedBuildings = Buildings.Where(item => item.IsSelected).Select(item => item.Value).ToList();
-        var plan = BuildExecutionPlan(SelectedTaskMode);
+        var realtimeCollectionStrategy = _nextRealtimeCollectionStrategy;
+        _nextRealtimeCollectionStrategy = CollectionTaskModeValues.StableRealtimeStrategy;
+        var plan = BuildExecutionPlan(SelectedTaskMode, realtimeCollectionStrategy);
         if (!CanStart())
         {
             StatusText = IsEnvironmentReady ? "请先选择采集楼栋" : ReadinessDetail;
@@ -1134,7 +1153,11 @@ public sealed partial class CollectionTaskViewModel(
 
         if (runRealtimeDetailsAfterImport)
         {
-            AddLog($"实时高级参数：批量 {realtimeBatchSize}；重开间隔 {realtimeReopenEvery}；超时 {realtimeTimeoutMs}ms；最大设备 {realtimeMaxDevices}；刷新清单 {(refreshInventoryBeforeRealtime ? "开启" : "关闭")}；跳过清单检查 {(skipInventoryCheck ? "开启" : "关闭")}");
+            var effectiveSkipInventory = skipInventoryCheck &&
+                !realtimeCollectionStrategy.Equals(
+                    CollectionTaskModeValues.StableRealtimeStrategy,
+                    StringComparison.OrdinalIgnoreCase);
+            AddLog($"实时采集参数：模式 {realtimeCollectionStrategy}；批量 {realtimeBatchSize}；重开间隔 {realtimeReopenEvery}；超时 {realtimeTimeoutMs}ms；最大设备 {realtimeMaxDevices}；刷新清单 {(refreshInventoryBeforeRealtime || realtimeCollectionStrategy.Equals(CollectionTaskModeValues.StableRealtimeStrategy, StringComparison.OrdinalIgnoreCase) ? "开启" : "关闭")}；跳过清单检查 {(effectiveSkipInventory ? "开启" : "关闭")}");
         }
         StartCommand.NotifyCanExecuteChanged();
         StopCommand.NotifyCanExecuteChanged();
@@ -1142,14 +1165,12 @@ public sealed partial class CollectionTaskViewModel(
 
         try
         {
-            if (runRealtimeDetailsAfterImport && !runImportAfterCollect)
+            if (runRealtimeDetailsAfterImport && !runImportAfterCollect && !runEnumeration)
             {
-                _targetRunId = (await collectionRunRepository.ListAsync(1, _activeTask.Token)
-                    .ConfigureAwait(true)).FirstOrDefault()?.Id;
-                if (_targetRunId is null)
-                {
-                    throw new InvalidOperationException("实时详情任务没有明确的目标历史批次。");
-                }
+                _targetRunId = await ResolveRealtimeTargetRunAsync(
+                        selectedBuildings,
+                        _activeTask.Token)
+                    .ConfigureAwait(true);
 
                 AddLog($"实时详情目标批次：#{_targetRunId.Value}");
             }
@@ -1245,10 +1266,13 @@ public sealed partial class CollectionTaskViewModel(
                     realtimeMaxDevices,
                     refreshInventoryBeforeRealtime,
                     skipInventoryCheck,
+                    realtimeCollectionStrategy,
+                    plan.UsesExistingInventory,
                     realtimeBase,
                     23,
                     _activeTask.Token);
                 await PersistRealtimeSnapshotAsync(targetRunId, selectedBuildings, _activeTask.Token);
+                _currentDataUpdatedThisRun = true;
                 ProgressValue = Math.Max(ProgressValue, 97);
                 ProgressText = runRealtimeAuditAfterDetails ? "实时详情已更新，准备审计" : "实时详情已更新";
                 if (!runRealtimeAuditAfterDetails)
@@ -1273,6 +1297,12 @@ public sealed partial class CollectionTaskViewModel(
                 await RefreshReconciliationAsync(_activeTask.Token).ConfigureAwait(true);
             }
 
+            if (_currentDataUpdatedThisRun)
+            {
+                await VerifyCurrentDataAsync(selectedBuildings, _activeTask.Token).ConfigureAwait(true);
+            }
+
+            MarkAllProgressBuildingsCompleted();
             IsProgressIndeterminate = false;
             ProgressValue = 100;
             ProgressText = "采集完成";
@@ -1288,16 +1318,26 @@ public sealed partial class CollectionTaskViewModel(
                 ? $"{(int)elapsed.TotalMinutes} 分 {elapsed.Seconds} 秒"
                 : $"{elapsed.Seconds} 秒";
             var completedAt = DateTimeOffset.Now;
-            CollectionCompletionText = _qualityRequiresReview
-                ? "采集完成，数据已更新（有待复核项）"
-                : "采集完成，数据已更新";
+            CollectionCompletionText = runImportAfterCollect
+                ? _qualityRequiresReview
+                    ? "采集完成，数据已更新（有待复核项）"
+                    : "采集完成，数据已更新"
+                : runRealtimeDetailsAfterImport
+                    ? _qualityRequiresReview
+                        ? "采集完成，实时详情已更新（有待复核项）"
+                        : "采集完成，实时详情已更新"
+                    : "采集完成";
             HasTaskIssue = false;
             CollectionCompletedAtText = $"完成时间：{completedAt:yyyy-MM-dd HH:mm:ss}";
             CollectionDurationText = $"本次用时：{elapsedText}";
             var cardCount = ProgressOverallText.Contains('/') ? ProgressOverallText.Split('·')[0].Trim() : string.Empty;
             TaskSummaryText = _qualityRequiresReview
                 ? $"采集完成 · {cardCount}· 用时 {elapsedText} · 有待复核问题"
-                : $"采集完成 · {cardCount}· 用时 {elapsedText}";
+                : runImportAfterCollect
+                    ? $"采集完成 · {cardCount}· 用时 {elapsedText}"
+                    : runRealtimeDetailsAfterImport
+                        ? $"采集完成 · 实时详情已更新 · 用时 {elapsedText}"
+                        : $"采集完成 · 用时 {elapsedText}";
             ShowCompletionCelebration = true;
             AddLog($"采集完成：完成时间 {completedAt:yyyy-MM-dd HH:mm:ss}；本次用时 {elapsedText}");
             StatusText = _currentDataUpdatedThisRun
@@ -1616,6 +1656,8 @@ public sealed partial class CollectionTaskViewModel(
         int maxDevices,
         bool refreshInventory,
         bool skipInventory,
+        string collectionStrategy,
+        bool reuseExistingInventory,
         double progressBase,
         double progressSpan,
         CancellationToken cancellationToken)
@@ -1629,14 +1671,27 @@ public sealed partial class CollectionTaskViewModel(
             "--timeout=" + timeoutMs,
             "--write-latest",
             "--skip-audit",
+            "--strategy=" + collectionStrategy,
         };
         args.Add("--run-id=" + runId);
-        if (refreshInventory)
+        if (reuseExistingInventory)
+        {
+            args.Add("--no-refresh-inventory");
+            args.Add("--no-prepare-page");
+            args.Add("--reuse-enum-inventory");
+        }
+        else if (collectionStrategy.Equals("fast-batch", StringComparison.OrdinalIgnoreCase))
+        {
+            args.Add("--skip-inventory");
+        }
+        else if (refreshInventory)
         {
             args.Add("--refresh-inventory");
         }
 
-        if (skipInventory)
+        if (skipInventory && !collectionStrategy.Equals(
+                CollectionTaskModeValues.StableRealtimeStrategy,
+                StringComparison.OrdinalIgnoreCase))
         {
             args.Add("--skip-inventory");
         }
@@ -1661,6 +1716,54 @@ public sealed partial class CollectionTaskViewModel(
             progressSpan);
     }
 
+    private async Task<long> ResolveRealtimeTargetRunAsync(
+        IReadOnlyList<string> selectedBuildings,
+        CancellationToken cancellationToken)
+    {
+        var run = (await collectionRunRepository.ListAsync(20, cancellationToken)
+                .ConfigureAwait(true))
+            .FirstOrDefault();
+        if (run is null)
+        {
+            throw new InvalidOperationException("实时详情任务没有明确的目标历史批次，请先完成一次基础采集并导入 SQLite。");
+        }
+
+        if (run.IsAnomaly ||
+            run.Status.Equals("failed", StringComparison.OrdinalIgnoreCase) ||
+            run.Status.Equals("stopped", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"最新历史批次 #{run.Id} 状态为“{run.StatusLabel}”，不能作为实时详情目标。");
+        }
+
+        var missingBuildings = selectedBuildings
+            .Where(building => !run.Buildings.Contains(building, StringComparer.OrdinalIgnoreCase))
+            .ToArray();
+        if (missingBuildings.Length > 0)
+        {
+            throw new InvalidOperationException(
+                $"最新历史批次 #{run.Id} 不包含所选楼栋：{string.Join("、", missingBuildings)}。请先完成对应楼栋的基础采集。");
+        }
+
+        var declaredBuildings = run.Buildings.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (run.SnapshotCardCount <= 0 ||
+            run.SnapshotCardCount != run.CardCount ||
+            !CollectionRunCompleteness.HasSelfConsistentBuildingCardCounts(
+                run.BuildingCardCounts,
+                declaredBuildings,
+                run.CardCount))
+        {
+            throw new InvalidOperationException(
+                $"最新历史批次 #{run.Id} 的卡片快照不完整，不能安全复用。请先重新执行基础卡片采集。");
+        }
+
+        if (run.RequiresReview)
+        {
+            AddLog($"提示：实时详情将复用需复核批次 #{run.Id} 的设备快照，实时采集结果仍会单独校验。");
+        }
+
+        return run.Id;
+    }
+
     private async Task PersistRealtimeSnapshotAsync(
         long runId,
         IReadOnlyList<string> buildings,
@@ -1672,6 +1775,45 @@ public sealed partial class CollectionTaskViewModel(
             buildings,
             cancellationToken).ConfigureAwait(true);
         AddLog($"已保存批次 #{runId} 的实时详情快照");
+    }
+
+    private async Task VerifyCurrentDataAsync(
+        IReadOnlyList<string> selectedBuildings,
+        CancellationToken cancellationToken)
+    {
+        if (selectedBuildings.Count == 0)
+        {
+            throw new InvalidOperationException("数据写入校验失败：没有可核对的楼栋范围。");
+        }
+
+        CollectionRunRecord? run = null;
+        if (_targetRunId is > 0)
+        {
+            run = (await collectionRunRepository.ListAsync(500, cancellationToken)
+                .ConfigureAwait(true)).FirstOrDefault(item => item.Id == _targetRunId.Value);
+        }
+
+        foreach (var building in selectedBuildings)
+        {
+            var result = await deviceReadRepository.SearchAsync(
+                    new DeviceQuery(Building: building, Limit: 1),
+                    cancellationToken)
+                .ConfigureAwait(true);
+            if (result.Total <= 0)
+            {
+                throw new InvalidOperationException(
+                    $"数据写入校验失败：当前 SQLite 中没有 {building} 的设备记录；已阻止显示“采集完成”。");
+            }
+
+            if (run is not null && run.BuildingCardCounts.TryGetValue(building, out var expected) &&
+                result.Total != expected)
+            {
+                throw new InvalidOperationException(
+                    $"数据写入校验失败：{building} 当前数据 {result.Total:N0} 张，与批次 #{run.Id} 应有 {expected:N0} 张不一致；已阻止显示“采集完成”。");
+            }
+        }
+
+        AddLog($"数据写入校验通过：当前库已读回 {selectedBuildings.Count} 栋楼");
     }
 
     private Task RunRealtimeAuditAsync(AppSettings settings, CancellationToken cancellationToken)

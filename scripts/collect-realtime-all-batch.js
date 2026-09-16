@@ -9,7 +9,9 @@ const { installRealtimeLog } = require('./realtime-logger');
 const { DEFAULT_REALTIME_CDP_PORT, ensureRealtimeBrowser } = require('./realtime-browser');
 
 const ROOT = path.resolve(__dirname, '..');
-const OUT_DIR = path.resolve(process.env.EMS_OUT_DIR || path.join(ROOT, 'out'));
+const BASE_OUT_DIR = path.resolve(process.env.EMS_OUT_DIR || path.join(ROOT, 'out'));
+const RUN_DIR_ARG = (process.argv.find(a => a.startsWith('--run-dir=')) || '').split('=').slice(1).join('=');
+const OUT_DIR = path.resolve(RUN_DIR_ARG || process.env.EMS_RUN_DIR || BASE_OUT_DIR);
 const NODE = process.execPath;
 const BUILDINGS = (process.argv.find(a => a.startsWith('--buildings=')) || '--buildings=1号,2号,3号,4号,5号,6号')
   .split('=')[1]
@@ -24,15 +26,21 @@ const BATCH_SIZE = Number((process.argv.find(a => a.startsWith('--batch-size='))
 const REOPEN_EVERY = Number((process.argv.find(a => a.startsWith('--reopen-every=')) || '').split('=')[1] || 3);
 const TIMEOUT_MS = Number((process.argv.find(a => a.startsWith('--timeout=')) || '').split('=')[1] || 15000);
 const MAX_DEVICES = Number((process.argv.find(a => a.startsWith('--max-devices=')) || '').split('=')[1] || 0);
-const REFRESH_INVENTORY = process.argv.includes('--refresh-inventory');
+const COLLECTION_STRATEGY = (process.argv.find(a => a.startsWith('--strategy=')) || `--strategy=${process.env.EMS_COLLECTION_STRATEGY || 'stable-full'}`)
+  .split('=').slice(1).join('=') || 'stable-full';
+const FAST_BATCH = COLLECTION_STRATEGY === 'fast-batch';
+const REUSE_ENUM_INVENTORY = process.argv.includes('--reuse-enum-inventory');
+const ENUM_PATH = process.env.EMS_ENUM_PATH || process.env.EMS_JSON_PATH || path.join(OUT_DIR, 'enum_full_v5.json');
+const REFRESH_INVENTORY = !FAST_BATCH && !process.argv.includes('--no-refresh-inventory');
 const WRITE_LATEST = process.argv.includes('--write-latest');
-const SKIP_INVENTORY = process.argv.includes('--skip-inventory');
+const SKIP_INVENTORY = FAST_BATCH || process.argv.includes('--skip-inventory');
 const PREPARE_PAGE = !process.argv.includes('--no-prepare-page');
 const SKIP_AUDIT = process.argv.includes('--skip-audit');
 const LOG_FILE = process.argv.includes('--log-file') || process.argv.some(a => a.startsWith('--log-file='));
 const RUN_ID = Number(
   ((process.argv.find(a => a.startsWith('--run-id=')) || '').split('=').slice(1).join('=') ||
     process.env.EMS_RUN_ID || 0));
+const MANIFEST_PATH = path.join(OUT_DIR, `collection_manifest_${RUN_ID > 0 ? RUN_ID : `${Date.now()}-${process.pid}`}.json`);
 installRealtimeLog({ prefix: 'realtime_all_batch' });
 
 const USE_MANAGED_BROWSER = BROWSER_MODE !== 'cdp';
@@ -59,6 +67,27 @@ function runNode(script, args, extraEnv = null) {
   if (result.status !== 0) throw new Error(`Command failed (${result.status}): node ${command}`);
 }
 
+function childRunEnv() {
+  return {
+    EMS_OUT_DIR: OUT_DIR,
+    EMS_ENUM_PATH: ENUM_PATH,
+    ...(RUN_ID > 0 ? { EMS_RUN_ID: String(RUN_ID) } : {}),
+  };
+}
+
+function writeManifest(status, extra = {}) {
+  fs.writeFileSync(MANIFEST_PATH, JSON.stringify({
+    runId: RUN_ID > 0 ? RUN_ID : null,
+    status,
+    startedAt: _runStartedAt ? new Date(_runStartedAt).toISOString() : null,
+    outputDirectory: OUT_DIR,
+    enumPath: ENUM_PATH,
+    buildings: BUILDINGS,
+    collectionStrategy: COLLECTION_STRATEGY,
+    ...extra,
+  }, null, 2), 'utf8');
+}
+
 let _runStartedAt = 0;
 let _overallTotal = 0;
 let _overallDoneBase = 0;
@@ -82,8 +111,16 @@ function setOverallContext(startedAt, overallTotal, doneBase) {
 function buildingOverallTotal() {
   let total = 0;
   for (const b of BUILDINGS) {
-    const inv = inventoryRows(b);
-    total += MAX_DEVICES > 0 ? MAX_DEVICES : Number(inv?.unique || inv?.rows || 0);
+    // Freeze the planned total from the same enum snapshot used by fast-batch.
+    // Stable-full refreshes device inventory while the run is in progress; using
+    // those files here made overallTotal grow as buildings were refreshed.
+    const enumCount = enumInventoryRows(b)?.unique || 0;
+    if (MAX_DEVICES > 0) total += MAX_DEVICES;
+    else if (enumCount > 0) total += enumCount;
+    else {
+      const inv = inventoryRows(b);
+      total += Number(inv?.unique || inv?.rows || 0);
+    }
   }
   return total;
 }
@@ -123,16 +160,76 @@ function newestFile(patternPrefix, building) {
   const re = patternPrefix === 'realtime'
     ? new RegExp(`^realtime_${escaped}_(?:batch_)?\\d{8}_\\d{6}\\.json$`)
     : new RegExp(`^${patternPrefix}_${escaped}_.*\\.json$`);
-  return fs.readdirSync(OUT_DIR)
+  const candidates = fs.readdirSync(OUT_DIR)
     .filter(name => re.test(name) && !name.endsWith('_latest.json'))
     .map(name => {
       const full = path.join(OUT_DIR, name);
       return { full, mtime: fs.statSync(full).mtimeMs };
-    })
-    .sort((a, b) => b.mtime - a.mtime)[0]?.full || '';
+    });
+  if (RUN_ID > 0) {
+    const current = candidates.filter(candidate => {
+      try {
+        const data = readJson(candidate.full);
+        return String(data?.runId ?? '') === String(RUN_ID);
+      } catch {
+        return false;
+      }
+    });
+    if (current.length > 0) return current.sort((a, b) => b.mtime - a.mtime)[0].full;
+  }
+  return candidates.sort((a, b) => b.mtime - a.mtime)[0]?.full || '';
+}
+
+function enumInventoryRows(building) {
+  if (!fs.existsSync(ENUM_PATH)) return null;
+  try {
+    const data = readJson(ENUM_PATH);
+    const item = (data.buildings || []).find(entry => entry.building === building);
+    if (!item) return null;
+    const seen = new Set();
+    let rows = 0;
+    let missing = 0;
+    for (const subArea of item.subAreas || []) {
+      for (const page of subArea.pages || []) {
+        for (const card of page.cards || []) {
+          rows++;
+          if (card.devId !== undefined && card.devId !== null && card.devId !== '') {
+            seen.add(String(card.devId));
+          } else {
+            missing++;
+          }
+        }
+      }
+    }
+    return { rows, unique: seen.size, missing, file: ENUM_PATH };
+  } catch {
+    return null;
+  }
+}
+
+function enumDeviceIds(building) {
+  if (!fs.existsSync(ENUM_PATH)) return new Set();
+  const data = readJson(ENUM_PATH);
+  const result = new Set();
+  const enumBuilding = (data.buildings || []).find(item => item.building === building);
+  for (const subArea of enumBuilding?.subAreas || []) {
+    for (const page of subArea.pages || []) {
+      for (const card of page.cards || []) {
+        if (card.devId !== undefined && card.devId !== null && card.devId !== '') {
+          result.add(String(card.devId));
+        }
+      }
+    }
+  }
+  return result;
 }
 
 function sourceFile(building) {
+  if (FAST_BATCH || REUSE_ENUM_INVENTORY) {
+    const enumSource = enumInventoryRows(building);
+    if (enumSource?.unique > 0 && enumSource.missing === 0) return ENUM_PATH;
+    return '';
+  }
   const realtimeLatest = latestFile('realtime', building);
   if (fs.existsSync(realtimeLatest)) return realtimeLatest;
   const devicesLatest = latestFile('devices', building);
@@ -148,7 +245,7 @@ function sourceExists(building) {
   return !!sourceFile(building);
 }
 
-function validateResult(file) {
+function validateResult(file, expectedDeviceIds = null) {
   const data = readJson(file);
   const rows = data.rows || [];
   const issues = [];
@@ -161,6 +258,9 @@ function validateResult(file) {
   const switchCounts = {};
   const cardCommCounts = {};
   const lockCounts = {};
+  const rawValueStatuses = {};
+  let preservedRawRows = 0;
+  let rawAnomalyRows = 0;
   const pageNames = new Map();
 
   for (const row of rows) {
@@ -175,6 +275,11 @@ function validateResult(file) {
     cardCommCounts[row.cardComm || row.card_comm || ''] = (cardCommCounts[row.cardComm || row.card_comm || ''] || 0) + 1;
     const lock = fields['集控锁定'] || '';
     lockCounts[lock] = (lockCounts[lock] || 0) + 1;
+    if (row.preserveRawValues) preservedRawRows++;
+    if (row.rawValueStatus) {
+      rawValueStatuses[row.rawValueStatus] = (rawValueStatuses[row.rawValueStatus] || 0) + 1;
+      if (row.rawValueStatus === 'ems_raw_anomaly') rawAnomalyRows++;
+    }
     if (lock && lock !== '开启' && lock !== '关闭') {
       invalidLocks.push({
         building: row.building,
@@ -211,6 +316,13 @@ function validateResult(file) {
   if ((summary.failed || 0) !== 0) issues.push({ error: `summary.failed=${summary.failed}` });
   if ((summary.defaultLike || 0) !== 0) issues.push({ error: `summary.defaultLike=${summary.defaultLike}` });
   if (duplicates > 0) issues.push({ error: `duplicate devId count=${duplicates}` });
+  if (expectedDeviceIds instanceof Set) {
+    const missing = [...expectedDeviceIds].filter(id => !seen.has(String(id)));
+    const extra = [...seen].filter(id => !expectedDeviceIds.has(String(id)));
+    if (missing.length || extra.length || seen.size !== expectedDeviceIds.size) {
+      issues.push({ error: `设备集合不一致 expected=${expectedDeviceIds.size} actual=${seen.size} missing=${missing.length} extra=${extra.length}` });
+    }
+  }
 
   return {
     file,
@@ -222,17 +334,23 @@ function validateResult(file) {
     switchCounts,
     cardCommCounts,
     lockCounts,
+    rawValueStatuses,
+    preservedRawRows,
+    rawAnomalyRows,
     invalidLocks,
     issues,
   };
 }
 
 function inventoryRows(building) {
+  if (FAST_BATCH || REUSE_ENUM_INVENTORY) {
+    return enumInventoryRows(building);
+  }
   const file = latestFile('devices', building);
   if (!fs.existsSync(file)) return null;
   const rows = readJson(file).rows || [];
   const seen = new Set(rows.map(r => String(r.devId || '')).filter(Boolean));
-  return { rows: rows.length, unique: seen.size, file };
+    return { rows: rows.length, unique: seen.size, missing: rows.length - seen.size, file };
 }
 
 async function main() {
@@ -241,8 +359,15 @@ async function main() {
   const results = [];
   let browserSession = null;
   setOverallContext(startedAt, buildingOverallTotal(), 0);
+  writeManifest('running');
 
   try {
+    if (!['stable-full', 'fast-batch'].includes(COLLECTION_STRATEGY)) {
+      throw new Error(`Unknown collection strategy: ${COLLECTION_STRATEGY}`);
+    }
+    if (FAST_BATCH && !fs.existsSync(ENUM_PATH)) {
+      throw new Error(`Fast batch requires the current enum snapshot: ${ENUM_PATH}`);
+    }
     if (USE_MANAGED_BROWSER) {
       progress({
         phase: 'browser',
@@ -279,7 +404,7 @@ async function main() {
       percent: Math.round(((buildingIndex - 1) / BUILDINGS.length) * 100),
       message: `开始 ${building}`,
     });
-    if (!SKIP_INVENTORY) {
+    if (!SKIP_INVENTORY && REFRESH_INVENTORY) {
       progress({
         phase: 'inventory',
         status: 'running',
@@ -293,14 +418,21 @@ async function main() {
         `--building=${building}`,
         ...childBrowserArgs(USE_MANAGED_BROWSER),
         '--inventory-only',
+        ...(RUN_ID > 0 ? [`--run-id=${RUN_ID}`] : []),
         ...(MAX_DEVICES > 0 ? [`--max-devices=${MAX_DEVICES}`] : []),
-      ]);
+      ], childRunEnv());
     }
     if (!sourceExists(building)) {
       throw new Error(`No realtime/device source for ${building}`);
     }
+    if (!FAST_BATCH && !SKIP_INVENTORY) {
+      const refreshed = inventoryRows(building);
+      if (!refreshed || refreshed.unique === 0 || refreshed.missing > 0) {
+        throw new Error(`Stable full requires a complete refreshed device inventory for ${building}: rows=${refreshed?.rows || 0}, unique=${refreshed?.unique || 0}, missingDevId=${refreshed?.missing || 0}`);
+      }
+    }
 
-    if (PREPARE_PAGE) {
+    if (PREPARE_PAGE && !FAST_BATCH) {
       progress({
         phase: 'prepare',
         status: 'running',
@@ -314,8 +446,9 @@ async function main() {
         `--building=${building}`,
         ...childBrowserArgs(USE_MANAGED_BROWSER),
         '--inventory-only',
+        ...(RUN_ID > 0 ? [`--run-id=${RUN_ID}`] : []),
         '--max-devices=1',
-      ]);
+      ], childRunEnv());
     }
 
     const inventory = inventoryRows(building);
@@ -337,19 +470,33 @@ async function main() {
       `--batch-size=${BATCH_SIZE}`,
       `--reopen-every=${REOPEN_EVERY}`,
       `--timeout=${TIMEOUT_MS}`,
+      `--strategy=${COLLECTION_STRATEGY}`,
       ...(MAX_DEVICES > 0 ? [`--max-devices=${MAX_DEVICES}`] : []),
       ...(RUN_ID > 0 ? [`--run-id=${RUN_ID}`] : []),
+      ...(REUSE_ENUM_INVENTORY ? ['--reuse-enum-inventory'] : []),
       ...(WRITE_LATEST ? ['--write-latest'] : []),
     ], {
       EMS_OVERALL_TOTAL: String(_overallTotal || 0),
-      EMS_OVERALL_DONE_BASE: String(_overallDoneBase + results.reduce((acc, r) => acc + (r.summary.devices || 0), 0)),
+      EMS_OVERALL_DONE_BASE: String(results.reduce((acc, r) => acc + (r.summary.devices || 0), 0)),
       EMS_RUN_STARTED_AT: String(startedAt),
+      ...childRunEnv(),
     });
 
     const resultFile = newestFile('realtime', building);
     if (!resultFile) throw new Error(`Cannot find batch output for ${building}`);
-    const validation = validateResult(resultFile);
+    const expectedDeviceIds = FAST_BATCH || REUSE_ENUM_INVENTORY
+      ? enumDeviceIds(building)
+      : (() => {
+          const inventoryFile = latestFile('devices', building);
+          if (!fs.existsSync(inventoryFile)) return null;
+          const rows = readJson(inventoryFile).rows || [];
+          return new Set(rows.map(row => String(row.devId || '')).filter(Boolean));
+        })();
+    const validation = validateResult(resultFile, expectedDeviceIds);
     validation.inventory = inventoryRows(building);
+    if (!FAST_BATCH && validation.inventory?.missing > 0) {
+      validation.issues.push({ error: `设备清单缺少 devId count=${validation.inventory.missing}` });
+    }
     results.push(validation);
     if (validation.issues.length > 0) {
       console.log(`[QUALITY FAIL] ${building}: ${validation.issues.length} issue(s)`);
@@ -395,9 +542,11 @@ async function main() {
     acc.failed += item.summary.failed || 0;
     acc.defaultLike += item.summary.defaultLike || 0;
     acc.invalidLock += item.invalidLocks.length;
+    acc.preservedRawRows += item.preservedRawRows || 0;
+    acc.rawAnomalyRows += item.rawAnomalyRows || 0;
     acc.elapsedMs += item.summary.elapsedMs || 0;
     return acc;
-  }, { devices: 0, success: 0, failed: 0, defaultLike: 0, invalidLock: 0, elapsedMs: 0 });
+  }, { devices: 0, success: 0, failed: 0, defaultLike: 0, invalidLock: 0, preservedRawRows: 0, rawAnomalyRows: 0, elapsedMs: 0 });
 
     const outPath = path.join(OUT_DIR, `realtime_all_buildings_batch_summary_${timestamp()}.json`);
     const summary = {
@@ -414,6 +563,12 @@ async function main() {
       writeLatest: WRITE_LATEST,
       preparePage: PREPARE_PAGE,
       skipAudit: SKIP_AUDIT,
+      collectionStrategy: COLLECTION_STRATEGY,
+      inventorySource: FAST_BATCH
+        ? (results.some(result => result.inventory?.fallback) ? 'devices-latest-fallback' : 'enum_full_v5.json')
+        : REUSE_ENUM_INVENTORY
+          ? 'enum_full_v5.json'
+          : 'devices-latest',
       browserMode: BROWSER_MODE,
       managedBrowser: USE_MANAGED_BROWSER,
       managedCdpUrl: USE_MANAGED_BROWSER ? MANAGED_CDP_URL : '',
@@ -422,6 +577,11 @@ async function main() {
     results,
   };
     fs.writeFileSync(outPath, JSON.stringify(summary, null, 2), 'utf8');
+    writeManifest('completed', {
+      summaryPath: outPath,
+      resultFiles: results.map(result => result.file),
+      total,
+    });
     console.log(`[ALL DONE] ${outPath}`);
     console.log(JSON.stringify({ total, wallElapsedMs: summary.wallElapsedMs }, null, 2));
     progress({
@@ -443,6 +603,7 @@ async function main() {
 }
 
 main().catch(err => {
+  try { writeManifest('failed', { error: err.stack || String(err) }); } catch { /* preserve original failure */ }
   console.error(err.stack || err);
   process.exitCode = 1;
 });

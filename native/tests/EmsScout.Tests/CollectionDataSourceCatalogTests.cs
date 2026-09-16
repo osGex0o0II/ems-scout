@@ -42,6 +42,19 @@ public sealed class CollectionDataSourceCatalogTests
         Assert.Single(result.HistoricalRuns);
     }
 
+    [Fact]
+    public void ImportTimeWinsWhenEnumerationCompletedEarlier()
+    {
+        var importedLater = Run(30, "2026-09-16T15:23:16+08:00", "completed", 6573)
+            with { ImportedAt = "2026-09-16T21:49:29+08:00" };
+        var importedEarlier = Run(31, "2026-09-16T21:00:00+08:00", "completed", 6573)
+            with { ImportedAt = "2026-09-16T21:10:00+08:00" };
+
+        var result = CollectionDataSourceCatalog.Build([importedLater, importedEarlier]);
+
+        Assert.Equal(30, result.CurrentRun!.Id);
+    }
+
     private static CollectionRunRecord Run(long id, string completedAt, string status, int cards, string scope = "full") =>
         new(
             id,

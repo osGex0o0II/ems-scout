@@ -5,6 +5,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'native-package-common.ps1')
+$repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 
 $manifest = Read-NativePackageManifest $PackageDirectory
 $targetVersion = Assert-NativeVersion $manifest.Version
@@ -60,7 +61,7 @@ if ($null -ne $settingsHash) {
     }
 }
 
-$workspaceRoot = Set-NativeWorkspaceMarker $PackageDirectory
+$workspaceRoot = Set-NativeWorkspaceMarker $PackageDirectory -WorkspaceRoot $repositoryRoot
 $shortcut = Set-NativeShortcutWithRetry $updated.InstallLocation
 if (-not $SkipLaunch) {
     Start-Process -FilePath (Join-Path $env:WINDIR 'explorer.exe') -ArgumentList "shell:AppsFolder\$($manifest.AppUserModelId)"

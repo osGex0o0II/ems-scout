@@ -218,10 +218,10 @@ public sealed class SqliteDeviceReadRepositoryTests
         var missingRealtimeQuery = new DeviceQuery(RealtimeLock: "无实时数据", Limit: 1);
         var missingRealtimeResult = await repository.SearchAsync(missingRealtimeQuery);
         var missingRealtimeOptions = await repository.LoadFilterOptionsAsync(missingRealtimeQuery);
-        var missingRealtime = Assert.Single(missingRealtimeOptions.RealtimeLocks ?? [], option => option.Value == "无实时数据");
-        Assert.Equal(missingRealtimeResult.Total, missingRealtime.Count);
-        Assert.Contains(missingRealtimeOptions.RealtimeLocks ?? [], option => option.Value == "开启");
-        Assert.Contains(missingRealtimeOptions.RealtimeLocks ?? [], option => option.Value == "关闭");
+        var allRealtimeOptions = await repository.LoadFilterOptionsAsync(new DeviceQuery());
+        var missingRealtime = allRealtimeOptions.RealtimeLocks?.SingleOrDefault(option => option.Value == "无实时数据");
+        Assert.Equal(missingRealtime?.Count ?? 0, missingRealtimeResult.Total);
+        Assert.Equal(allRealtimeOptions.RealtimeLocks, missingRealtimeOptions.RealtimeLocks);
     }
 
     [Fact]

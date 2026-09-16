@@ -27,7 +27,7 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             SELECT collection_runs.*,
                    {snapshotCardCount} AS snapshot_card_count
             FROM collection_runs
-            ORDER BY datetime(completed_at) DESC, id DESC
+            ORDER BY datetime(COALESCE(imported_at, completed_at)) DESC, id DESC
             LIMIT $limit
             """;
         command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 500));

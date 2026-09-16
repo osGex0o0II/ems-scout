@@ -4,10 +4,12 @@
 const fs = require('fs');
 const path = require('path');
 const { formatLocalTimestamp, parseTimestampMillis } = require('../src/time');
+const { inspectRealtimeRow } = require('../src/realtime-quality');
 const { installRealtimeLog } = require('./realtime-logger');
 const { ensureRealtimeBrowser } = require('./realtime-browser');
 
 const CDP_URL = process.env.CDP_URL || 'http://127.0.0.1:9222';
+const OUT_DIR = path.resolve(process.env.EMS_OUT_DIR || path.resolve(__dirname, '..', 'out'));
 const BUILDING = (process.argv.find(a => a.startsWith('--building=')) || '--building=1号').split('=')[1];
 const BROWSER_MODE = (process.argv.find(a => a.startsWith('--browser-mode=')) || `--browser-mode=${process.env.REALTIME_BROWSER_MODE || 'persistent'}`)
   .split('=')
@@ -21,11 +23,14 @@ const MAX_DEVICES = Number((process.argv.find(a => a.startsWith('--max-devices='
 const SKIP_DEVICES = Number((process.argv.find(a => a.startsWith('--skip-devices=')) || '').split('=')[1] || 0);
 const REOPEN_EVERY = Number((process.argv.find(a => a.startsWith('--reopen-every=')) || '').split('=')[1] || 0);
 const TIMEOUT_MS = Number((process.argv.find(a => a.startsWith('--timeout=')) || '').split('=')[1] || 12000);
+const COLLECTION_STRATEGY = (process.argv.find(a => a.startsWith('--strategy=')) || `--strategy=${process.env.EMS_COLLECTION_STRATEGY || 'stable-full'}`)
+  .split('=').slice(1).join('=') || 'stable-full';
+const REUSE_ENUM_INVENTORY = process.argv.includes('--reuse-enum-inventory');
+const ENUM_PATH = process.env.EMS_ENUM_PATH || process.env.EMS_JSON_PATH || path.join(OUT_DIR, 'enum_full_v5.json');
 const OVERWRITE_LATEST = process.argv.includes('--write-latest');
 const RUN_ID = Number(
   ((process.argv.find(a => a.startsWith('--run-id=')) || '').split('=').slice(1).join('=') ||
     process.env.EMS_RUN_ID || 0));
-const OUT_DIR = path.resolve(process.env.EMS_OUT_DIR || path.resolve(__dirname, '..', 'out'));
 installRealtimeLog({ prefix: `realtime_${BUILDING}_batch` });
 
 const FIELD_ORDER = [
@@ -113,6 +118,21 @@ const EMS_OVERALL_DONE_BASE = Number(process.env.EMS_OVERALL_DONE_BASE || 0);
 const EMS_RUN_STARTED_AT = parseTimestampMillis(process.env.EMS_RUN_STARTED_AT);
 const EMS_RUN_ELAPSED = EMS_RUN_STARTED_AT ? Date.now() - EMS_RUN_STARTED_AT : 0;
 
+function withHardTimeout(work, timeoutMs, label) {
+  const limit = Math.max(1, Number(timeoutMs) || 1);
+  let timer;
+  return Promise.race([
+    Promise.resolve().then(work),
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} timed out after ${limit}ms`)), limit);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+function composeOverallDone(doneBase, deviceDone) {
+  return (Number(doneBase) || 0) + (Number(deviceDone) || 0);
+}
+
 function progress(event) {
   console.log(`[PROGRESS] ${JSON.stringify({
     ts: formatLocalTimestamp(),
@@ -120,7 +140,7 @@ function progress(event) {
     elapsedMs: EMS_RUN_STARTED_AT ? Date.now() - EMS_RUN_STARTED_AT : undefined,
     ...(EMS_OVERALL_TOTAL > 0 ? {
       overallTotal: EMS_OVERALL_TOTAL,
-      overallDone: EMS_OVERALL_DONE_BASE + (event.deviceDone || 0),
+      overallDone: composeOverallDone(EMS_OVERALL_DONE_BASE, event.deviceDone),
     } : {}),
     ...event,
   })}`);
@@ -163,6 +183,7 @@ function summarize(rows, startedAt) {
     avgLoadMs: loadTimes.length ? Math.round(loadTimes.reduce((a, b) => a + b, 0) / loadTimes.length) : null,
     maxLoadMs: loadTimes.length ? Math.max(...loadTimes) : null,
     batchSize: BATCH_SIZE,
+    collectionStrategy: COLLECTION_STRATEGY,
   };
 }
 
@@ -206,6 +227,49 @@ function newestRealtimeFile() {
 }
 
 function loadDeviceRows() {
+  if (COLLECTION_STRATEGY === 'fast-batch' || REUSE_ENUM_INVENTORY) {
+    if (!fs.existsSync(ENUM_PATH)) {
+      throw new Error(`Enum snapshot not found for fast batch: ${ENUM_PATH}`);
+    }
+    const data = JSON.parse(fs.readFileSync(ENUM_PATH, 'utf8'));
+    const building = (data.buildings || []).find(item => item.building === BUILDING);
+    if (!building) throw new Error(`Enum snapshot has no building: ${BUILDING}`);
+
+    const seen = new Set();
+    const rows = [];
+    for (const subArea of building.subAreas || []) {
+      for (const page of subArea.pages || []) {
+        const rawPage = String(page.page || 'default');
+        const slash = rawPage.indexOf('/');
+        const tab = slash >= 0 ? rawPage.slice(0, slash) : '';
+        const pageName = slash >= 0 ? rawPage.slice(slash + 1) : rawPage;
+        for (const card of page.cards || []) {
+          if (card.devId === undefined || card.devId === null || card.devId === '') continue;
+          const key = String(card.devId);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          rows.push({
+            ...card,
+            building: BUILDING,
+            subAreaIdx: subArea.idx,
+            floor: subArea.floor,
+            subAreaText: subArea.text || '',
+            tab,
+            pageName,
+            meterId: card.meterId || card.devId,
+            ptPath: devicePathFromRow({ devId: card.devId, rtuId: card.rtuId }),
+          });
+        }
+      }
+    }
+    if (rows.length === 0) {
+      throw new Error(`Fast batch requires devId for every enumerated device: ${BUILDING}`);
+    }
+    const start = Math.max(0, SKIP_DEVICES);
+    const end = MAX_DEVICES > 0 ? start + MAX_DEVICES : undefined;
+    return rows.slice(start, end);
+  }
+
   const realtimeFile = path.join(OUT_DIR, `realtime_${BUILDING}_latest.json`);
   const devicesFile = path.join(OUT_DIR, `devices_${BUILDING}_latest.json`);
   const file = fs.existsSync(devicesFile)
@@ -585,7 +649,12 @@ async function restoreBatchSubscription(page) {
 
 async function captureBatch(page, batch) {
   const started = Date.now();
-  const start = await startBatchSubscription(page, batch);
+  const batchLabel = `${BUILDING} ${batch[0]?.subAreaText || ''} ${batch[0]?.pageName || ''}`.trim();
+  const start = await withHardTimeout(
+    () => startBatchSubscription(page, batch),
+    TIMEOUT_MS,
+    `${batchLabel} batch subscription start`,
+  );
   if (start.error) {
     return {
       loadMs: Math.max(0, Date.now() - started),
@@ -596,7 +665,12 @@ async function captureBatch(page, batch) {
   const deadline = Date.now() + TIMEOUT_MS;
   let best = null;
   while (Date.now() < deadline) {
-    const snap = await readBatchSubscription(page);
+    const remaining = Math.max(1, deadline - Date.now());
+    const snap = await withHardTimeout(
+      () => readBatchSubscription(page),
+      remaining,
+      `${batchLabel} batch subscription read`,
+    );
     if (!best || snap.knownEntries > best.knownEntries) best = snap;
     if (snap.rows.length === batch.length && snap.rows.every(row => row.tagCount >= 46)) break;
     await pause(100);
@@ -631,6 +705,9 @@ async function captureBatch(page, batch) {
 }
 
 async function main() {
+  if (!['stable-full', 'fast-batch'].includes(COLLECTION_STRATEGY)) {
+    throw new Error(`Unknown collection strategy: ${COLLECTION_STRATEGY}`);
+  }
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const ts = timestamp();
   const jsonPath = path.join(OUT_DIR, `realtime_${BUILDING}_batch_${ts}.json`);
@@ -664,9 +741,21 @@ async function main() {
     const batchIndex = Math.floor(i / BATCH_SIZE);
     const batchTotal = Math.ceil(sourceRows.length / BATCH_SIZE);
     if (REOPEN_EVERY > 0 && batchIndex > 0 && batchIndex % REOPEN_EVERY === 0) {
-      await restoreBatchSubscription(page);
-      await closeModals(page);
-      await ensureTemplateModal(page);
+      await withHardTimeout(
+        () => restoreBatchSubscription(page),
+        TIMEOUT_MS,
+        `${BUILDING} restore batch subscription`,
+      );
+      await withHardTimeout(
+        () => closeModals(page),
+        TIMEOUT_MS,
+        `${BUILDING} close realtime modal`,
+      );
+      await withHardTimeout(
+        () => ensureTemplateModal(page),
+        TIMEOUT_MS,
+        `${BUILDING} open realtime modal`,
+      );
     }
     const batch = sourceRows.slice(i, i + BATCH_SIZE);
     process.stdout.write(`\r[BATCH] ${batchIndex + 1}/${Math.ceil(sourceRows.length / BATCH_SIZE)} ${SKIP_DEVICES + i + 1}-${SKIP_DEVICES + i + batch.length}`.padEnd(100));
@@ -720,6 +809,10 @@ async function main() {
       rawFields: item.rawFields || {},
       validFields: item.validFields || {},
     };
+      const realtimeQuality = inspectRealtimeRow(row);
+      row.rawValueStatus = realtimeQuality.rawValueStatus;
+      row.preserveRawValues = realtimeQuality.preserveRawValues;
+      row.rawFieldCount = realtimeQuality.rawFieldCount;
       rows.push(row);
       ndjson.write(JSON.stringify(row) + '\n');
     }
@@ -768,7 +861,11 @@ async function main() {
   });
 }
 
-main().then(() => process.exit(0)).catch(err => {
-  console.error(err.stack || err);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().then(() => process.exit(0)).catch(err => {
+    console.error(err.stack || err);
+    process.exit(1);
+  });
+}
+
+module.exports = { composeOverallDone, withHardTimeout };

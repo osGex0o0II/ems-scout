@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using EmsScout.Application.Collection;
 using EmsScout.Desktop.ViewModels;
 
 namespace EmsScout.Desktop.Pages;
@@ -90,11 +91,31 @@ public sealed partial class TasksPage : Page
             .Where(building => building.IsSelected)
             .Select(building => building.Value)
             .ToList();
+        var strategyButtons = new RadioButtons
+        {
+            Header = "采集模式",
+        };
+        strategyButtons.Items.Add("稳定模式");
+        strategyButtons.Items.Add("快速模式");
+        strategyButtons.SelectedIndex = 0;
+
+        var dialogContent = new StackPanel { Spacing = 12 };
+        dialogContent.Children.Add(new TextBlock
+        {
+            Text = $"范围：{string.Join("、", buildings)}",
+            TextWrapping = TextWrapping.WrapWholeWords,
+        });
+        dialogContent.Children.Add(strategyButtons);
+        dialogContent.Children.Add(new TextBlock
+        {
+            Text = "采集期间请保持采集浏览器和 EMS 页面开启。",
+            TextWrapping = TextWrapping.WrapWholeWords,
+        });
         var dialog = new ContentDialog
         {
             XamlRoot = XamlRoot,
             Title = "开始采集",
-            Content = $"范围：{string.Join("、", buildings)}\n\n{ViewModel.CurrentDataImpactText}\n采集期间请保持采集浏览器和 EMS 页面开启。",
+            Content = dialogContent,
             PrimaryButtonText = "开始",
             CloseButtonText = "取消",
             DefaultButton = ContentDialogButton.Primary,
@@ -102,6 +123,8 @@ public sealed partial class TasksPage : Page
 
         if (await dialog.ShowAsync() == ContentDialogResult.Primary)
         {
+            ViewModel.SetNextRealtimeCollectionStrategy(
+                CollectionTaskModeValues.RealtimeStrategyForSelection(strategyButtons.SelectedIndex));
             await ViewModel.StartCommand.ExecuteAsync(null);
         }
     }

@@ -91,6 +91,39 @@ public sealed class TasksPageUiContractTests
     }
 
     [Fact]
+    public void SuccessfulRealtimeTasksCloseAllBuildingIndicatorsAndCenterReadinessContent()
+    {
+        var root = LocateRepositoryRoot();
+        var page = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "TasksPage.xaml"));
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "CollectionTaskViewModel.cs"));
+
+        Assert.Contains("VerticalAlignment=\"Center\"", page);
+        Assert.Contains("MarkAllProgressBuildingsCompleted();", viewModel);
+        Assert.Contains("实时详情已更新", viewModel);
+        Assert.Contains("VerifyCurrentDataAsync", viewModel);
+        Assert.Contains("数据写入校验通过", viewModel);
+    }
+
+    [Fact]
+    public void StartConfirmationOwnsRealtimeModeSelectionAndDefaultsToStable()
+    {
+        var root = LocateRepositoryRoot();
+        var codeBehind = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "TasksPage.xaml.cs"));
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "CollectionTaskViewModel.cs"));
+
+        Assert.Contains("Header = \"采集模式\"", codeBehind);
+        Assert.Contains("strategyButtons.SelectedIndex = 0", codeBehind);
+        Assert.Contains("strategyButtons.Items.Add(\"稳定模式\")", codeBehind);
+        Assert.Contains("strategyButtons.Items.Add(\"快速模式\")", codeBehind);
+        Assert.Contains("RealtimeStrategyForSelection", codeBehind);
+        Assert.Contains("SetNextRealtimeCollectionStrategy", codeBehind);
+        Assert.DoesNotContain("CurrentDataImpactText", codeBehind);
+        Assert.Contains("_nextRealtimeCollectionStrategy = CollectionTaskModeValues.StableRealtimeStrategy", viewModel);
+        Assert.Contains("realtimeCollectionStrategy ?? CollectionTaskModeValues.StableRealtimeStrategy", viewModel);
+        Assert.Contains("effectiveSkipInventory", viewModel);
+    }
+
+    [Fact]
     public void QueuedProgressEventsCannotOverwriteTerminalTaskState()
     {
         var root = LocateRepositoryRoot();

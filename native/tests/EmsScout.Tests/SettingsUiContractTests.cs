@@ -65,7 +65,7 @@ public sealed class SettingsUiContractTests
     }
 
     [Fact]
-    public void CollectionParametersLiveInAdvancedSettingsAndTaskPageDoesNotRenderLogs()
+    public void CollectionParametersLiveInCollectionSettingsAndTaskPageDoesNotRenderLogs()
     {
         var root = LocateRepositoryRoot();
         var settings = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Application", "Settings", "AppSettings.cs"));
@@ -73,6 +73,8 @@ public sealed class SettingsUiContractTests
         var settingsPage = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "SettingsPage.xaml"));
         var tasksPage = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "TasksPage.xaml"));
         var taskViewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "CollectionTaskViewModel.cs"));
+        var realtimeAllScript = File.ReadAllText(Path.Combine(root, "scripts", "collect-realtime-all-batch.js"));
+        var realtimeBatchScript = File.ReadAllText(Path.Combine(root, "scripts", "collect-building-realtime-batch.js"));
 
         Assert.Contains("RealtimeBatchSize", settings);
         Assert.Contains("RealtimeReopenEvery", settings);
@@ -80,10 +82,21 @@ public sealed class SettingsUiContractTests
         Assert.Contains("RealtimeBatchSize", settingsViewModel);
         Assert.Contains("RealtimeReopenEvery", settingsViewModel);
         Assert.Contains("RealtimeTimeoutMs", settingsViewModel);
-        Assert.Contains("采集参数", settingsPage);
+        Assert.Contains("Tag=\"collection\"", settingsPage);
+        Assert.Contains("x:Name=\"CollectionSection\"", settingsPage);
+        Assert.DoesNotContain("采集模式", settingsPage);
+        Assert.DoesNotContain("稳定完整", settingsPage);
+        Assert.DoesNotContain("快速批量", settingsPage);
+        Assert.Contains("实时采集参数", settingsPage);
         Assert.Contains("实时批量设备数", settingsPage);
         Assert.Contains("单批超时（毫秒）", settingsPage);
         Assert.Contains("设备批次重开间隔", settingsPage);
+        var advancedStart = settingsPage.IndexOf("x:Name=\"AdvancedSection\"", StringComparison.Ordinal);
+        var advancedEnd = settingsPage.IndexOf("</StackPanel>", advancedStart, StringComparison.Ordinal);
+        Assert.True(advancedStart >= 0 && advancedEnd > advancedStart);
+        var advancedSection = settingsPage[advancedStart..advancedEnd];
+        Assert.DoesNotContain("RealtimeBatchSize", advancedSection);
+        Assert.DoesNotContain("RealtimeCollectionStrategy", advancedSection);
         Assert.Contains("总览异常判定", settingsPage);
         Assert.Contains("正常运行模式", settingsPage);
         Assert.Contains("Header=\"设定温度下限（℃）\"", settingsPage);
@@ -95,6 +108,13 @@ public sealed class SettingsUiContractTests
         Assert.Contains("settings.RealtimeBatchSize", taskViewModel);
         Assert.Contains("settings.RealtimeReopenEvery", taskViewModel);
         Assert.Contains("settings.RealtimeTimeoutMs", taskViewModel);
+        Assert.DoesNotContain("RealtimeCollectionStrategyIndex", settingsViewModel);
+        Assert.Contains("--strategy=", taskViewModel);
+        Assert.Contains("FastRealtimeStrategy", taskViewModel);
+        Assert.Contains("COLLECTION_STRATEGY", realtimeAllScript);
+        Assert.Contains("enum_full_v5.json", realtimeAllScript);
+        Assert.Contains("COLLECTION_STRATEGY", realtimeBatchScript);
+        Assert.Contains("Enum snapshot not found for fast batch", realtimeBatchScript);
     }
 
     [Fact]
