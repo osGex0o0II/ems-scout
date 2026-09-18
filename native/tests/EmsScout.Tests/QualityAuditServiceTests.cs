@@ -1,4 +1,5 @@
 using EmsScout.Infrastructure.Quality;
+using Microsoft.Data.Sqlite;
 using System.Text.Json;
 
 namespace EmsScout.Tests;
@@ -167,6 +168,29 @@ public sealed class QualityAuditServiceTests
     }
 
     [Fact]
+    public async Task MarksQualityReportWithWrongBatchIdentityAsStale()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-quality-identity-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var dbPath = Path.Combine(root, "ac.db");
+        await CreateIdentityDatabaseAsync(dbPath);
+        await File.WriteAllTextAsync(Path.Combine(root, "quality_report_run24.json"), JsonSerializer.Serialize(new
+        {
+            run_id = 24,
+            batch_uid = "wrong-batch",
+            run_key = "run-24",
+            summary = new { total_cards = 1, issue_count = 0 },
+            issues = Array.Empty<object>(),
+        }));
+
+        var report = await new JsonQualityAuditService(() => root, () => dbPath).LoadForRunAsync(24);
+
+        Assert.NotNull(report);
+        Assert.True(report.IsStale);
+        Assert.Contains("batch_uid", report.StaleReason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task LoadsRealtimeAuditReportThatMatchesTheRequestedRun()
     {
         var root = Path.Combine(Path.GetTempPath(), "ems-scout-realtime-quality-run-tests", Guid.NewGuid().ToString("N"));
@@ -193,6 +217,34 @@ public sealed class QualityAuditServiceTests
         var report = await new JsonRealtimeQualityAuditService(() => root).LoadForRunAsync(8);
 
         Assert.Null(report);
+    }
+
+    [Fact]
+    public async Task MarksRealtimeAuditWithMissingBatchIdentityAsStale()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-realtime-quality-identity-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var dbPath = Path.Combine(root, "ac.db");
+        await CreateIdentityDatabaseAsync(dbPath);
+        await File.WriteAllTextAsync(Path.Combine(root, "realtime_quality_classified_new.json"), RealtimeReportJson(24));
+
+        var report = await new JsonRealtimeQualityAuditService(() => root, () => dbPath).LoadForRunAsync(24);
+
+        Assert.NotNull(report);
+        Assert.True(report.IsStale);
+        Assert.Contains("身份", report.StaleReason, StringComparison.Ordinal);
+    }
+
+    private static async Task CreateIdentityDatabaseAsync(string path)
+    {
+        await using var connection = new SqliteConnection($"Data Source={path}");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE collection_runs (id INTEGER PRIMARY KEY, run_key TEXT, batch_uid TEXT);
+            INSERT INTO collection_runs VALUES (24, 'run-24', 'batch-24');
+            """;
+        await command.ExecuteNonQueryAsync();
     }
 
     private static string ReportJson(long runId, int totalCards) => JsonSerializer.Serialize(new

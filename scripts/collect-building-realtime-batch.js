@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { formatLocalTimestamp, parseTimestampMillis } = require('../src/time');
+const { readBatchIdentity, withBatchIdentity } = require('../src/run-identity');
 const { inspectRealtimeRow } = require('../src/realtime-quality');
 const { installRealtimeLog } = require('./realtime-logger');
 const { ensureRealtimeBrowser } = require('./realtime-browser');
@@ -28,9 +29,11 @@ const COLLECTION_STRATEGY = (process.argv.find(a => a.startsWith('--strategy='))
 const REUSE_ENUM_INVENTORY = process.argv.includes('--reuse-enum-inventory');
 const ENUM_PATH = process.env.EMS_ENUM_PATH || process.env.EMS_JSON_PATH || path.join(OUT_DIR, 'enum_full_v5.json');
 const OVERWRITE_LATEST = process.argv.includes('--write-latest');
-const RUN_ID = Number(
-  ((process.argv.find(a => a.startsWith('--run-id=')) || '').split('=').slice(1).join('=') ||
-    process.env.EMS_RUN_ID || 0));
+const IDENTITY = readBatchIdentity({
+  ...process.env,
+  EMS_RUN_ID: ((process.argv.find(a => a.startsWith('--run-id=')) || '').split('=').slice(1).join('=') || process.env.EMS_RUN_ID || 0),
+});
+const RUN_ID = IDENTITY.runId || 0;
 installRealtimeLog({ prefix: `realtime_${BUILDING}_batch` });
 
 const FIELD_ORDER = [
@@ -814,14 +817,13 @@ async function main() {
       row.preserveRawValues = realtimeQuality.preserveRawValues;
       row.rawFieldCount = realtimeQuality.rawFieldCount;
       rows.push(row);
-      ndjson.write(JSON.stringify(row) + '\n');
+      ndjson.write(JSON.stringify(withBatchIdentity(row, IDENTITY)) + '\n');
     }
-    const partial = {
-      runId: RUN_ID > 0 ? RUN_ID : null,
+    const partial = withBatchIdentity({
       capturedAt: formatLocalTimestamp(),
       summary: summarize(rows, startedAt),
       rows,
-    };
+    }, IDENTITY);
     fs.writeFileSync(jsonPath, JSON.stringify(partial, null, 2), 'utf8');
     progress({
       phase: 'realtime_batch',
@@ -838,12 +840,11 @@ async function main() {
 
   await restoreBatchSubscription(page);
   const capturedAt = formatLocalTimestamp();
-  const result = {
-    runId: RUN_ID > 0 ? RUN_ID : null,
+  const result = withBatchIdentity({
     capturedAt,
     summary: summarize(rows, startedAt),
     rows,
-  };
+  }, IDENTITY);
   fs.writeFileSync(jsonPath, JSON.stringify(result, null, 2), 'utf8');
   if (OVERWRITE_LATEST && MAX_DEVICES === 0) fs.writeFileSync(latestPath, JSON.stringify(result, null, 2), 'utf8');
   ndjson.end();

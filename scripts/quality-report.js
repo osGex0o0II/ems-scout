@@ -7,6 +7,7 @@ const Database = require('better-sqlite3');
 const { BLDG_ORDER, BLDG_META } = require('../src/rules');
 const { ensureHistorySchema, resolveRunId, sourceForRun } = require('../src/data-history');
 const { formatLocalTimestamp } = require('../src/time');
+const { readBatchIdentity, withBatchIdentity } = require('../src/run-identity');
 
 const ROOT = path.join(__dirname, '..');
 const DB_PATH = process.env.EMS_DB_PATH || path.join(ROOT, 'out', 'ac.db');
@@ -215,7 +216,13 @@ function buildReport(options = {}) {
   const source = sourceForRun(runId);
   const runWhere = source.runWhere ? `WHERE ${source.runWhere}` : '';
   const andRunWhere = source.runWhere ? `AND ${source.runWhere}` : '';
-  const run = runId ? db.prepare('SELECT id, run_key, completed_at, imported_at, scope, buildings FROM collection_runs WHERE id = ?').get(runId) : null;
+  const run = runId ? db.prepare('SELECT id, run_key, batch_uid, completed_at, imported_at, scope, buildings FROM collection_runs WHERE id = ?').get(runId) : null;
+  const envIdentity = readBatchIdentity();
+  const identity = {
+    runId: runId || envIdentity.runId,
+    batchUid: run?.batch_uid || envIdentity.batchUid || null,
+    runKey: run?.run_key || envIdentity.runKey || null,
+  };
   const cardRows = rows(db, `
     SELECT sa.building, sa.floor, sa.text AS sub_area, sa.x, sa.y,
            p.page_name, p.layout, COALESCE(p.quality_reason, '') AS quality_reason,
@@ -459,14 +466,17 @@ function buildReport(options = {}) {
     issues.push({ severity: 'INFO', code: 'xlsx_advisory', count: 1, message: `xlsx${xlsxVersion ? '@' + xlsxVersion : ''} 存在公开 high advisories；当前项目主要导出 Excel，避免读取不可信 xlsx。` });
   }
 
-  return {
+  return withBatchIdentity({
     generated_at: formatLocalTimestamp(),
     generated_at_local: nowLocal(),
     db_path: DB_PATH,
     run_id: runId,
+    batch_uid: identity.batchUid,
+    run_key: identity.runKey,
     run: run ? {
       id: run.id,
       run_key: run.run_key,
+      batch_uid: run.batch_uid || null,
       completed_at: run.completed_at,
       imported_at: run.imported_at,
       scope: run.scope,
@@ -512,7 +522,7 @@ function buildReport(options = {}) {
       known_findings: knownIssueAnnotations.slice(0, 50),
       uniform_resolved_pages: uniformResolvedPages.slice(0, 50),
     },
-  };
+  }, identity);
 }
 
 function renderText(report) {

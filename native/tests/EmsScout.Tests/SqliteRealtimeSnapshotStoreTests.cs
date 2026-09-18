@@ -101,6 +101,42 @@ public sealed class SqliteRealtimeSnapshotStoreTests
     }
 
     [Fact]
+    public async Task SnapshotSchemaContainsImmutableBatchUid()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-realtime-snapshot-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var databasePath = Path.Combine(root, "ac.db");
+        var outputDirectory = Path.Combine(root, "out");
+        Directory.CreateDirectory(outputDirectory);
+        await CreateDatabaseAsync(databasePath);
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "realtime_1号_latest.json"), """
+                {
+                  "runId": 1,
+                  "capturedAt": "2026-08-31T03:00:00Z",
+                  "rows": [{"building":"1号","name":"1-0101-KT"}]
+                }
+                """);
+
+        await new SqliteRealtimeSnapshotStore(() => databasePath)
+            .SaveAsync(1, outputDirectory, ["1号"]);
+
+        await using (var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly"))
+        {
+            await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "PRAGMA table_info(run_realtime_details)";
+            await using var reader = await command.ExecuteReaderAsync();
+            var columns = new List<string>();
+            while (await reader.ReadAsync())
+            {
+                columns.Add(reader.GetString(1));
+            }
+
+            Assert.Contains("batch_uid", columns);
+        }
+    }
+
+    [Fact]
     public async Task DoesNotCommitPartialSnapshotWhenOneBuildingFileIsMissing()
     {
         var root = Path.Combine(Path.GetTempPath(), "ems-scout-realtime-snapshot-tests", Guid.NewGuid().ToString("N"));
@@ -163,6 +199,36 @@ public sealed class SqliteRealtimeSnapshotStoreTests
         var store = new SqliteRealtimeSnapshotStore(() => databasePath);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => store.SaveAsync(1, outputDirectory, ["1号"]));
+    }
+
+    [Fact]
+    public async Task RejectsRealtimeSnapshotWithMismatchedRunKey()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-realtime-snapshot-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var databasePath = Path.Combine(root, "ac.db");
+        var outputDirectory = Path.Combine(root, "out");
+        Directory.CreateDirectory(outputDirectory);
+        await ExecuteAsync(databasePath, "CREATE TABLE collection_runs (id INTEGER PRIMARY KEY, batch_uid TEXT, run_key TEXT); INSERT INTO collection_runs VALUES (1, 'batch-good', 'run-good');");
+        await File.WriteAllTextAsync(Path.Combine(outputDirectory, "realtime_1号_latest.json"), """
+            {
+              "runId": 1,
+              "batchUid": "batch-good",
+              "runKey": "run-wrong",
+              "capturedAt": "2026-08-31T03:00:00+08:00",
+              "rows": [{"building":"1号","name":"1-0101-KT"}]
+            }
+            """);
+
+        var store = new SqliteRealtimeSnapshotStore(() => databasePath);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.SaveAsync(1, "batch-good", outputDirectory, ["1号"]));
+
+        Assert.Contains("runKey", error.Message, StringComparison.OrdinalIgnoreCase);
+        var legacyOverloadError = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            store.SaveAsync(1, outputDirectory, ["1号"]));
+        Assert.Contains("runKey", legacyOverloadError.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     private static async Task ExecuteAsync(string databasePath, string sql)

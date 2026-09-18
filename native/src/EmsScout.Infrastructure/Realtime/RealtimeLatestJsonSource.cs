@@ -16,7 +16,7 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
 
     public async Task<RealtimeDetailSet> LoadAsync(IReadOnlyList<string> buildings, CancellationToken cancellationToken = default)
     {
-        return await LoadCoreAsync(buildings, expectedRunId: null, requireBatchMetadata: false, cancellationToken).ConfigureAwait(false);
+        return await LoadCoreAsync(buildings, expectedRunId: null, expectedBatchUid: null, expectedRunKey: null, requireBatchMetadata: false, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<RealtimeDetailSet> LoadAsync(
@@ -24,12 +24,43 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
         long? expectedRunId,
         CancellationToken cancellationToken = default)
     {
-        return await LoadCoreAsync(buildings, expectedRunId, requireBatchMetadata: true, cancellationToken).ConfigureAwait(false);
+        return await LoadCoreAsync(buildings, expectedRunId, expectedBatchUid: null, expectedRunKey: null, requireBatchMetadata: true, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<RealtimeDetailSet> LoadAsync(
+        IReadOnlyList<string> buildings,
+        string? expectedBatchUid,
+        CancellationToken cancellationToken = default)
+    {
+        return await LoadCoreAsync(buildings, expectedRunId: null, expectedBatchUid, expectedRunKey: null, requireBatchMetadata: true, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<RealtimeDetailSet> LoadAsync(
+        IReadOnlyList<string> buildings,
+        long expectedRunId,
+        string expectedBatchUid,
+        string expectedRunKey,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(expectedBatchUid) || string.IsNullOrWhiteSpace(expectedRunKey))
+        {
+            throw new ArgumentException("完整批次身份不能为空。", nameof(expectedBatchUid));
+        }
+
+        return await LoadCoreAsync(
+            buildings,
+            expectedRunId,
+            expectedBatchUid.Trim(),
+            expectedRunKey.Trim(),
+            requireBatchMetadata: true,
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<RealtimeDetailSet> LoadCoreAsync(
         IReadOnlyList<string> buildings,
         long? expectedRunId,
+        string? expectedBatchUid,
+        string? expectedRunKey,
         bool requireBatchMetadata,
         CancellationToken cancellationToken)
     {
@@ -39,10 +70,14 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
             .ToArray();
         var rows = new List<RealtimeDetailRecord>();
         long? sourceRunId = null;
+        string? sourceBatchUid = null;
         foreach (var building in requestedBuildings)
         {
-            var file = LatestRealtimeFile(building);
-            if (string.IsNullOrWhiteSpace(file))
+            var file = LatestRealtimeFile(building, expectedRunId, expectedBatchUid, expectedRunKey, requireBatchMetadata);
+            var fallbackFile = string.IsNullOrWhiteSpace(file)
+                ? LatestRealtimeFile(building)
+                : file;
+            if (string.IsNullOrWhiteSpace(fallbackFile))
             {
                 return new RealtimeDetailSet(
                     [],
@@ -51,6 +86,7 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
                     sourceRunId);
             }
 
+            file = fallbackFile;
             JsonDocument document;
             try
             {
@@ -76,10 +112,38 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
                 }
 
                 var fileRunId = ReadRunId(document.RootElement);
+                var fileBatchUid = ReadBatchUid(document.RootElement);
+                var fileRunKey = ReadRunKey(document.RootElement);
                 if (fileRunId is null && requireBatchMetadata)
                 {
                     return new RealtimeDetailSet([], RealtimeDetailAvailability.MissingSnapshot,
                         $"{building} 的实时详情缺少批次号，无法安全绑定当前数据。", null);
+                }
+
+                if (expectedBatchUid is not null &&
+                    (string.IsNullOrWhiteSpace(fileBatchUid) ||
+                     !string.Equals(fileBatchUid, expectedBatchUid, StringComparison.Ordinal)))
+                {
+                    var actual = string.IsNullOrWhiteSpace(fileBatchUid) ? "缺失" : fileBatchUid;
+                    return new RealtimeDetailSet(
+                        [],
+                        RealtimeDetailAvailability.MissingSnapshot,
+                        $"实时详情批次 UID 不匹配：目标 {expectedBatchUid}，文件 {actual}。请重新采集实时详情。",
+                        fileRunId,
+                        fileBatchUid);
+                }
+
+                if (expectedRunKey is not null &&
+                    (string.IsNullOrWhiteSpace(fileRunKey) ||
+                     !string.Equals(fileRunKey, expectedRunKey, StringComparison.Ordinal)))
+                {
+                    var actual = string.IsNullOrWhiteSpace(fileRunKey) ? "缺失" : fileRunKey;
+                    return new RealtimeDetailSet(
+                        [],
+                        RealtimeDetailAvailability.MissingSnapshot,
+                        $"实时详情运行键不匹配：目标 {expectedRunKey}，文件 {actual}。请重新采集实时详情。",
+                        fileRunId,
+                        fileBatchUid);
                 }
 
                 if (expectedRunId is not null && fileRunId != expectedRunId)
@@ -101,10 +165,21 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
                         null);
                 }
 
+                if (sourceBatchUid is not null &&
+                    !string.Equals(sourceBatchUid, fileBatchUid, StringComparison.Ordinal))
+                {
+                    return new RealtimeDetailSet(
+                        [],
+                        RealtimeDetailAvailability.Unavailable,
+                        "实时详情文件来自多个批次 UID，无法安全合并。请重新采集实时详情。",
+                        null,
+                        null);
+                }
+
                 if (requireBatchMetadata && !TryReadSourceTimestamp(document.RootElement, out _))
                 {
                     return new RealtimeDetailSet([], RealtimeDetailAvailability.MissingSnapshot,
-                        $"{building} 的实时详情缺少采集时间，无法验证数据新鲜度。", fileRunId);
+                        $"{building} 的实时详情缺少采集时间，无法验证数据新鲜度。", fileRunId, fileBatchUid);
                 }
 
                 var updatedAt = ReadSourceUpdatedAt(document.RootElement, file);
@@ -116,16 +191,17 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
                 }
                 catch (InvalidDataException ex)
                 {
-                    return new RealtimeDetailSet([], RealtimeDetailAvailability.Unavailable, ex.Message, fileRunId);
+                    return new RealtimeDetailSet([], RealtimeDetailAvailability.Unavailable, ex.Message, fileRunId, fileBatchUid);
                 }
 
                 if (fileRows.Count == 0)
                 {
                     return new RealtimeDetailSet([], RealtimeDetailAvailability.MissingSnapshot,
-                        $"{building} 的实时详情 rows 为空，请重新采集实时详情。", fileRunId);
+                        $"{building} 的实时详情 rows 为空，请重新采集实时详情。", fileRunId, fileBatchUid);
                 }
 
                 sourceRunId ??= fileRunId;
+                sourceBatchUid ??= fileBatchUid;
                 foreach (var row in fileRows)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -136,7 +212,7 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
 
         return requestedBuildings.Length == 0
             ? new RealtimeDetailSet([], RealtimeDetailAvailability.MissingSnapshot, "未指定实时详情楼栋。")
-            : new RealtimeDetailSet(rows, RealtimeDetailAvailability.Available, null, sourceRunId);
+            : new RealtimeDetailSet(rows, RealtimeDetailAvailability.Available, null, sourceRunId, sourceBatchUid);
     }
 
     internal static long? ReadRunId(JsonElement root)
@@ -161,6 +237,42 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
         return null;
     }
 
+    internal static string? ReadBatchUid(JsonElement root)
+    {
+        foreach (var propertyName in new[] { "batchUid", "batch_uid" })
+        {
+            if (root.TryGetProperty(propertyName, out var property) &&
+                property.ValueKind == JsonValueKind.String)
+            {
+                var value = property.GetString()?.Trim();
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    return value;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    internal static string? ReadRunKey(JsonElement root)
+    {
+        foreach (var propertyName in new[] { "runKey", "run_key" })
+        {
+            if (root.TryGetProperty(propertyName, out var property) &&
+                property.ValueKind == JsonValueKind.String)
+            {
+                var value = property.GetString()?.Trim();
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    return value;
+                }
+            }
+        }
+
+        return null;
+    }
+
     private static bool TryReadTimestamp(JsonElement element, string propertyName, out DateTimeOffset timestamp)
     {
         timestamp = default;
@@ -178,7 +290,29 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
         return FindLatestFile(OutDirectoryResolver(), building);
     }
 
-    internal static string FindLatestFile(string outDirectory, string building)
+    private string LatestRealtimeFile(
+        string building,
+        long? expectedRunId,
+        string? expectedBatchUid,
+        string? expectedRunKey,
+        bool requireBatchMetadata)
+    {
+        return FindLatestFile(
+            OutDirectoryResolver(),
+            building,
+            expectedRunId,
+            expectedBatchUid,
+            expectedRunKey,
+            requireBatchMetadata);
+    }
+
+    internal static string FindLatestFile(
+        string outDirectory,
+        string building,
+        long? expectedRunId = null,
+        string? expectedBatchUid = null,
+        string? expectedRunKey = null,
+        bool requireBatchMetadata = false)
     {
         if (!Directory.Exists(outDirectory))
         {
@@ -191,6 +325,10 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
                            System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(path), $"^realtime_{System.Text.RegularExpressions.Regex.Escape(building)}_\\d{{8}}_\\d{{6}}\\.json$"))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Select(ReadCandidate)
+            .Where(item => !requireBatchMetadata || item.RunId is not null && item.BatchUid is not null && item.RunKey is not null)
+            .Where(item => expectedRunId is null || item.RunId == expectedRunId)
+            .Where(item => expectedBatchUid is null || string.Equals(item.BatchUid, expectedBatchUid, StringComparison.Ordinal))
+            .Where(item => expectedRunKey is null || string.Equals(item.RunKey, expectedRunKey, StringComparison.Ordinal))
             .OrderByDescending(item => item.HasUsableMetadata)
             .ThenByDescending(item => item.CapturedAt ?? DateTimeOffset.MinValue)
             .ThenByDescending(item => item.LastWriteUtc)
@@ -208,18 +346,23 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
             var root = document.RootElement;
             var hasRows = root.TryGetProperty("rows", out var rows) && rows.ValueKind == JsonValueKind.Array;
             var runId = ReadRunId(root);
+            var batchUid = ReadBatchUid(root);
+            var runKey = ReadRunKey(root);
             var hasTimestamp = TryReadSourceTimestamp(root, out var capturedAt);
-            return new RealtimeFileCandidate(path, hasRows && runId is not null && hasTimestamp, hasTimestamp ? capturedAt : null, info.LastWriteTimeUtc);
+            return new RealtimeFileCandidate(path, hasRows && runId is not null && hasTimestamp, runId, batchUid, runKey, hasTimestamp ? capturedAt : null, info.LastWriteTimeUtc);
         }
         catch
         {
-            return new RealtimeFileCandidate(path, false, null, info.LastWriteTimeUtc);
+            return new RealtimeFileCandidate(path, false, null, null, null, null, info.LastWriteTimeUtc);
         }
     }
 
     private sealed record RealtimeFileCandidate(
         string Path,
         bool HasUsableMetadata,
+        long? RunId,
+        string? BatchUid,
+        string? RunKey,
         DateTimeOffset? CapturedAt,
         DateTime LastWriteUtc);
 

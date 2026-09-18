@@ -410,9 +410,11 @@ public sealed partial class AuditViewModel(
                 RealtimeQualityBuildings.Add(new RealtimeQualityBuildingRow(building));
             }
 
-            RealtimeQualityStatusText = report.CollectionOk
-                ? report.DeviceAnomalyRows > 0 ? "实时采集通过，存在设备异常" : "实时审计通过"
-                : "实时采集存在阻断错误";
+            RealtimeQualityStatusText = report.IsStale
+                ? "实时审计身份需复核"
+                : report.CollectionOk
+                    ? report.DeviceAnomalyRows > 0 ? "实时采集通过，存在设备异常" : "实时审计通过"
+                    : "实时采集存在阻断错误";
             RealtimeQualitySummaryText =
                 $"实时 {report.TotalRows:N0} 行；唯一设备 {report.UniqueDevices:N0}；采集错误 {report.CollectionErrorCount:N0}；异常设备 {report.DeviceAnomalyRows:N0}；异常事件 {report.DeviceAnomalyEvents:N0}";
             RealtimeQualityGeneratedText = string.IsNullOrWhiteSpace(report.CreatedAt)
@@ -421,6 +423,10 @@ public sealed partial class AuditViewModel(
             if (!string.IsNullOrWhiteSpace(report.SummarySource))
             {
                 RealtimeQualityGeneratedText += "；来源 " + report.SummarySource;
+            }
+            if (report.IsStale)
+            {
+                RealtimeQualityGeneratedText += "；" + report.StaleReason;
             }
         }
         catch (Exception ex)
@@ -485,7 +491,7 @@ public sealed partial class AuditViewModel(
     {
         try
         {
-            var runs = await collectionRunRepository.ListAsync(80, cancellationToken).ConfigureAwait(true);
+            var runs = await collectionRunRepository.ListAsync(null, cancellationToken).ConfigureAwait(true);
             var selectedId = SelectedRun?.Id;
             _allRuns = runs;
             var catalog = CollectionDataSourceCatalog.Build(runs);
@@ -626,7 +632,7 @@ public sealed partial class AuditViewModel(
         HistoryBatchCountText = completed.Length.ToString("N0");
         CurrentVersionText = currentRun is null
             ? "--"
-            : $"#{currentRun.Id} · {CollectionRunMetadata.From(currentRun).DataVersion}";
+            : $"#{(currentRun.RunNumber > 0 ? currentRun.RunNumber : currentRun.Id)} · {CollectionRunMetadata.From(currentRun).DataVersion}";
         LatestCollectedText = currentRun is null ? "--" : FormatDateTime(currentRun.CompletedAt);
         AnomalyBatchCountText = _allRuns.Count(run => run.IsAnomaly).ToString("N0");
         RecoverableBatchCountText = completed.Count(run => !run.IsAnomaly).ToString("N0");

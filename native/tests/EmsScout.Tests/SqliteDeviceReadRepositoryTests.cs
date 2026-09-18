@@ -448,6 +448,50 @@ public sealed class SqliteDeviceReadRepositoryTests
         Assert.True(result.Facets.RealtimeMatched > 0);
     }
 
+    [Fact]
+    public async Task LoadsCurrentRealtimeDetailsPerBuildingSourceBatch()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-current-source-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var databasePath = Path.Combine(root, "ac.db");
+        try
+        {
+            await ExecuteAsync(databasePath, """
+                CREATE TABLE buildings (building TEXT PRIMARY KEY, sub_area_count INTEGER, menu_clicked TEXT, updated_at TEXT);
+                CREATE TABLE sub_areas (id INTEGER PRIMARY KEY, building TEXT, sub_idx INTEGER, floor REAL, text TEXT, x REAL, y REAL);
+                CREATE TABLE pages (id INTEGER PRIMARY KEY, sub_area_id INTEGER, page_name TEXT, layout TEXT, collected_at TEXT);
+                CREATE TABLE cards (id INTEGER PRIMARY KEY, page_id INTEGER, name TEXT, switch TEXT, mode TEXT, indoor TEXT, set_temp TEXT, fan TEXT, indicator TEXT, comm TEXT);
+                CREATE TABLE collection_runs (id INTEGER PRIMARY KEY, run_key TEXT, batch_uid TEXT, completed_at TEXT, imported_at TEXT, status TEXT);
+                CREATE TABLE current_data_sources (building TEXT PRIMARY KEY, revision_uid TEXT, run_id INTEGER, batch_uid TEXT, source_updated_at TEXT, card_count INTEGER, state TEXT, reason TEXT);
+                INSERT INTO buildings VALUES ('1号', 1, 'yes', '2026-09-18T01:00:00Z'), ('2号', 1, 'yes', '2026-09-18T01:00:00Z');
+                INSERT INTO sub_areas VALUES (1, '1号', 1, 1, '1F', 10, 20), (2, '2号', 1, 1, '1F', 10, 20);
+                INSERT INTO pages VALUES (1, 1, '一页', 'grid', '2026-09-18T01:00:00Z'), (2, 2, '一页', 'grid', '2026-09-18T01:00:00Z');
+                INSERT INTO cards VALUES (1, 1, '1-0101-KT', 'OFF', '制冷', '26', '25', '中', 'green.png', '关机'), (2, 2, '2-0101-KT', 'OFF', '制冷', '26', '25', '中', 'green.png', '关机');
+                INSERT INTO collection_runs VALUES (10, 'run-10', 'batch-10', '2026-09-18T01:00:00Z', '2026-09-18T01:00:00Z', 'completed'), (20, 'run-20', 'batch-20', '2026-09-18T02:00:00Z', '2026-09-18T02:00:00Z', 'completed');
+                INSERT INTO current_data_sources VALUES ('1号', 'revision-1', 10, 'batch-10', '2026-09-18T01:00:00Z', 1, 'bound', ''), ('2号', 'revision-2', 20, 'batch-20', '2026-09-18T02:00:00Z', 1, 'bound', '');
+                """);
+
+            var source = new SourceByBatch();
+            var repository = new SqliteDeviceReadRepository(databasePath, source);
+            var result = await repository.SearchAsync(new DeviceQuery(Limit: 10));
+
+            Assert.Equal("开启", Assert.Single(result.Rows, row => row.Building == "1号").RealtimeLockText);
+            Assert.Equal("关闭", Assert.Single(result.Rows, row => row.Building == "2号").RealtimeLockText);
+            Assert.Equal(["batch-10", "batch-20"], source.RequestedBatchUids.OrderBy(value => value).ToArray());
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch (IOException)
+            {
+                // SQLite may release the native handle after the async query continuation.
+            }
+        }
+    }
+
     private static async Task CreateHistoricalDatabaseAsync(string databasePath)
     {
         await using var connection = new SqliteConnection($"Data Source={databasePath}");
@@ -465,6 +509,52 @@ public sealed class SqliteDeviceReadRepositoryTests
             INSERT INTO run_pages VALUES (1, 1, 1, 'default', 'grid', '2026-08-31T03:00:00Z');
             INSERT INTO run_cards VALUES (1, 1, 1, '1-0101-KT', 'OFF', '制冷', '26', '25', '中', 'green.png', '关机');
             """;
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private sealed class SourceByBatch : EmsScout.Application.Devices.IRealtimeDetailSource
+    {
+        public List<string> RequestedBatchUids { get; } = [];
+
+        public Task<EmsScout.Application.Devices.RealtimeDetailSet> LoadAsync(
+            IReadOnlyList<string> buildings,
+            CancellationToken cancellationToken = default) =>
+            LoadAsync(buildings, "legacy", cancellationToken);
+
+        public Task<EmsScout.Application.Devices.RealtimeDetailSet> LoadAsync(
+            IReadOnlyList<string> buildings,
+            string? expectedBatchUid,
+            CancellationToken cancellationToken = default)
+        {
+            RequestedBatchUids.Add(expectedBatchUid ?? string.Empty);
+            var building = buildings.Single();
+            var locked = expectedBatchUid == "batch-10" ? "开启" : "关闭";
+            return Task.FromResult(new EmsScout.Application.Devices.RealtimeDetailSet([
+                new EmsScout.Application.Devices.RealtimeDetailRecord(
+                    $"{expectedBatchUid}-{building}", "memory", DateTimeOffset.UtcNow, building, 1, "1F", "一页",
+                    building == "1号" ? "1-0101-KT" : "2-0101-KT", "", "", "", 1, 1, 1, false, "",
+                    "关机", "OFF", "green.png", new Dictionary<string, string> { ["集控锁定"] = locked },
+                    new Dictionary<string, bool> { ["集控锁定"] = true })
+            ], sourceRunId: expectedBatchUid == "batch-10" ? 10 : 20, sourceBatchUid: expectedBatchUid));
+        }
+
+        public Task<EmsScout.Application.Devices.RealtimeDetailSet> LoadAsync(
+            IReadOnlyList<string> buildings,
+            long expectedRunId,
+            string expectedBatchUid,
+            string expectedRunKey,
+            CancellationToken cancellationToken = default)
+        {
+            return LoadAsync(buildings, expectedBatchUid, cancellationToken);
+        }
+    }
+
+    private static async Task ExecuteAsync(string databasePath, string sql)
+    {
+        await using var connection = new SqliteConnection($"Data Source={databasePath}");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = sql;
         await command.ExecuteNonQueryAsync();
     }
 

@@ -195,8 +195,14 @@ public sealed class DashboardOverviewServiceTests
 
     private sealed class EmptyCollectionRunRepository : ICollectionRunRepository
     {
-        public Task<IReadOnlyList<CollectionRunRecord>> ListAsync(int limit = 50, CancellationToken cancellationToken = default) =>
+        public Task<IReadOnlyList<CollectionRunRecord>> ListAsync(int? limit = 50, CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<CollectionRunRecord>>([]);
+
+        public Task<RunDeleteImpact> GetDeleteImpactAsync(long runId, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<CollectionRunDeleteResult>> DeleteManyAsync(IReadOnlyList<long> runIds, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
 
         public Task<CollectionRunComparison> CompareCurrentAsync(long runId, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();

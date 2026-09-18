@@ -26,7 +26,9 @@ public sealed record RealtimeQualityAuditReport(
     string Note,
     long? RunId = null,
     bool IsStale = false,
-    string StaleReason = "");
+    string StaleReason = "",
+    string? BatchUid = null,
+    string? RunKey = null);
 
 public sealed record RealtimeQualityCategory(
     string Code,

@@ -18,7 +18,9 @@ public sealed record QualityAuditReport(
     QualityAuditSummary Summary,
     IReadOnlyList<QualityAuditIssue> Issues,
     bool IsStale,
-    string StaleReason);
+    string StaleReason,
+    string? BatchUid = null,
+    string? RunKey = null);
 
 public sealed record QualityAuditSummary(
     int TotalCards,

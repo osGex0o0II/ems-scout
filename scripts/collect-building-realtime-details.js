@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { formatLocalTimestamp } = require('../src/time');
+const { readBatchIdentity, withBatchIdentity } = require('../src/run-identity');
 const { inspectRealtimeRow } = require('../src/realtime-quality');
 const { installRealtimeLog } = require('./realtime-logger');
 const { ensureRealtimeBrowser } = require('./realtime-browser');
@@ -19,9 +20,11 @@ const EFFECTIVE_CDP_URL = CDP_ARG ? CDP_ARG.split('=').slice(1).join('=') : CDP_
 const STRICT_CDP = process.argv.includes('--strict-cdp');
 const MAX_SUBAREAS = Number((process.argv.find(a => a.startsWith('--max-subareas=')) || '').split('=')[1] || 0);
 const MAX_DEVICES = Number((process.argv.find(a => a.startsWith('--max-devices=')) || '').split('=')[1] || 0);
-const RUN_ID = Number(
-  ((process.argv.find(a => a.startsWith('--run-id=')) || '').split('=').slice(1).join('=') ||
-    process.env.EMS_RUN_ID || 0));
+const IDENTITY = readBatchIdentity({
+  ...process.env,
+  EMS_RUN_ID: ((process.argv.find(a => a.startsWith('--run-id=')) || '').split('=').slice(1).join('=') || process.env.EMS_RUN_ID || 0),
+});
+const RUN_ID = IDENTITY.runId || 0;
 const READY_TIMEOUT_MS = Number((process.argv.find(a => a.startsWith('--ready-timeout=')) || '').split('=')[1] || 6000);
 const FAILED_FROM = (process.argv.find(a => a.startsWith('--failed-from=')) || '').split('=').slice(1).join('=');
 const REUSE_MODAL = process.argv.includes('--reuse-modal');
@@ -1050,7 +1053,7 @@ async function collectCurrentPageDetails(page, pageMeta, rows, ndjsonStream, sta
         fields: {},
       };
       rows.push(row);
-      ndjsonStream.write(JSON.stringify(row) + '\n');
+      ndjsonStream.write(JSON.stringify(withBatchIdentity(row, IDENTITY)) + '\n');
     }
     console.log('[SUMMARY]', JSON.stringify(summarize(rows, startedAt)));
     return;
@@ -1126,7 +1129,7 @@ async function collectCurrentPageDetails(page, pageMeta, rows, ndjsonStream, sta
     row.preserveRawValues = realtimeQuality.preserveRawValues;
     row.rawFieldCount = realtimeQuality.rawFieldCount;
     rows.push(row);
-    ndjsonStream.write(JSON.stringify(row) + '\n');
+    ndjsonStream.write(JSON.stringify(withBatchIdentity(row, IDENTITY)) + '\n');
   }
   process.stdout.write('\n');
   console.log('[SUMMARY]', JSON.stringify(summarize(rows, startedAt)));
@@ -1337,12 +1340,12 @@ async function main() {
       }
     }
 
-    const result = { runId: RUN_ID > 0 ? RUN_ID : null, capturedAt: formatLocalTimestamp(), summary: summarize(rows, startedAt), rows };
+    const result = withBatchIdentity({ capturedAt: formatLocalTimestamp(), summary: summarize(rows, startedAt), rows }, IDENTITY);
     fs.writeFileSync(jsonPath, JSON.stringify(result, null, 2), 'utf8');
   }
 
   const capturedAt = formatLocalTimestamp();
-  let result = { runId: RUN_ID > 0 ? RUN_ID : null, capturedAt, summary: summarize(rows, startedAt), rows };
+  let result = withBatchIdentity({ capturedAt, summary: summarize(rows, startedAt), rows }, IDENTITY);
   if (enumTargets && !IS_PARTIAL_RUN) {
     const reconciled = reconcileRowsToEnum(rows, enumTargets);
     if (reconciled.filtered > 0 || reconciled.duplicate > 0) {
@@ -1356,7 +1359,7 @@ async function main() {
     if (missing.length || extra.length || actual.size !== expected.size) {
       throw new Error(`枚举与实时清单不一致：期望 ${expected.size} 台，实际 ${actual.size} 台，缺失 ${missing.length}，新增 ${extra.length}`);
     }
-    result = { runId: RUN_ID > 0 ? RUN_ID : null, capturedAt, summary: summarize(rows, startedAt), rows };
+    result = withBatchIdentity({ capturedAt, summary: summarize(rows, startedAt), rows }, IDENTITY);
   }
   if (failedTargets) {
     const mergedRows = failedTargets.source.rows || [];
@@ -1368,8 +1371,7 @@ async function main() {
       mergedRows[idx] = row;
       replaced++;
     }
-    result = {
-      runId: RUN_ID > 0 ? RUN_ID : null,
+    result = withBatchIdentity({
       capturedAt,
       summary: summarize(mergedRows, startedAt),
       recapture: {
@@ -1379,7 +1381,7 @@ async function main() {
         stillFailed: mergedRows.filter(r => r.error).length,
       },
       rows: mergedRows,
-    };
+    }, IDENTITY);
   }
   fs.writeFileSync(jsonPath, JSON.stringify(result, null, 2), 'utf8');
   if (!IS_PARTIAL_RUN) fs.writeFileSync(latestPath, JSON.stringify(result, null, 2), 'utf8');

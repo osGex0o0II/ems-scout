@@ -25,6 +25,7 @@ public sealed partial class CollectionTaskViewModel(
     IRealtimeQualityAuditService realtimeQualityAuditService,
     IRealtimeReconciliationService realtimeReconciliationService,
     ICollectionRunRepository collectionRunRepository,
+    ICollectionRunActivity collectionRunActivity,
     IRealtimeSnapshotStore realtimeSnapshotStore,
     IDeviceReadRepository deviceReadRepository) : ObservableObject
 {
@@ -38,6 +39,8 @@ public sealed partial class CollectionTaskViewModel(
     private string _lastStepFailureDetail = string.Empty;
     private string _lastProgressLocation = string.Empty;
     private long? _targetRunId;
+    private string? _targetBatchUid;
+    private string? _targetRunKey;
     private long _taskGeneration;
     private bool _acceptProgressEvents = true;
     private bool _currentDataUpdatedThisRun;
@@ -817,7 +820,7 @@ public sealed partial class CollectionTaskViewModel(
     {
         try
         {
-            var runs = await collectionRunRepository.ListAsync(50, cancellationToken).ConfigureAwait(true);
+            var runs = await collectionRunRepository.ListAsync(null, cancellationToken).ConfigureAwait(true);
             var selectedId = SelectedRun?.Id;
             Runs.Clear();
             foreach (var run in runs)
@@ -1060,6 +1063,8 @@ public sealed partial class CollectionTaskViewModel(
         _currentDataUpdatedThisRun = false;
         _qualityRequiresReview = false;
         _targetRunId = null;
+        _targetBatchUid = null;
+        _targetRunKey = null;
         _taskGeneration++;
         _acceptProgressEvents = true;
         ShowCompletionCelebration = false;
@@ -1162,6 +1167,7 @@ public sealed partial class CollectionTaskViewModel(
         StartCommand.NotifyCanExecuteChanged();
         StopCommand.NotifyCanExecuteChanged();
         CheckEnvironmentCommand.NotifyCanExecuteChanged();
+        using var activityLease = collectionRunActivity.Begin();
 
         try
         {
@@ -1171,6 +1177,7 @@ public sealed partial class CollectionTaskViewModel(
                         selectedBuildings,
                         _activeTask.Token)
                     .ConfigureAwait(true);
+                await EnsureTargetRunIdentityAsync(_targetRunId.Value, _activeTask.Token).ConfigureAwait(true);
 
                 AddLog($"实时详情目标批次：#{_targetRunId.Value}");
             }
@@ -1216,6 +1223,10 @@ public sealed partial class CollectionTaskViewModel(
                 ProgressValue = Math.Max(ProgressValue, importProgress - 2);
                 ProgressText = "正在导入 SQLite";
                 await RunImportAsync(selectedBuildings, settings, _activeTask.Token);
+                if (_targetRunId is > 0)
+                {
+                    await EnsureTargetRunIdentityAsync(_targetRunId.Value, _activeTask.Token).ConfigureAwait(true);
+                }
                 _currentDataUpdatedThisRun = true;
                 _databaseReady = true;
                 CanOpenDataAfterImport = true;
@@ -1720,7 +1731,7 @@ public sealed partial class CollectionTaskViewModel(
         IReadOnlyList<string> selectedBuildings,
         CancellationToken cancellationToken)
     {
-        var run = (await collectionRunRepository.ListAsync(20, cancellationToken)
+        var run = (await collectionRunRepository.ListAsync(null, cancellationToken)
                 .ConfigureAwait(true))
             .FirstOrDefault();
         if (run is null)
@@ -1769,12 +1780,35 @@ public sealed partial class CollectionTaskViewModel(
         IReadOnlyList<string> buildings,
         CancellationToken cancellationToken)
     {
+        var run = (await collectionRunRepository.ListAsync(null, cancellationToken)
+                .ConfigureAwait(true))
+            .FirstOrDefault(item => item.Id == runId);
+        if (run is null || string.IsNullOrWhiteSpace(run.BatchUid))
+        {
+            throw new InvalidOperationException($"批次 #{runId} 缺少不可变 batch_uid，已阻止保存实时详情。请先完成数据库迁移。 ");
+        }
+
         await realtimeSnapshotStore.SaveAsync(
             runId,
+            run.BatchUid,
             pathService.DataDirectory,
             buildings,
             cancellationToken).ConfigureAwait(true);
         AddLog($"已保存批次 #{runId} 的实时详情快照");
+    }
+
+    private async Task EnsureTargetRunIdentityAsync(long runId, CancellationToken cancellationToken)
+    {
+        var run = (await collectionRunRepository.ListAsync(null, cancellationToken)
+                .ConfigureAwait(true))
+            .FirstOrDefault(item => item.Id == runId);
+        if (run is null || string.IsNullOrWhiteSpace(run.BatchUid) || string.IsNullOrWhiteSpace(run.RunKey))
+        {
+            throw new InvalidOperationException($"批次 #{runId} 缺少完整不可变身份（batch_uid/run_key），已阻止继续生成运行产物。");
+        }
+
+        _targetBatchUid = run.BatchUid;
+        _targetRunKey = run.RunKey;
     }
 
     private async Task VerifyCurrentDataAsync(
@@ -1789,7 +1823,7 @@ public sealed partial class CollectionTaskViewModel(
         CollectionRunRecord? run = null;
         if (_targetRunId is > 0)
         {
-            run = (await collectionRunRepository.ListAsync(500, cancellationToken)
+            run = (await collectionRunRepository.ListAsync(null, cancellationToken)
                 .ConfigureAwait(true)).FirstOrDefault(item => item.Id == _targetRunId.Value);
         }
 
@@ -1838,6 +1872,14 @@ public sealed partial class CollectionTaskViewModel(
         if (_targetRunId is > 0)
         {
             environment["EMS_RUN_ID"] = _targetRunId.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            if (!string.IsNullOrWhiteSpace(_targetBatchUid))
+            {
+                environment["EMS_BATCH_UID"] = _targetBatchUid;
+            }
+            if (!string.IsNullOrWhiteSpace(_targetRunKey))
+            {
+                environment["EMS_RUN_KEY"] = _targetRunKey;
+            }
         }
         return environment;
     }

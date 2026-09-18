@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { BLDG_ORDER } = require('./rules');
 const { formatLocalTimestamp } = require('./time');
 
@@ -43,7 +44,9 @@ function ensureHistorySchema(db) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS collection_runs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_no INTEGER,
       run_key TEXT UNIQUE,
+      batch_uid TEXT NOT NULL DEFAULT '',
       started_at TEXT,
       completed_at TEXT NOT NULL,
       imported_at TEXT NOT NULL,
@@ -59,10 +62,66 @@ function ensureHistorySchema(db) {
       unknown_count INTEGER NOT NULL DEFAULT 0,
       quality_summary TEXT NOT NULL DEFAULT '{}',
       is_anomaly INTEGER NOT NULL DEFAULT 0,
-      note TEXT NOT NULL DEFAULT ''
+      note TEXT NOT NULL DEFAULT '',
+      restored_from_run_id INTEGER,
+      lifecycle_state TEXT NOT NULL DEFAULT 'completed',
+      current_revision_uid TEXT,
+      restored_from_batch_uid TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_collection_runs_completed
       ON collection_runs(completed_at DESC);
+
+    CREATE TABLE IF NOT EXISTS run_id_registry (
+      technical_id INTEGER PRIMARY KEY,
+      allocated_at TEXT NOT NULL,
+      allocation_kind TEXT NOT NULL DEFAULT 'collection_run'
+    );
+    CREATE INDEX IF NOT EXISTS idx_run_id_registry_allocated
+      ON run_id_registry(allocated_at);
+
+    CREATE TABLE IF NOT EXISTS run_key_registry (
+      run_key TEXT PRIMARY KEY,
+      batch_uid TEXT NOT NULL DEFAULT '',
+      first_seen_at TEXT NOT NULL,
+      deleted_at TEXT,
+      last_run_id INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_run_key_registry_deleted
+      ON run_key_registry(deleted_at);
+
+    CREATE TABLE IF NOT EXISTS run_operations (
+      operation_id TEXT PRIMARY KEY,
+      operation_type TEXT NOT NULL,
+      run_id INTEGER,
+      batch_uid TEXT,
+      run_key TEXT,
+      occurred_at TEXT NOT NULL,
+      result TEXT NOT NULL,
+      summary TEXT NOT NULL DEFAULT '',
+      deleted_cards INTEGER NOT NULL DEFAULT 0,
+      deleted_pages INTEGER NOT NULL DEFAULT 0,
+      deleted_sub_areas INTEGER NOT NULL DEFAULT 0,
+      deleted_buildings INTEGER NOT NULL DEFAULT 0,
+      pending_artifacts INTEGER NOT NULL DEFAULT 0
+    );
+
+    CREATE TABLE IF NOT EXISTS current_data_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      revision_uid TEXT NOT NULL UNIQUE,
+      updated_at TEXT NOT NULL,
+      source TEXT NOT NULL DEFAULT '本机 SQLite'
+    );
+
+    CREATE TABLE IF NOT EXISTS current_data_sources (
+      building TEXT PRIMARY KEY,
+      revision_uid TEXT NOT NULL,
+      run_id INTEGER,
+      batch_uid TEXT,
+      source_updated_at TEXT,
+      card_count INTEGER NOT NULL DEFAULT 0,
+      state TEXT NOT NULL DEFAULT 'bound',
+      reason TEXT NOT NULL DEFAULT ''
+    );
 
     CREATE TABLE IF NOT EXISTS run_buildings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -136,6 +195,7 @@ function ensureHistorySchema(db) {
     CREATE TABLE IF NOT EXISTS run_realtime_details (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       run_id INTEGER NOT NULL,
+      batch_uid TEXT,
       source_row_id TEXT NOT NULL,
       building TEXT NOT NULL,
       floor REAL,
@@ -168,7 +228,13 @@ function ensureHistorySchema(db) {
   `);
 
   try { db.exec("ALTER TABLE collection_runs ADD COLUMN quality_summary TEXT NOT NULL DEFAULT '{}'"); } catch {}
+  try { db.exec('ALTER TABLE collection_runs ADD COLUMN run_no INTEGER'); } catch {}
   try { db.exec('ALTER TABLE collection_runs ADD COLUMN is_anomaly INTEGER NOT NULL DEFAULT 0'); } catch {}
+  try { db.exec('ALTER TABLE collection_runs ADD COLUMN restored_from_run_id INTEGER'); } catch {}
+  try { db.exec("ALTER TABLE collection_runs ADD COLUMN batch_uid TEXT NOT NULL DEFAULT ''"); } catch {}
+  try { db.exec("ALTER TABLE collection_runs ADD COLUMN lifecycle_state TEXT NOT NULL DEFAULT 'completed'"); } catch {}
+  try { db.exec('ALTER TABLE collection_runs ADD COLUMN current_revision_uid TEXT'); } catch {}
+  try { db.exec('ALTER TABLE collection_runs ADD COLUMN restored_from_batch_uid TEXT'); } catch {}
   try { db.exec('ALTER TABLE buildings ADD COLUMN updated_at TEXT'); } catch {}
   try { db.exec('ALTER TABLE sub_areas ADD COLUMN sub_idx INT'); } catch {}
   try { db.exec('ALTER TABLE pages ADD COLUMN raw_count INT'); } catch {}
@@ -178,14 +244,117 @@ function ensureHistorySchema(db) {
   try { db.exec('ALTER TABLE run_pages ADD COLUMN quality_reason TEXT'); } catch {}
   try { db.exec('ALTER TABLE pages ADD COLUMN collected_at TEXT'); } catch {}
   try { db.exec('ALTER TABLE run_pages ADD COLUMN collected_at TEXT'); } catch {}
+  try { db.exec('ALTER TABLE run_realtime_details ADD COLUMN batch_uid TEXT'); } catch {}
   try { db.exec('ALTER TABLE cards ADD COLUMN indicator TEXT'); } catch {}
+  try { db.exec("ALTER TABLE current_data_sources ADD COLUMN state TEXT NOT NULL DEFAULT 'bound'"); } catch {}
+  try { db.exec("ALTER TABLE current_data_sources ADD COLUMN reason TEXT NOT NULL DEFAULT ''"); } catch {}
+
+  const now = formatLocalTimestamp();
+  const legacyRuns = db.prepare(`
+    SELECT id, run_no, run_key, batch_uid
+    FROM collection_runs
+    ORDER BY id
+  `).all();
+  const usedRunNumbers = new Set();
+  const updateRunNumber = db.prepare('UPDATE collection_runs SET run_no = ? WHERE id = ?');
+  const updateBatchUid = db.prepare('UPDATE collection_runs SET batch_uid = ? WHERE id = ?');
+  const updateRunKey = db.prepare('UPDATE collection_runs SET run_key = ? WHERE id = ?');
+  for (const run of legacyRuns) {
+    let runNo = Number(run.run_no);
+    if (!Number.isInteger(runNo) || runNo <= 0 || usedRunNumbers.has(runNo)) {
+      runNo = 1;
+      while (usedRunNumbers.has(runNo)) runNo += 1;
+      updateRunNumber.run(runNo, run.id);
+    }
+    usedRunNumbers.add(runNo);
+    if (!String(run.batch_uid || '').trim()) {
+      updateBatchUid.run(crypto.randomUUID(), run.id);
+    }
+    if (!String(run.run_key || '').trim()) {
+      updateRunKey.run(`legacy_run_${run.id}_${crypto.randomUUID()}`, run.id);
+    }
+  }
+
+  const identityRows = db.prepare(`
+    SELECT id, run_key, batch_uid, imported_at, completed_at
+    FROM collection_runs
+    ORDER BY id
+  `).all();
+  const registerTechnicalId = db.prepare(`
+    INSERT OR IGNORE INTO run_id_registry (technical_id, allocated_at, allocation_kind)
+    VALUES (?, ?, 'collection_run')
+  `);
+  const register = db.prepare(`
+    INSERT INTO run_key_registry (run_key, batch_uid, first_seen_at, last_run_id)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(run_key) DO UPDATE SET
+      batch_uid = CASE WHEN run_key_registry.batch_uid = '' THEN excluded.batch_uid ELSE run_key_registry.batch_uid END,
+      last_run_id = excluded.last_run_id
+  `);
+  for (const run of identityRows) {
+    registerTechnicalId.run(run.id, run.imported_at || run.completed_at || now);
+    register.run(
+      run.run_key,
+      run.batch_uid,
+      run.imported_at || run.completed_at || now,
+      run.id);
+  }
+  try {
+    const sequence = db.prepare(`
+      SELECT seq
+      FROM sqlite_sequence
+      WHERE name = 'collection_runs'
+      LIMIT 1
+    `).get();
+    const highWaterMark = Number(sequence?.seq || 0);
+    if (Number.isInteger(highWaterMark) && highWaterMark > 0) {
+      registerTechnicalId.run(highWaterMark, now);
+    }
+  } catch {
+    // Legacy databases without AUTOINCREMENT do not have sqlite_sequence.
+  }
+  try {
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS ux_collection_runs_run_no ON collection_runs(run_no) WHERE run_no IS NOT NULL');
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS ux_collection_runs_batch_uid ON collection_runs(batch_uid) WHERE batch_uid <> \'\'');
+  } catch (error) {
+    throw new Error('批次身份不唯一，已停止历史库操作：' + error.message);
+  }
+  ensureLegacyCurrentDataState(db);
+}
+
+function ensureLegacyCurrentDataState(db) {
+  const sourceCount = db.prepare('SELECT COUNT(*) AS c FROM current_data_sources').get().c;
+  if (sourceCount > 0 || tableCount(db, 'cards') === 0 || tableCount(db, 'buildings') === 0) return;
+  const revisionUid = `legacy-unresolved-${crypto.randomUUID()}`;
+  const now = formatLocalTimestamp();
+  const tx = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO current_data_state (id, revision_uid, updated_at, source)
+      VALUES (1, ?, ?, '本机旧库迁移，来源未确定')
+      ON CONFLICT(id) DO UPDATE SET revision_uid=excluded.revision_uid, updated_at=excluded.updated_at, source=excluded.source
+    `).run(revisionUid, now);
+    db.prepare(`
+      INSERT INTO current_data_sources
+        (building, revision_uid, run_id, batch_uid, source_updated_at, card_count, state, reason)
+      SELECT b.building, ?, NULL, NULL, b.updated_at,
+             (SELECT COUNT(*) FROM cards c JOIN pages p ON p.id = c.page_id JOIN sub_areas sa ON sa.id = p.sub_area_id WHERE sa.building = b.building),
+             'unresolved', '旧数据库未记录当前数据来源，禁止自动绑定到最新历史批次'
+      FROM buildings b
+    `).run(revisionUid);
+  });
+  tx();
 }
 
 function uniqueRunKey(db, base) {
   let key = base;
   let n = 1;
-  const exists = db.prepare('SELECT 1 FROM collection_runs WHERE run_key = ?');
-  while (exists.get(key)) {
+  const exists = db.prepare(`
+    SELECT 1 FROM collection_runs WHERE run_key = ?
+    UNION ALL
+    SELECT 1 FROM run_key_registry WHERE run_key = ?
+    LIMIT 1
+  `);
+  while (exists.get(key, key)) {
     n += 1;
     key = `${base}_${n}`;
   }
@@ -194,26 +363,38 @@ function uniqueRunKey(db, base) {
 
 function nextCollectionRunId(db) {
   const row = db.prepare(`
+    SELECT MAX(value) + 1 AS id
+    FROM (
+      SELECT COALESCE(MAX(id), 0) AS value FROM collection_runs
+      UNION ALL
+      SELECT COALESCE(MAX(technical_id), 0) AS value FROM run_id_registry
+    )
+  `).get();
+  return Number(row.id);
+}
+
+function nextRunNumber(db) {
+  const row = db.prepare(`
     SELECT COALESCE(
       (
         SELECT MIN(candidate)
         FROM (
           SELECT 1 AS candidate
           UNION ALL
-          SELECT id + 1
+          SELECT run_no + 1
           FROM collection_runs
-          WHERE id > 0
+          WHERE run_no IS NOT NULL AND run_no > 0
         ) candidates
         WHERE NOT EXISTS (
           SELECT 1
           FROM collection_runs existing
-          WHERE existing.id = candidates.candidate
+          WHERE existing.run_no = candidates.candidate
         )
       ),
       1
-    ) AS id
+    ) AS run_no
   `).get();
-  return Number(row.id);
+  return Number(row.run_no);
 }
 
 function normalizeStoredTimestamp(value, fallback = formatLocalTimestamp()) {
@@ -239,7 +420,7 @@ function listRuns(db, options = {}) {
   if (options.seed !== false) seedCurrentRun(db);
   const limit = Math.max(1, Math.min(Number(options.limit) || 100, 500));
   return db.prepare(`
-    SELECT id, run_key, started_at, completed_at, imported_at, status, scope,
+    SELECT id, run_no, run_key, started_at, completed_at, imported_at, status, scope,
            buildings, json_path, db_snapshot_path, card_count, on_count,
            off_count, offline_count, unknown_count, quality_summary, is_anomaly, note
     FROM collection_runs
@@ -298,12 +479,35 @@ function restoreCurrentFromRun(db, runId) {
   ensureHistorySchema(db);
   const id = resolveRunId(db, runId);
   if (!id) throw new Error('Run id is required');
-  const run = db.prepare('SELECT id, run_key, completed_at, buildings FROM collection_runs WHERE id = ?').get(id);
+  const run = db.prepare('SELECT id, run_key, batch_uid, completed_at, scope, buildings FROM collection_runs WHERE id = ?').get(id);
   if (!run) throw new Error('Run not found: ' + runId);
   const runCompletedAt = normalizeStoredTimestamp(run.completed_at);
+  const sourceBuildings = parseJsonArray(run.buildings);
+  const isPartial = String(run.scope || '').toLowerCase() === 'partial';
+  if (isPartial && sourceBuildings.length === 0) {
+    throw new Error('部分批次没有楼栋范围，无法安全恢复');
+  }
 
   const tx = db.transaction(() => {
-    db.exec('DELETE FROM cards; DELETE FROM pages; DELETE FROM sub_areas; DELETE FROM buildings;');
+    if (isPartial) {
+      const placeholders = sourceBuildings.map(() => '?').join(',');
+      db.prepare(`
+        DELETE FROM cards
+        WHERE page_id IN (
+          SELECT p.id FROM pages p
+          JOIN sub_areas sa ON sa.id = p.sub_area_id
+          WHERE sa.building IN (${placeholders})
+        )
+      `).run(...sourceBuildings);
+      db.prepare(`
+        DELETE FROM pages
+        WHERE sub_area_id IN (SELECT id FROM sub_areas WHERE building IN (${placeholders}))
+      `).run(...sourceBuildings);
+      db.prepare(`DELETE FROM sub_areas WHERE building IN (${placeholders})`).run(...sourceBuildings);
+      db.prepare(`DELETE FROM buildings WHERE building IN (${placeholders})`).run(...sourceBuildings);
+    } else {
+      db.exec('DELETE FROM cards; DELETE FROM pages; DELETE FROM sub_areas; DELETE FROM buildings;');
+    }
 
     const insertBuilding = db.prepare(`
       INSERT INTO buildings (building, sub_area_count, menu_clicked, updated_at)
@@ -387,6 +591,35 @@ function restoreCurrentFromRun(db, runId) {
     }
 
     syncFloorCatalogFromCurrent(db);
+    const revisionUid = crypto.randomUUID();
+    db.prepare(`
+      INSERT INTO current_data_state (id, revision_uid, updated_at, source)
+      VALUES (1, ?, ?, '本机 SQLite')
+      ON CONFLICT(id) DO UPDATE SET revision_uid=excluded.revision_uid, updated_at=excluded.updated_at, source=excluded.source
+    `).run(revisionUid, formatLocalTimestamp());
+    if (isPartial) {
+      db.prepare('UPDATE current_data_sources SET revision_uid = ? WHERE building IN (' + sourceBuildings.map(() => '?').join(',') + ')').run(revisionUid, ...sourceBuildings);
+    } else {
+      db.prepare('DELETE FROM current_data_sources').run();
+    }
+    const upsertSource = db.prepare(`
+      INSERT INTO current_data_sources
+        (building, revision_uid, run_id, batch_uid, source_updated_at, card_count, state, reason)
+      VALUES (?, ?, ?, ?, ?, ?, 'bound', '')
+      ON CONFLICT(building) DO UPDATE SET
+        revision_uid=excluded.revision_uid, run_id=excluded.run_id, batch_uid=excluded.batch_uid,
+        source_updated_at=excluded.source_updated_at, card_count=excluded.card_count,
+        state=excluded.state, reason=excluded.reason
+    `);
+    for (const building of sourceBuildings) {
+      const count = db.prepare(`
+        SELECT COUNT(*) AS c
+        FROM cards c JOIN pages p ON p.id = c.page_id JOIN sub_areas sa ON sa.id = p.sub_area_id
+        WHERE sa.building = ?
+      `).get(building).c;
+      upsertSource.run(building, revisionUid, id, run.batch_uid || null, runCompletedAt, Number(count || 0));
+    }
+    db.prepare('UPDATE collection_runs SET current_revision_uid = ? WHERE id = ?').run(revisionUid, id);
   });
 
   tx();
@@ -402,8 +635,23 @@ function deleteRun(db, runId) {
   ensureHistorySchema(db);
   const id = resolveRunId(db, runId);
   if (!id) throw new Error('Run id is required');
-  const run = db.prepare('SELECT id, run_key, completed_at, card_count FROM collection_runs WHERE id = ?').get(id);
+  const run = db.prepare('SELECT id, run_key, batch_uid, completed_at, card_count, scope, buildings FROM collection_runs WHERE id = ?').get(id);
   if (!run) throw new Error('Run not found: ' + runId);
+  const sourceRows = db.prepare('SELECT building, state, run_id, batch_uid, reason FROM current_data_sources').all();
+  if (String(run.scope || '').toLowerCase() === 'full' && sourceRows.length === 0) {
+    throw new Error('当前数据来源记录为空，不能安全删除全量历史批次');
+  }
+  const declaredBuildings = new Set(parseJsonArray(run.buildings));
+  const overlap = sourceRows.filter(row => declaredBuildings.has(row.building));
+  if (overlap.some(row => row.run_id === id || row.batch_uid === run.batch_uid)) {
+    throw new Error('当前数据正在使用该批次，不能删除');
+  }
+  if (overlap.some(row => String(row.state || 'bound').toLowerCase() !== 'bound')) {
+    throw new Error('当前数据来源未确定，不能安全删除重叠楼栋的历史批次');
+  }
+  if (db.prepare("SELECT 1 FROM collection_runs WHERE id <> ? AND restored_from_run_id = ? LIMIT 1").get(id, id)) {
+    throw new Error('仍有恢复/备份记录依赖该批次，不能删除');
+  }
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM run_realtime_details WHERE run_id = ?').run(id);
     db.prepare('DELETE FROM run_cards WHERE run_id = ?').run(id);
@@ -411,6 +659,11 @@ function deleteRun(db, runId) {
     db.prepare('DELETE FROM run_sub_areas WHERE run_id = ?').run(id);
     db.prepare('DELETE FROM run_buildings WHERE run_id = ?').run(id);
     db.prepare('DELETE FROM collection_runs WHERE id = ?').run(id);
+    db.prepare(`
+      UPDATE run_key_registry
+      SET deleted_at = ?, last_run_id = ?
+      WHERE run_key = ? AND deleted_at IS NULL
+    `).run(formatLocalTimestamp(), id, run.run_key);
   });
   tx();
   return run;
@@ -479,13 +732,15 @@ function createRunFromCurrent(db, options = {}) {
     ? normalizeStoredTimestamp(options.startedAt, now)
     : null;
   const requestedRunKey = options.runKey || localRunKey(new Date(now));
+  const batchUid = options.batchUid || crypto.randomUUID();
+  const revisionUid = options.currentRevisionUid || crypto.randomUUID();
   const scope = selected.length && selected.length < BLDG_ORDER.length ? 'partial' : 'full';
   const buildings = selected.length ? selected : db.prepare('SELECT DISTINCT building FROM sub_areas ORDER BY building').all().map(r => r.building);
 
   const insertRun = db.prepare(`
     INSERT INTO collection_runs
-      (id, run_key, started_at, completed_at, imported_at, status, scope, buildings, json_path, db_snapshot_path, note)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, run_no, run_key, batch_uid, started_at, completed_at, imported_at, status, scope, buildings, json_path, db_snapshot_path, note, lifecycle_state, current_revision_uid)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertRunBuilding = db.prepare(`
     INSERT INTO run_buildings (run_id, building, sub_area_count, menu_clicked, updated_at)
@@ -514,9 +769,16 @@ function createRunFromCurrent(db, options = {}) {
   const tx = db.transaction(() => {
     const runKey = uniqueRunKey(db, requestedRunKey);
     const runId = nextCollectionRunId(db);
+    const runNo = nextRunNumber(db);
+    db.prepare(`
+      INSERT INTO run_id_registry (technical_id, allocated_at, allocation_kind)
+      VALUES (?, ?, 'collection_run')
+    `).run(runId, now);
     const res = insertRun.run(
       runId,
+      runNo,
       runKey,
+      batchUid,
       startedAt,
       now,
       formatLocalTimestamp(),
@@ -525,7 +787,9 @@ function createRunFromCurrent(db, options = {}) {
       JSON.stringify(buildings),
       options.jsonPath || null,
       options.dbSnapshotPath || null,
-      options.note || ''
+      options.note || '',
+      options.lifecycleState || options.status || 'completed',
+      revisionUid
     );
     const insertedRunId = Number(res.lastInsertRowid);
     if (insertedRunId !== runId) {
@@ -606,6 +870,44 @@ function createRunFromCurrent(db, options = {}) {
       WHERE run_id = ?
     `).get(runId);
     updateRunStats.run(stats.total || 0, stats.on_count || 0, stats.off_count || 0, stats.offline_count || 0, stats.unknown_count || 0, runId);
+    db.prepare(`
+      INSERT INTO run_key_registry (run_key, batch_uid, first_seen_at, last_run_id)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(run_key) DO UPDATE SET last_run_id = excluded.last_run_id
+    `).run(runKey, batchUid, now, runId);
+    const sourceBuildings = buildings.map(String);
+    const updateRevision = db.prepare(`
+      INSERT INTO current_data_state (id, revision_uid, updated_at, source)
+      VALUES (1, ?, ?, '本机 SQLite')
+      ON CONFLICT(id) DO UPDATE SET revision_uid = excluded.revision_uid, updated_at = excluded.updated_at
+    `);
+    updateRevision.run(revisionUid, now);
+    if (scope === 'partial' && sourceBuildings.length) {
+      db.prepare(
+        'UPDATE current_data_sources SET revision_uid = ? WHERE building IN (' + sourceBuildings.map(() => '?').join(',') + ')',
+      ).run(revisionUid, ...sourceBuildings);
+    }
+    const upsertSource = db.prepare(`
+      INSERT INTO current_data_sources (building, revision_uid, run_id, batch_uid, source_updated_at, card_count, state, reason)
+      VALUES (?, ?, ?, ?, ?, ?, 'bound', '')
+      ON CONFLICT(building) DO UPDATE SET
+        revision_uid = excluded.revision_uid,
+        run_id = excluded.run_id,
+        batch_uid = excluded.batch_uid,
+        source_updated_at = excluded.source_updated_at,
+        card_count = excluded.card_count,
+        state = excluded.state,
+        reason = excluded.reason
+    `);
+    for (const building of sourceBuildings) {
+      upsertSource.run(
+        building,
+        revisionUid,
+        runId,
+        batchUid,
+        now,
+        Number(db.prepare('SELECT COUNT(*) AS c FROM run_cards WHERE run_id = ? AND EXISTS (SELECT 1 FROM run_pages p JOIN run_sub_areas sa ON sa.id = p.run_sub_area_id WHERE p.id = run_cards.run_page_id AND p.run_id = run_cards.run_id AND sa.building = ?)').get(runId, building).c || 0));
+    }
     syncFloorCatalogFromCurrent(db);
     return runId;
   });

@@ -39,7 +39,7 @@ public sealed partial class AuditPage : Page
             : "将替换全部楼栋的当前数据。";
         var result = await ConfirmAsync(
             "恢复历史批次",
-            $"将把批次 #{run.Id} 恢复为当前数据，共 {run.CardCount:N0} 张卡片。\n\n" +
+            $"将把批次 #{run.RunNumber} 恢复为当前数据，共 {run.CardCount:N0} 张卡片。\n\n" +
             $"对比结果：历史 {comparison.SnapshotCardCount:N0} 张，当前 {comparison.CurrentCardCount:N0} 张，新增 {comparison.AddedCount:N0}，缺失 {comparison.MissingCount:N0}，字段差异 {comparison.ChangedCount:N0}。\n\n" +
             $"{scopeText}\n恢复前会自动备份当前数据；备注和标签不会被删除。",
             "恢复");
@@ -59,7 +59,7 @@ public sealed partial class AuditPage : Page
         var run = ViewModel.SelectedRun;
         var result = await ConfirmAsync(
             "删除历史批次",
-            $"将删除批次 #{run.Id} 的历史快照和证据记录。\n\n当前 SQLite 数据、设备备注和标签不会被删除。",
+            $"将删除批次 #{run.RunNumber} 的历史快照和证据记录。\n\n当前 SQLite 数据、设备备注和标签不会被删除。",
             "删除");
         if (result)
         {

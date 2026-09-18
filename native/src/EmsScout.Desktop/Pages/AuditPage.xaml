@@ -164,7 +164,7 @@
                                                 </Grid.ColumnDefinitions>
                                                 <StackPanel Spacing="2">
                                                     <TextBlock FontWeight="SemiBold" Text="{Binding CompletedAt}" />
-                                                    <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{Binding RunKey}" TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{Binding BatchLabel}" TextTrimming="CharacterEllipsis" />
                                                 </StackPanel>
                                                 <TextBlock Grid.Column="1" Text="{Binding ScopeLabel}" TextWrapping="WrapWholeWords" />
                                                 <TextBlock Grid.Column="2" Text="{Binding CountLabel}" />
@@ -189,7 +189,7 @@
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Spacing="2">
                                             <TextBlock FontWeight="SemiBold" Text="{x:Bind ViewModel.SelectedRunDetail.CurrentLabel, Mode=OneWay, FallbackValue=未选择批次}" />
-                                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.SelectedRunDetail.RunKey, Mode=OneWay, FallbackValue=请选择列表中的批次}" />
+                                            <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.SelectedRunDetail.BatchLabel, Mode=OneWay, FallbackValue=请选择列表中的批次}" />
                                         </StackPanel>
                                         <StackPanel Grid.Column="1" Spacing="2">
                                             <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="范围" />

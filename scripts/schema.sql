@@ -93,6 +93,7 @@ CREATE INDEX IF NOT EXISTS idx_monitor_group_items_target ON monitor_group_items
 
 CREATE TABLE IF NOT EXISTS collection_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_no INTEGER,
     run_key TEXT UNIQUE,
     started_at TEXT,
     completed_at TEXT NOT NULL,
@@ -113,10 +114,69 @@ CREATE TABLE IF NOT EXISTS collection_runs (
     source TEXT NOT NULL DEFAULT '采集导入',
     data_version TEXT NOT NULL DEFAULT 'v1.0.0',
     operator_name TEXT NOT NULL DEFAULT '本机',
-    restored_from_run_id INTEGER
+    restored_from_run_id INTEGER,
+    batch_uid TEXT NOT NULL DEFAULT '',
+    lifecycle_state TEXT NOT NULL DEFAULT 'completed',
+    current_revision_uid TEXT,
+    restored_from_batch_uid TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_collection_runs_completed
     ON collection_runs(completed_at DESC);
+
+CREATE TABLE IF NOT EXISTS run_id_registry (
+    technical_id INTEGER PRIMARY KEY,
+    allocated_at TEXT NOT NULL,
+    allocation_kind TEXT NOT NULL DEFAULT 'collection_run'
+);
+CREATE INDEX IF NOT EXISTS idx_run_id_registry_allocated
+    ON run_id_registry(allocated_at);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_collection_runs_run_no
+    ON collection_runs(run_no) WHERE run_no IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_collection_runs_batch_uid
+    ON collection_runs(batch_uid) WHERE batch_uid <> '';
+
+CREATE TABLE IF NOT EXISTS run_key_registry (
+    run_key TEXT PRIMARY KEY,
+    batch_uid TEXT NOT NULL DEFAULT '',
+    first_seen_at TEXT NOT NULL,
+    deleted_at TEXT,
+    last_run_id INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_run_key_registry_deleted ON run_key_registry(deleted_at);
+
+CREATE TABLE IF NOT EXISTS run_operations (
+    operation_id TEXT PRIMARY KEY,
+    operation_type TEXT NOT NULL,
+    run_id INTEGER,
+    batch_uid TEXT,
+    run_key TEXT,
+    occurred_at TEXT NOT NULL,
+    result TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    deleted_cards INTEGER NOT NULL DEFAULT 0,
+    deleted_pages INTEGER NOT NULL DEFAULT 0,
+    deleted_sub_areas INTEGER NOT NULL DEFAULT 0,
+    deleted_buildings INTEGER NOT NULL DEFAULT 0,
+    pending_artifacts INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS current_data_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    revision_uid TEXT NOT NULL UNIQUE,
+    updated_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT '本机 SQLite'
+);
+
+CREATE TABLE IF NOT EXISTS current_data_sources (
+    building TEXT PRIMARY KEY,
+    revision_uid TEXT NOT NULL,
+    run_id INTEGER,
+    batch_uid TEXT,
+    source_updated_at TEXT,
+    card_count INTEGER NOT NULL DEFAULT 0,
+    state TEXT NOT NULL DEFAULT 'bound',
+    reason TEXT NOT NULL DEFAULT ''
+);
 
 CREATE TABLE IF NOT EXISTS run_buildings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -190,6 +250,7 @@ CREATE INDEX IF NOT EXISTS idx_run_cards_switch ON run_cards(switch);
 CREATE TABLE IF NOT EXISTS run_realtime_details (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id INTEGER NOT NULL,
+    batch_uid TEXT,
     source_row_id TEXT NOT NULL,
     building TEXT NOT NULL,
     floor REAL,

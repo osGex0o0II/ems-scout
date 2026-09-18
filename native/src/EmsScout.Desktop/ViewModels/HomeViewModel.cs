@@ -271,7 +271,7 @@ public sealed partial class HomeViewModel(
     private async Task RefreshDataSourcesAsync(CancellationToken cancellationToken)
     {
         var selectedRunId = SelectedDataSource?.RunId;
-        var runs = await collectionRunRepository.ListAsync(500, cancellationToken).ConfigureAwait(true);
+        var runs = await collectionRunRepository.ListAsync(null, cancellationToken).ConfigureAwait(true);
         var catalog = CollectionDataSourceCatalog.Build(runs);
         DataSources.Clear();
         DataSources.Add(DataSourceOption.Current(catalog.CurrentRun));

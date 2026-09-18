@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { formatLocalTimestamp } = require('../src/time');
+const { readBatchIdentity, withBatchIdentity } = require('../src/run-identity');
 const { installRealtimeLog } = require('./realtime-logger');
 
 const ROOT = path.resolve(__dirname, '..');
@@ -389,11 +390,16 @@ function auditFile(file, output, byBuilding, seenDevIds) {
 
 function main() {
   const input = resolveInputs();
+  const envIdentity = readBatchIdentity();
+  const identity = {
+    runId: envIdentity.runId || (Number(input.summary?.runId) > 0 ? Number(input.summary.runId) : null),
+    batchUid: envIdentity.batchUid || input.summary?.batchUid || input.summary?.batch_uid || null,
+    runKey: envIdentity.runKey || input.summary?.runKey || input.summary?.run_key || null,
+  };
   const outputPath = resolveFile(argValue('output') || path.join(OUT_DIR, `realtime_quality_classified_${timestamp()}.json`));
   const byBuilding = {};
   const seenDevIds = new Map();
-  const output = {
-    runId: Number(input.summary?.runId) > 0 ? Number(input.summary.runId) : null,
+  const output = withBatchIdentity({
     createdAt: formatLocalTimestamp(),
     input: {
       mode: input.mode,
@@ -418,7 +424,7 @@ function main() {
       collectionOk: false,
       note: '设备异常只记录，不作为采集失败；采集失败仅包含缺字段、缺点位、默认模板、重复 devId 和脚本错误。',
     },
-  };
+  }, identity);
 
   for (const file of input.files) {
     if (!fs.existsSync(file)) throw new Error(`Result file not found: ${file}`);

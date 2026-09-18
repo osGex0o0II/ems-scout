@@ -11,7 +11,8 @@ public sealed class RealtimeDetailSet(
     IReadOnlyList<RealtimeDetailRecord> rows,
     RealtimeDetailAvailability availability = RealtimeDetailAvailability.Available,
     string? statusText = null,
-    long? sourceRunId = null)
+    long? sourceRunId = null,
+    string? sourceBatchUid = null)
 {
     private readonly Dictionary<string, int> _exactUsage = [];
 
@@ -20,6 +21,8 @@ public sealed class RealtimeDetailSet(
     public RealtimeDetailAvailability Availability { get; } = availability;
 
     public long? SourceRunId { get; } = sourceRunId;
+
+    public string? SourceBatchUid { get; } = sourceBatchUid;
 
     public string StatusText { get; } = statusText ?? (availability switch
     {

@@ -5,10 +5,14 @@ using Microsoft.Data.Sqlite;
 
 namespace EmsScout.Infrastructure.Sqlite;
 
-public sealed class SqliteCollectionRunRepository(Func<string> databasePathResolver) : ICollectionRunRepository
+public sealed class SqliteCollectionRunRepository(
+    Func<string> databasePathResolver,
+    ICollectionRunActivity? activity = null) : ICollectionRunRepository
 {
+    private CollectionRunArtifactCleaner ArtifactCleaner { get; } = new(databasePathResolver);
+
     public async Task<IReadOnlyList<CollectionRunRecord>> ListAsync(
-        int limit = 50,
+        int? limit = 50,
         CancellationToken cancellationToken = default)
     {
         EnsureDatabaseExists();
@@ -22,15 +26,19 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             ? "(SELECT COUNT(*) FROM run_cards snapshot WHERE snapshot.run_id = collection_runs.id)"
             : "0";
 
+        var limitClause = limit.HasValue ? "LIMIT $limit" : string.Empty;
         await using var command = connection.CreateCommand();
         command.CommandText = $"""
             SELECT collection_runs.*,
                    {snapshotCardCount} AS snapshot_card_count
             FROM collection_runs
             ORDER BY datetime(COALESCE(imported_at, completed_at)) DESC, id DESC
-            LIMIT $limit
+            {limitClause}
             """;
-        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 1, 500));
+        if (limit.HasValue)
+        {
+            command.Parameters.AddWithValue("$limit", Math.Clamp(limit.Value, 1, 500));
+        }
 
         var rows = new List<CollectionRunRecord>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -64,8 +72,17 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
                   ?? throw new InvalidOperationException($"Run not found: {runId}");
 
         var snapshotByBuilding = await LoadBuildingCardCountsAsync(connection, runId, snapshot: true, cancellationToken).ConfigureAwait(false);
-        var currentByBuilding = await LoadBuildingCardCountsAsync(connection, runId, snapshot: false, cancellationToken).ConfigureAwait(false);
-        var changedCount = await CountChangedCardsAsync(connection, runId, cancellationToken).ConfigureAwait(false);
+        var currentByBuilding = await LoadBuildingCardCountsAsync(
+            connection,
+            runId,
+            snapshot: false,
+            cancellationToken,
+            scopeBuildings: run.Buildings).ConfigureAwait(false);
+        var changedCount = await CountChangedCardsAsync(
+            connection,
+            runId,
+            run.Buildings,
+            cancellationToken).ConfigureAwait(false);
         var blockingReason = await GetRestoreBlockingReasonAsync(connection, run, cancellationToken).ConfigureAwait(false);
 
         return CollectionRunComparison.Create(
@@ -75,6 +92,51 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             changedCount,
             isRestorable: blockingReason is null,
             blockingReason);
+    }
+
+    public async Task<RunDeleteImpact> GetDeleteImpactAsync(
+        long runId,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureDatabaseExists();
+        await using var connection = OpenConnection(readOnly: true);
+        var run = await LoadRunAsync(connection, runId, cancellationToken).ConfigureAwait(false)
+                  ?? throw new InvalidOperationException($"Run not found: {runId}");
+        var currentRunIds = await LoadCurrentRunIdsAsync(connection, null, cancellationToken).ConfigureAwait(false);
+        var blockers = await GetDeleteBlockingReasonsAsync(
+            connection,
+            null,
+            run,
+            currentRunIds,
+            cancellationToken).ConfigureAwait(false);
+        var realtimeRows = await CountAsync(connection, null,
+            "SELECT COUNT(*) FROM run_realtime_details WHERE run_id = $run_id",
+            runId,
+            cancellationToken).ConfigureAwait(false);
+        var pages = await CountAsync(connection, null,
+            "SELECT COUNT(*) FROM run_pages WHERE run_id = $run_id",
+            runId,
+            cancellationToken).ConfigureAwait(false);
+        var subAreas = await CountAsync(connection, null,
+            "SELECT COUNT(*) FROM run_sub_areas WHERE run_id = $run_id",
+            runId,
+            cancellationToken).ConfigureAwait(false);
+        var buildings = await CountAsync(connection, null,
+            "SELECT COUNT(*) FROM run_buildings WHERE run_id = $run_id",
+            runId,
+            cancellationToken).ConfigureAwait(false);
+        var artifacts = ArtifactCleaner.FindCandidates(run);
+        return new RunDeleteImpact(
+            run.Id,
+            run.RunKey,
+            currentRunIds.Contains(run.Id),
+            run.SnapshotCardCount,
+            realtimeRows,
+            pages,
+            subAreas,
+            buildings,
+            artifacts,
+            blockers);
     }
 
     public async Task<CollectionRunRecord> SetAnomalyAsync(
@@ -108,9 +170,15 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         CancellationToken cancellationToken = default)
     {
         EnsureDatabaseExists();
+        if (activity?.IsActive == true)
+        {
+            throw new InvalidOperationException("采集任务正在运行，暂时不能恢复历史批次。");
+        }
+
         await using var connection = OpenConnection(readOnly: false);
         await EnsureCollectionRunMetadataColumnsAsync(connection, cancellationToken).ConfigureAwait(false);
         await EnsureQualityReasonColumnsAsync(connection, cancellationToken).ConfigureAwait(false);
+        await EnsureGovernanceTablesAsync(connection, cancellationToken).ConfigureAwait(false);
         var run = await LoadRunAsync(connection, runId, cancellationToken).ConfigureAwait(false)
                   ?? throw new InvalidOperationException($"Run not found: {runId}");
         if (run.IsAnomaly)
@@ -149,6 +217,11 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             throw new InvalidOperationException("部分批次没有楼栋范围，无法安全恢复。");
         }
 
+        if (activity?.IsActive == true)
+        {
+            throw new InvalidOperationException("采集任务正在运行，暂时不能恢复历史批次。");
+        }
+
         await using var transaction = connection.BeginTransaction(deferred: false);
         var backupRunId = await CreatePreRestoreBackupAsync(connection, transaction, run, cancellationToken).ConfigureAwait(false);
         if (isPartial)
@@ -167,6 +240,14 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         var subAreaMap = await RestoreSubAreasAsync(connection, transaction, runId, cancellationToken).ConfigureAwait(false);
         var pageMap = await RestorePagesAsync(connection, transaction, runId, subAreaMap, cancellationToken).ConfigureAwait(false);
         var restoredCards = await RestoreCardsAsync(connection, transaction, runId, pageMap, cancellationToken).ConfigureAwait(false);
+        var revisionUid = Guid.NewGuid().ToString("N");
+        await UpdateCurrentDataSourcesAsync(
+            connection,
+            transaction,
+            run,
+            revisionUid,
+            isPartial,
+            cancellationToken).ConfigureAwait(false);
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return new CollectionRunRestoreResult(
@@ -183,35 +264,136 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         long runId,
         CancellationToken cancellationToken = default)
     {
+        var results = await DeleteManyAsync([runId], cancellationToken).ConfigureAwait(false);
+        return results.Single();
+    }
+
+    public async Task<IReadOnlyList<CollectionRunDeleteResult>> DeleteManyAsync(
+        IReadOnlyList<long> runIds,
+        CancellationToken cancellationToken = default)
+    {
         EnsureDatabaseExists();
+        var requestedIds = runIds.Distinct().ToArray();
+        if (requestedIds.Length == 0 || requestedIds.Any(id => id <= 0))
+        {
+            throw new InvalidOperationException("没有有效的历史批次可删除。");
+        }
+
+        if (activity?.IsActive == true)
+        {
+            throw new InvalidOperationException("采集任务正在运行，暂时不能删除历史批次。");
+        }
+
         await using var connection = OpenConnection(readOnly: false);
         await EnsureCollectionRunMetadataColumnsAsync(connection, cancellationToken).ConfigureAwait(false);
-        var run = await LoadRunAsync(connection, runId, cancellationToken).ConfigureAwait(false)
-                  ?? throw new InvalidOperationException($"Run not found: {runId}");
-
+        await EnsureGovernanceTablesAsync(connection, cancellationToken).ConfigureAwait(false);
         await using var transaction = (SqliteTransaction)await connection
             .BeginTransactionAsync(cancellationToken)
             .ConfigureAwait(false);
-        if (await TableExistsAsync(connection, "run_realtime_details", cancellationToken).ConfigureAwait(false))
-        {
-            await ExecuteCountAsync(connection, transaction, "DELETE FROM run_realtime_details WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
-        }
-        var deletedCards = await ExecuteCountAsync(connection, transaction, "DELETE FROM run_cards WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
-        var deletedPages = await ExecuteCountAsync(connection, transaction, "DELETE FROM run_pages WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
-        var deletedSubAreas = await ExecuteCountAsync(connection, transaction, "DELETE FROM run_sub_areas WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
-        var deletedBuildings = await ExecuteCountAsync(connection, transaction, "DELETE FROM run_buildings WHERE run_id = $run_id", runId, cancellationToken).ConfigureAwait(false);
-        await ExecuteCountAsync(connection, transaction, "DELETE FROM collection_runs WHERE id = $run_id", runId, cancellationToken).ConfigureAwait(false);
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        DeleteAssociatedArtifacts(run);
 
-        return new CollectionRunDeleteResult(
-            run.Id,
-            run.RunKey,
-            run.CompletedAt,
-            deletedCards,
-            deletedPages,
-            deletedSubAreas,
-            deletedBuildings);
+        var currentRunIds = await LoadCurrentRunIdsAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        var runs = new List<CollectionRunRecord>();
+        foreach (var id in requestedIds)
+        {
+            var run = await LoadRunAsync(connection, id, cancellationToken, transaction).ConfigureAwait(false)
+                      ?? throw new InvalidOperationException($"Run not found: {id}");
+            runs.Add(run);
+        }
+
+        var blocking = new List<string>();
+        foreach (var run in runs)
+        {
+            var reasons = await GetDeleteBlockingReasonsAsync(
+                connection,
+                transaction,
+                run,
+                currentRunIds,
+                cancellationToken).ConfigureAwait(false);
+            blocking.AddRange(reasons.Select(reason => $"批次 #{run.Id}：{reason}"));
+        }
+
+        if (blocking.Count > 0)
+        {
+            throw new InvalidOperationException(string.Join("；", blocking));
+        }
+
+        var artifactCandidates = runs.ToDictionary(
+            run => run.Id,
+            run => ArtifactCleaner.FindCandidates(run));
+        var results = new List<CollectionRunDeleteResult>(runs.Count);
+        foreach (var run in runs)
+        {
+            var deletedRealtime = await TableExistsAsync(connection, "run_realtime_details", cancellationToken, transaction).ConfigureAwait(false)
+                ? await ExecuteCountAsync(connection, transaction, "DELETE FROM run_realtime_details WHERE run_id = $run_id", run.Id, cancellationToken).ConfigureAwait(false)
+                : 0;
+            var deletedCards = await ExecuteCountAsync(connection, transaction, "DELETE FROM run_cards WHERE run_id = $run_id", run.Id, cancellationToken).ConfigureAwait(false);
+            var deletedPages = await ExecuteCountAsync(connection, transaction, "DELETE FROM run_pages WHERE run_id = $run_id", run.Id, cancellationToken).ConfigureAwait(false);
+            var deletedSubAreas = await ExecuteCountAsync(connection, transaction, "DELETE FROM run_sub_areas WHERE run_id = $run_id", run.Id, cancellationToken).ConfigureAwait(false);
+            var deletedBuildings = await ExecuteCountAsync(connection, transaction, "DELETE FROM run_buildings WHERE run_id = $run_id", run.Id, cancellationToken).ConfigureAwait(false);
+            await ExecuteCountAsync(connection, transaction, "DELETE FROM collection_runs WHERE id = $run_id", run.Id, cancellationToken).ConfigureAwait(false);
+            await ExecuteAsync(connection, transaction, "UPDATE run_key_registry SET deleted_at = $deleted_at, last_run_id = $run_id WHERE run_key = $run_key AND deleted_at IS NULL", cancellationToken,
+                ("$deleted_at", StoredTimestamp.FormatLocal(DateTimeOffset.Now)),
+                ("$run_id", run.Id),
+                ("$run_key", run.RunKey));
+
+            var operationId = Guid.NewGuid();
+            await InsertOperationAsync(connection, transaction, new RunOperationRecord(
+                operationId,
+                "delete",
+                run.Id,
+                run.RunKey,
+                run.BatchUid,
+                StoredTimestamp.FormatLocal(DateTimeOffset.Now),
+                "database_deleted",
+                $"删除历史快照 {run.RunKey}",
+                deletedCards,
+                deletedPages,
+                deletedSubAreas,
+                deletedBuildings,
+                artifactCandidates[run.Id].Count(item => !item.IsShared)), cancellationToken).ConfigureAwait(false);
+            results.Add(new CollectionRunDeleteResult(
+                run.Id,
+                run.RunKey,
+                run.CompletedAt,
+                deletedCards,
+                deletedPages,
+                deletedSubAreas,
+                deletedBuildings,
+                operationId,
+                new ArtifactCleanupResult(0, [], [])));
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var run in runs)
+        {
+            var resultIndex = results.FindIndex(item => item.RunId == run.Id && item.RunKey == run.RunKey);
+            var operationResult = results[resultIndex];
+            ArtifactCleanupResult cleanup;
+            try
+            {
+                cleanup = ArtifactCleaner.Cleanup(run, artifactCandidates[run.Id]);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
+            {
+                var pending = artifactCandidates[run.Id]
+                    .Where(item => !item.IsShared)
+                    .Select(item => item.RelativePath)
+                    .ToArray();
+                cleanup = new ArtifactCleanupResult(
+                    0,
+                    pending,
+                    pending.Select(_ => "清理阶段发生异常：" + exception.GetType().Name).ToArray());
+            }
+            results[resultIndex] = operationResult with { ArtifactCleanup = cleanup };
+            await UpdateOperationCleanupAsync(
+                connection,
+                operationResult.OperationId,
+                cleanup.IsComplete ? "completed" : "database_deleted_artifacts_pending",
+                cleanup.PendingPaths.Count,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        return results;
     }
 
     private SqliteConnection OpenConnection(bool readOnly)
@@ -234,16 +416,296 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         }
     }
 
-    private static async Task<CollectionRunRecord?> LoadRunAsync(
+    private static async Task<HashSet<long>> LoadCurrentRunIdsAsync(
         SqliteConnection connection,
+        SqliteTransaction? transaction,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, "current_data_sources", cancellationToken, transaction).ConfigureAwait(false))
+        {
+            return [];
+        }
+
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT DISTINCT run_id FROM current_data_sources WHERE run_id IS NOT NULL AND COALESCE(state, 'bound') = 'bound'";
+        var result = new HashSet<long>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            result.Add(reader.GetInt64(0));
+        }
+
+        return result;
+    }
+
+    private async Task<IReadOnlyList<string>> GetDeleteBlockingReasonsAsync(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        CollectionRunRecord run,
+        IReadOnlySet<long> currentRunIds,
+        CancellationToken cancellationToken)
+    {
+        var reasons = new List<string>();
+        if (currentRunIds.Contains(run.Id))
+        {
+            reasons.Add("当前数据正在使用该批次");
+        }
+
+        if (await TableExistsAsync(connection, "current_data_sources", cancellationToken, transaction).ConfigureAwait(false))
+        {
+            var declaredBuildings = run.Buildings.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            await using var sourceCommand = connection.CreateCommand();
+            sourceCommand.Transaction = transaction;
+            sourceCommand.CommandText = "SELECT building, state, run_id, batch_uid, reason FROM current_data_sources";
+            await using var sourceReader = await sourceCommand.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            var sourceRows = new List<(string Building, string State, long? RunId, string BatchUid, string Reason)>();
+            while (await sourceReader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                sourceRows.Add((
+                    sourceReader.GetString(0),
+                    sourceReader.IsDBNull(1) ? CurrentDataSourceStates.Bound : sourceReader.GetString(1),
+                    sourceReader.IsDBNull(2) ? null : sourceReader.GetInt64(2),
+                    sourceReader.IsDBNull(3) ? string.Empty : sourceReader.GetString(3),
+                    sourceReader.IsDBNull(4) ? string.Empty : sourceReader.GetString(4)));
+            }
+
+            var overlapping = sourceRows.Where(row => declaredBuildings.Contains(row.Building)).ToArray();
+            if (overlapping.Any(row => row.RunId == run.Id ||
+                                       !string.IsNullOrWhiteSpace(row.BatchUid) &&
+                                       string.Equals(row.BatchUid, run.BatchUid, StringComparison.Ordinal)))
+            {
+                reasons.Add("当前数据正在使用该批次");
+            }
+
+            var unresolved = overlapping.Where(row =>
+                !string.Equals(row.State, CurrentDataSourceStates.Bound, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (unresolved.Length > 0)
+            {
+                var detail = unresolved.Select(row => string.IsNullOrWhiteSpace(row.Reason) ? row.Building : $"{row.Building}：{row.Reason}");
+                reasons.Add("当前数据来源未确定，不能安全删除重叠楼栋的历史批次（" + string.Join("、", detail) + "）");
+            }
+
+            if (overlapping.Length == 0 && run.Scope.Equals("full", StringComparison.OrdinalIgnoreCase) && sourceRows.Count == 0)
+            {
+                reasons.Add("当前数据来源记录为空，不能安全删除全量历史批次");
+            }
+        }
+        else
+        {
+            reasons.Add("当前数据来源尚未建立，不能安全删除历史批次");
+        }
+
+        if (await TableExistsAsync(connection, "collection_runs", cancellationToken, transaction).ConfigureAwait(false))
+        {
+            await using var dependency = connection.CreateCommand();
+            dependency.Transaction = transaction;
+            var hasRestoredRunId = await ColumnExistsAsync(
+                connection,
+                "collection_runs",
+                "restored_from_run_id",
+                cancellationToken,
+                transaction).ConfigureAwait(false);
+            var hasRestoredBatchUid = await ColumnExistsAsync(
+                connection,
+                "collection_runs",
+                "restored_from_batch_uid",
+                cancellationToken,
+                transaction).ConfigureAwait(false);
+            dependency.CommandText = hasRestoredBatchUid && hasRestoredRunId
+                ? "SELECT COUNT(*) FROM collection_runs WHERE id <> $id AND (restored_from_run_id = $id OR restored_from_batch_uid = $batch_uid)"
+                : hasRestoredRunId
+                    ? "SELECT COUNT(*) FROM collection_runs WHERE id <> $id AND restored_from_run_id = $id"
+                    : hasRestoredBatchUid
+                        ? "SELECT COUNT(*) FROM collection_runs WHERE id <> $id AND restored_from_batch_uid = $batch_uid"
+                        : null;
+            dependency.Parameters.AddWithValue("$id", run.Id);
+            if (hasRestoredBatchUid)
+            {
+                dependency.Parameters.AddWithValue("$batch_uid", run.BatchUid);
+            }
+
+            if (dependency.CommandText is not null)
+            {
+                var count = Convert.ToInt64(await dependency.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
+                if (count > 0)
+                {
+                    reasons.Add($"仍有 {count} 个恢复/备份记录依赖该批次");
+                }
+            }
+        }
+
+        if (activity?.IsActive == true)
+        {
+            reasons.Add("采集任务正在运行，暂时不能删除历史批次");
+        }
+
+        return reasons.Distinct(StringComparer.Ordinal).ToArray();
+    }
+
+    private static async Task<int> CountAsync(
+        SqliteConnection connection,
+        SqliteTransaction? transaction,
+        string sql,
         long runId,
         CancellationToken cancellationToken)
     {
-        var snapshotCardCount = await TableExistsAsync(connection, "run_cards", cancellationToken).ConfigureAwait(false)
+        try
+        {
+            await using var command = connection.CreateCommand();
+            command.Transaction = transaction;
+            command.CommandText = sql;
+            command.Parameters.AddWithValue("$run_id", runId);
+            return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
+        }
+        catch (SqliteException)
+        {
+            return 0;
+        }
+    }
+
+    private static async Task EnsureGovernanceTablesAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE IF NOT EXISTS run_key_registry (
+                run_key TEXT PRIMARY KEY,
+                batch_uid TEXT NOT NULL DEFAULT '',
+                first_seen_at TEXT NOT NULL,
+                deleted_at TEXT,
+                last_run_id INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS run_id_registry (
+                technical_id INTEGER PRIMARY KEY,
+                allocated_at TEXT NOT NULL,
+                allocation_kind TEXT NOT NULL DEFAULT 'collection_run'
+            );
+            CREATE INDEX IF NOT EXISTS idx_run_id_registry_allocated ON run_id_registry(allocated_at);
+            CREATE INDEX IF NOT EXISTS idx_run_key_registry_deleted ON run_key_registry(deleted_at);
+            CREATE UNIQUE INDEX IF NOT EXISTS ux_collection_runs_batch_uid
+                ON collection_runs(batch_uid) WHERE batch_uid <> '';
+            CREATE TABLE IF NOT EXISTS run_operations (
+                operation_id TEXT PRIMARY KEY,
+                operation_type TEXT NOT NULL,
+                run_id INTEGER,
+                batch_uid TEXT,
+                run_key TEXT,
+                occurred_at TEXT NOT NULL,
+                result TEXT NOT NULL,
+                summary TEXT NOT NULL DEFAULT '',
+                deleted_cards INTEGER NOT NULL DEFAULT 0,
+                deleted_pages INTEGER NOT NULL DEFAULT 0,
+                deleted_sub_areas INTEGER NOT NULL DEFAULT 0,
+                deleted_buildings INTEGER NOT NULL DEFAULT 0,
+                pending_artifacts INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS current_data_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                revision_uid TEXT NOT NULL UNIQUE,
+                updated_at TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT '本机 SQLite'
+            );
+            CREATE TABLE IF NOT EXISTS current_data_sources (
+                building TEXT PRIMARY KEY,
+                revision_uid TEXT NOT NULL,
+                run_id INTEGER,
+                batch_uid TEXT,
+                source_updated_at TEXT,
+                card_count INTEGER NOT NULL DEFAULT 0,
+                state TEXT NOT NULL DEFAULT 'bound',
+                reason TEXT NOT NULL DEFAULT ''
+            );
+            """;
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        await using (var registerIds = connection.CreateCommand())
+        {
+            registerIds.CommandText = "INSERT OR IGNORE INTO run_id_registry (technical_id, allocated_at, allocation_kind) SELECT id, COALESCE(imported_at, completed_at, $now), 'collection_run' FROM collection_runs";
+            registerIds.Parameters.AddWithValue("$now", StoredTimestamp.FormatLocal(DateTimeOffset.Now));
+            await registerIds.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        try
+        {
+            await using var sequence = connection.CreateCommand();
+            sequence.CommandText = "SELECT seq FROM sqlite_sequence WHERE name = 'collection_runs' LIMIT 1";
+            var value = await sequence.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            if (value is not null && value is not DBNull && Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture) > 0)
+            {
+                await using var registerSequence = connection.CreateCommand();
+                registerSequence.CommandText = "INSERT OR IGNORE INTO run_id_registry (technical_id, allocated_at, allocation_kind) VALUES ($id, $allocated_at, 'sqlite_sequence_high_watermark')";
+                registerSequence.Parameters.AddWithValue("$id", Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture));
+                registerSequence.Parameters.AddWithValue("$allocated_at", StoredTimestamp.FormatLocal(DateTimeOffset.Now));
+                await registerSequence.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (SqliteException)
+        {
+            // Databases without AUTOINCREMENT do not expose sqlite_sequence.
+        }
+        await AddColumnIfMissingAsync(connection, "current_data_sources", "state", "TEXT NOT NULL DEFAULT 'bound'", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(connection, "current_data_sources", "reason", "TEXT NOT NULL DEFAULT ''", cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task InsertOperationAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        RunOperationRecord operation,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            INSERT INTO run_operations
+                (operation_id, operation_type, run_id, batch_uid, run_key, occurred_at, result, summary,
+                 deleted_cards, deleted_pages, deleted_sub_areas, deleted_buildings, pending_artifacts)
+            VALUES
+                ($operation_id, $operation_type, $run_id, $batch_uid, $run_key, $occurred_at, $result, $summary,
+                 $deleted_cards, $deleted_pages, $deleted_sub_areas, $deleted_buildings, $pending_artifacts)
+            """;
+        command.Parameters.AddWithValue("$operation_id", operation.OperationId.ToString());
+        command.Parameters.AddWithValue("$operation_type", operation.OperationType);
+        command.Parameters.AddWithValue("$run_id", operation.RunId);
+        command.Parameters.AddWithValue("$batch_uid", operation.BatchUid);
+        command.Parameters.AddWithValue("$run_key", operation.RunKey);
+        command.Parameters.AddWithValue("$occurred_at", operation.OccurredAt);
+        command.Parameters.AddWithValue("$result", operation.Result);
+        command.Parameters.AddWithValue("$summary", operation.Summary);
+        command.Parameters.AddWithValue("$deleted_cards", operation.DeletedCards);
+        command.Parameters.AddWithValue("$deleted_pages", operation.DeletedPages);
+        command.Parameters.AddWithValue("$deleted_sub_areas", operation.DeletedSubAreas);
+        command.Parameters.AddWithValue("$deleted_buildings", operation.DeletedBuildings);
+        command.Parameters.AddWithValue("$pending_artifacts", operation.PendingArtifacts);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task UpdateOperationCleanupAsync(
+        SqliteConnection connection,
+        Guid operationId,
+        string result,
+        int pendingArtifacts,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE run_operations SET result = $result, pending_artifacts = $pending WHERE operation_id = $operation_id";
+        command.Parameters.AddWithValue("$result", result);
+        command.Parameters.AddWithValue("$pending", pendingArtifacts);
+        command.Parameters.AddWithValue("$operation_id", operationId.ToString());
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<CollectionRunRecord?> LoadRunAsync(
+        SqliteConnection connection,
+        long runId,
+        CancellationToken cancellationToken,
+        SqliteTransaction? transaction = null)
+    {
+        var snapshotCardCount = await TableExistsAsync(connection, "run_cards", cancellationToken, transaction).ConfigureAwait(false)
             ? "(SELECT COUNT(*) FROM run_cards snapshot WHERE snapshot.run_id = collection_runs.id)"
             : "0";
 
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = $"""
             SELECT collection_runs.*,
                    {snapshotCardCount} AS snapshot_card_count
@@ -266,9 +728,10 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             {
                 BuildingCardCounts = await LoadBuildingCardCountsAsync(
                     connection,
-                    run.Id,
-                    snapshot: true,
-                    cancellationToken).ConfigureAwait(false),
+                run.Id,
+                snapshot: true,
+                    cancellationToken,
+                    transaction).ConfigureAwait(false),
             };
     }
 
@@ -276,6 +739,7 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
     {
         return new CollectionRunRecord(
             Id: reader.GetInt64(reader.GetOrdinal("id")),
+            RunNumber: ReadNullableInt64(reader, "run_no") ?? reader.GetInt64(reader.GetOrdinal("id")),
             RunKey: ReadString(reader, "run_key"),
             StartedAt: ReadString(reader, "started_at"),
             CompletedAt: ReadString(reader, "completed_at"),
@@ -297,16 +761,26 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             Source: ReadString(reader, "source", "采集导入"),
             DataVersion: ReadString(reader, "data_version", "v1.0.0"),
             Operator: ReadString(reader, "operator_name", "本机"),
-            RestoredFromRunId: ReadNullableInt64(reader, "restored_from_run_id"));
+            RestoredFromRunId: ReadNullableInt64(reader, "restored_from_run_id"),
+            BatchUid: ReadString(reader, "batch_uid"),
+            LifecycleState: ReadString(reader, "lifecycle_state", "completed"),
+            CurrentRevisionUid: ReadNullableString(reader, "current_revision_uid"),
+            RestoredFromBatchUid: ReadNullableString(reader, "restored_from_batch_uid"));
     }
 
     private static async Task<Dictionary<string, int>> LoadBuildingCardCountsAsync(
         SqliteConnection connection,
         long runId,
         bool snapshot,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        SqliteTransaction? transaction = null,
+        IReadOnlyList<string>? scopeBuildings = null)
     {
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        var scope = !snapshot && scopeBuildings is { Count: > 0 }
+            ? $"WHERE sa.building IN ({string.Join(", ", scopeBuildings.Select((_, index) => "$scope_building_" + index))})"
+            : string.Empty;
         command.CommandText = snapshot
             ? """
               SELECT sa.building, COUNT(*)
@@ -321,9 +795,17 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
               FROM cards c
               JOIN pages p ON p.id = c.page_id
               JOIN sub_areas sa ON sa.id = p.sub_area_id
+              """ + Environment.NewLine + scope + """
               GROUP BY sa.building
               """;
         command.Parameters.AddWithValue("$run_id", runId);
+        if (!snapshot && scopeBuildings is { Count: > 0 })
+        {
+            for (var index = 0; index < scopeBuildings.Count; index++)
+            {
+                command.Parameters.AddWithValue("$scope_building_" + index, scopeBuildings[index]);
+            }
+        }
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         var result = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -337,10 +819,16 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
     private static async Task<int> CountChangedCardsAsync(
         SqliteConnection connection,
         long runId,
+        IReadOnlyList<string> scopeBuildings,
         CancellationToken cancellationToken)
     {
         var snapshot = await LoadCardSignaturesAsync(connection, runId, snapshot: true, cancellationToken).ConfigureAwait(false);
-        var current = await LoadCardSignaturesAsync(connection, runId, snapshot: false, cancellationToken).ConfigureAwait(false);
+        var current = await LoadCardSignaturesAsync(
+            connection,
+            runId,
+            snapshot: false,
+            cancellationToken,
+            scopeBuildings).ConfigureAwait(false);
         var changed = 0;
         foreach (var key in snapshot.Keys.Intersect(current.Keys, StringComparer.OrdinalIgnoreCase))
         {
@@ -359,9 +847,13 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         SqliteConnection connection,
         long runId,
         bool snapshot,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyList<string>? scopeBuildings = null)
     {
         await using var command = connection.CreateCommand();
+        var scope = !snapshot && scopeBuildings is { Count: > 0 }
+            ? $"WHERE sa.building IN ({string.Join(", ", scopeBuildings.Select((_, index) => "$scope_building_" + index))})"
+            : string.Empty;
         command.CommandText = snapshot
             ? """
               SELECT sa.building, sa.text, p.page_name, c.name, c.id,
@@ -378,9 +870,17 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
               FROM cards c
               JOIN pages p ON p.id = c.page_id
               JOIN sub_areas sa ON sa.id = p.sub_area_id
+              """ + Environment.NewLine + scope + """
               ORDER BY c.id
               """;
         command.Parameters.AddWithValue("$run_id", runId);
+        if (!snapshot && scopeBuildings is { Count: > 0 })
+        {
+            for (var index = 0; index < scopeBuildings.Count; index++)
+            {
+                command.Parameters.AddWithValue("$scope_building_" + index, scopeBuildings[index]);
+            }
+        }
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         var rows = new List<(string BaseKey, string Signature)>();
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -537,6 +1037,7 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
 
         var now = StoredTimestamp.FormatLocal(DateTimeOffset.Now);
         var runKey = $"pre_restore_{DateTimeOffset.Now:yyyyMMdd_HHmmss_fff}_{Guid.NewGuid():N}";
+        var batchUid = Guid.NewGuid().ToString("N");
         var buildings = new List<string>();
         await using (var buildingsCommand = connection.CreateCommand())
         {
@@ -554,31 +1055,44 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             connection,
             transaction,
             cancellationToken).ConfigureAwait(false);
+        var allocatedRunNumber = await AllocateRunNumberAsync(
+            connection,
+            transaction,
+            cancellationToken).ConfigureAwait(false);
+        await RegisterTechnicalRunIdAsync(
+            connection,
+            transaction,
+            allocatedRunId,
+            now,
+            cancellationToken).ConfigureAwait(false);
         await using (var insertRun = connection.CreateCommand())
         {
             insertRun.Transaction = transaction;
             insertRun.CommandText = """
                 INSERT INTO collection_runs
-                    (id, run_key, started_at, completed_at, imported_at, status, scope, buildings,
+                    (id, run_no, run_key, batch_uid, started_at, completed_at, imported_at, status, scope, buildings,
                      card_count, on_count, off_count, offline_count, unknown_count, note,
-                     source, data_version, operator_name, restored_from_run_id)
-                SELECT $run_id, $run_key, $now, $now, $now, 'backup', 'full', $buildings,
+                     source, data_version, operator_name, restored_from_run_id, restored_from_batch_uid, lifecycle_state)
+                SELECT $run_id, $run_no, $run_key, $batch_uid, $now, $now, $now, 'backup', 'full', $buildings,
                        COUNT(*),
                        SUM(comm = '开机' OR switch = 'ON'),
                        SUM(comm = '关机' OR switch = 'OFF'),
                        SUM(comm = '离线'),
                        SUM(COALESCE(comm, '') NOT IN ('开机', '关机', '离线') AND COALESCE(switch, '') NOT IN ('ON', 'OFF')),
-                       $note, '手动恢复', $data_version, '本机', $restored_from_run_id
+                       $note, '手动恢复', $data_version, '本机', $restored_from_run_id, $restored_from_batch_uid, 'completed'
                 FROM cards
                 RETURNING id;
                 """;
             insertRun.Parameters.AddWithValue("$run_id", allocatedRunId);
+            insertRun.Parameters.AddWithValue("$run_no", allocatedRunNumber);
             insertRun.Parameters.AddWithValue("$run_key", runKey);
+            insertRun.Parameters.AddWithValue("$batch_uid", batchUid);
             insertRun.Parameters.AddWithValue("$now", now);
             insertRun.Parameters.AddWithValue("$buildings", JsonSerializer.Serialize(buildings));
             insertRun.Parameters.AddWithValue("$note", $"恢复批次 #{targetRun.Id} 前自动备份");
             insertRun.Parameters.AddWithValue("$data_version", targetRun.DataVersion);
             insertRun.Parameters.AddWithValue("$restored_from_run_id", targetRun.Id);
+            insertRun.Parameters.AddWithValue("$restored_from_batch_uid", targetRun.BatchUid);
             backupRunId = Convert.ToInt64(
                 await insertRun.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false),
                 System.Globalization.CultureInfo.InvariantCulture);
@@ -588,6 +1102,20 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         {
             throw new InvalidOperationException(
                 $"Allocated collection run id {allocatedRunId}, but SQLite inserted {backupRunId}.");
+        }
+
+        await using (var register = connection.CreateCommand())
+        {
+            register.Transaction = transaction;
+            register.CommandText = """
+                INSERT INTO run_key_registry (run_key, batch_uid, first_seen_at, last_run_id)
+                VALUES ($run_key, $batch_uid, $first_seen_at, $last_run_id)
+                """;
+            register.Parameters.AddWithValue("$run_key", runKey);
+            register.Parameters.AddWithValue("$batch_uid", batchUid);
+            register.Parameters.AddWithValue("$first_seen_at", now);
+            register.Parameters.AddWithValue("$last_run_id", backupRunId);
+            await register.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
         }
 
         await ExecuteSnapshotCopyAsync(
@@ -648,20 +1176,54 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
+            SELECT MAX(value) + 1
+            FROM (
+                SELECT COALESCE(MAX(id), 0) AS value FROM collection_runs
+                UNION ALL
+                SELECT COALESCE(MAX(technical_id), 0) AS value FROM run_id_registry
+            );
+            """;
+        var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static async Task RegisterTechnicalRunIdAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long runId,
+        string allocatedAt,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "INSERT INTO run_id_registry (technical_id, allocated_at, allocation_kind) VALUES ($id, $allocated_at, 'collection_run')";
+        command.Parameters.AddWithValue("$id", runId);
+        command.Parameters.AddWithValue("$allocated_at", allocatedAt);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<long> AllocateRunNumberAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
             SELECT COALESCE(
                 (
                     SELECT MIN(candidate)
                     FROM (
                         SELECT 1 AS candidate
                         UNION ALL
-                        SELECT id + 1
+                        SELECT run_no + 1
                         FROM collection_runs
-                        WHERE id > 0
+                        WHERE run_no IS NOT NULL AND run_no > 0
                     ) candidates
                     WHERE NOT EXISTS (
                         SELECT 1
                         FROM collection_runs existing
-                        WHERE existing.id = candidates.candidate
+                        WHERE existing.run_no = candidates.candidate
                     )
                 ),
                 1
@@ -669,6 +1231,99 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             """;
         var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static async Task UpdateCurrentDataSourcesAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CollectionRunRecord run,
+        string revisionUid,
+        bool isPartial,
+        CancellationToken cancellationToken)
+    {
+        var now = StoredTimestamp.FormatLocal(DateTimeOffset.Now);
+        await using (var state = connection.CreateCommand())
+        {
+            state.Transaction = transaction;
+            state.CommandText = """
+                INSERT INTO current_data_state (id, revision_uid, updated_at, source)
+                VALUES (1, $revision_uid, $updated_at, '本机 SQLite')
+                ON CONFLICT(id) DO UPDATE SET revision_uid = excluded.revision_uid, updated_at = excluded.updated_at, source = excluded.source
+                """;
+            state.Parameters.AddWithValue("$revision_uid", revisionUid);
+            state.Parameters.AddWithValue("$updated_at", now);
+            await state.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (isPartial)
+        {
+            var buildings = run.Buildings
+                .Where(building => !string.IsNullOrWhiteSpace(building))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            if (buildings.Length == 0)
+            {
+                throw new InvalidOperationException("部分批次没有有效楼栋范围，无法更新当前数据来源。");
+            }
+
+            var parameters = buildings
+                .Select((building, index) => (Name: "$building_" + index, Value: (object)building))
+                .ToArray();
+            await ExecuteAsync(
+                connection,
+                transaction,
+                $"UPDATE current_data_sources SET revision_uid = $revision_uid WHERE building IN ({string.Join(", ", parameters.Select(item => item.Name))})",
+                cancellationToken,
+                new[] { (Name: "$revision_uid", Value: (object)revisionUid) }
+                    .Concat(parameters)
+                    .ToArray()).ConfigureAwait(false);
+        }
+        else
+        {
+            await ExecuteAsync(connection, transaction, "DELETE FROM current_data_sources", cancellationToken).ConfigureAwait(false);
+        }
+
+        await using var insert = connection.CreateCommand();
+        insert.Transaction = transaction;
+        insert.CommandText = """
+            INSERT INTO current_data_sources
+                (building, revision_uid, run_id, batch_uid, source_updated_at, card_count, state, reason)
+            VALUES
+                ($building, $revision_uid, $run_id, $batch_uid, $source_updated_at, $card_count, 'bound', '')
+            ON CONFLICT(building) DO UPDATE SET
+                revision_uid = excluded.revision_uid,
+                run_id = excluded.run_id,
+                batch_uid = excluded.batch_uid,
+                source_updated_at = excluded.source_updated_at,
+                card_count = excluded.card_count,
+                state = excluded.state,
+                reason = excluded.reason
+            """;
+        var building = insert.Parameters.Add("$building", SqliteType.Text);
+        var revision = insert.Parameters.Add("$revision_uid", SqliteType.Text);
+        var runId = insert.Parameters.Add("$run_id", SqliteType.Integer);
+        var batchUid = insert.Parameters.Add("$batch_uid", SqliteType.Text);
+        var sourceUpdatedAt = insert.Parameters.Add("$source_updated_at", SqliteType.Text);
+        var cardCount = insert.Parameters.Add("$card_count", SqliteType.Integer);
+
+        foreach (var item in run.Buildings.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            building.Value = item;
+            revision.Value = revisionUid;
+            runId.Value = run.Id;
+            batchUid.Value = string.IsNullOrWhiteSpace(run.BatchUid) ? DBNull.Value : run.BatchUid;
+            sourceUpdatedAt.Value = string.IsNullOrWhiteSpace(run.CompletedAt) ? now : run.CompletedAt;
+            cardCount.Value = run.BuildingCardCounts.GetValueOrDefault(item);
+            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await ExecuteAsync(
+            connection,
+            transaction,
+            "UPDATE collection_runs SET current_revision_uid = $revision_uid WHERE id = $run_id",
+            cancellationToken,
+            ("$revision_uid", revisionUid),
+            ("$run_id", run.Id)).ConfigureAwait(false);
     }
 
     private static async Task ExecuteSnapshotCopyAsync(
@@ -926,11 +1581,17 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         SqliteConnection connection,
         SqliteTransaction transaction,
         string sql,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        params (string Name, object Value)[] parameters)
     {
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = sql;
+        foreach (var (name, value) in parameters)
+        {
+            command.Parameters.AddWithValue(name, value);
+        }
+
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -951,13 +1612,37 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
     private static async Task<bool> TableExistsAsync(
         SqliteConnection connection,
         string tableName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        SqliteTransaction? transaction = null)
     {
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = $name LIMIT 1";
         command.Parameters.AddWithValue("$name", tableName);
         var result = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return result is not null;
+    }
+
+    private static async Task<bool> ColumnExistsAsync(
+        SqliteConnection connection,
+        string tableName,
+        string columnName,
+        CancellationToken cancellationToken,
+        SqliteTransaction? transaction = null)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = $"PRAGMA table_info({tableName})";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static async Task EnsureQualityReasonColumnsAsync(
@@ -982,6 +1667,12 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         await AddColumnIfMissingAsync(
             connection,
             "collection_runs",
+            "run_no",
+            "INTEGER",
+            cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(
+            connection,
+            "collection_runs",
             "source",
             "TEXT NOT NULL DEFAULT '采集导入'",
             cancellationToken).ConfigureAwait(false);
@@ -1003,47 +1694,30 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
             "restored_from_run_id",
             "INTEGER",
             cancellationToken).ConfigureAwait(false);
-    }
-
-    private void DeleteAssociatedArtifacts(CollectionRunRecord run)
-    {
-        var databaseDirectory = Path.GetFullPath(Path.GetDirectoryName(databasePathResolver()) ?? Directory.GetCurrentDirectory());
-        var candidates = new List<string>();
-        foreach (var path in new[] { run.JsonPath, run.DbSnapshotPath })
-        {
-            if (!string.IsNullOrWhiteSpace(path))
-            {
-                candidates.Add(Path.IsPathRooted(path) ? path : Path.Combine(databaseDirectory, path));
-            }
-        }
-
-        candidates.Add(Path.Combine(databaseDirectory, $"quality_report_run{run.Id}.json"));
-        candidates.Add(Path.Combine(databaseDirectory, $"quality_report_run{run.Id}.txt"));
-        foreach (var candidate in candidates.Distinct(StringComparer.OrdinalIgnoreCase))
-        {
-            try
-            {
-                var fullPath = Path.GetFullPath(candidate);
-                if (!fullPath.StartsWith(databaseDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(fullPath, Path.GetFullPath(databasePathResolver()), StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                if (File.Exists(fullPath))
-                {
-                    File.Delete(fullPath);
-                }
-            }
-            catch (IOException)
-            {
-                // History deletion must not leave the SQLite database half-deleted because an optional artifact is locked.
-            }
-            catch (UnauthorizedAccessException)
-            {
-                // The next cleanup can remove a file that is temporarily protected by another process.
-            }
-        }
+        await AddColumnIfMissingAsync(
+            connection,
+            "collection_runs",
+            "batch_uid",
+            "TEXT NOT NULL DEFAULT ''",
+            cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(
+            connection,
+            "collection_runs",
+            "lifecycle_state",
+            "TEXT NOT NULL DEFAULT 'completed'",
+            cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(
+            connection,
+            "collection_runs",
+            "current_revision_uid",
+            "TEXT",
+            cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(
+            connection,
+            "collection_runs",
+            "restored_from_batch_uid",
+            "TEXT",
+            cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task AddColumnIfMissingAsync(
@@ -1153,6 +1827,12 @@ public sealed class SqliteCollectionRunRepository(Func<string> databasePathResol
         }
 
         return reader.IsDBNull(ordinal) ? null : reader.GetInt64(ordinal);
+    }
+
+    private static string? ReadNullableString(SqliteDataReader reader, string column)
+    {
+        var ordinal = GetOrdinal(reader, column);
+        return ordinal < 0 || reader.IsDBNull(ordinal) ? null : reader.GetString(ordinal);
     }
 
     private static double? ReadNullableDouble(SqliteDataReader reader, string column)

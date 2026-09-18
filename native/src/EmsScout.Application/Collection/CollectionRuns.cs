@@ -3,7 +3,15 @@ namespace EmsScout.Application.Collection;
 public interface ICollectionRunRepository
 {
     Task<IReadOnlyList<CollectionRunRecord>> ListAsync(
-        int limit = 50,
+        int? limit = 50,
+        CancellationToken cancellationToken = default);
+
+    Task<RunDeleteImpact> GetDeleteImpactAsync(
+        long runId,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<CollectionRunDeleteResult>> DeleteManyAsync(
+        IReadOnlyList<long> runIds,
         CancellationToken cancellationToken = default);
 
     Task<CollectionRunComparison> CompareCurrentAsync(
@@ -48,7 +56,12 @@ public sealed record CollectionRunRecord(
     string Source = "采集导入",
     string DataVersion = "v1.0.0",
     string Operator = "本机",
-    long? RestoredFromRunId = null)
+    long? RestoredFromRunId = null,
+    string BatchUid = "",
+    string LifecycleState = "completed",
+    string? CurrentRevisionUid = null,
+    string? RestoredFromBatchUid = null,
+    long RunNumber = 0)
 {
     public IReadOnlyDictionary<string, int> BuildingCardCounts { get; init; } =
         new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -95,4 +108,6 @@ public sealed record CollectionRunDeleteResult(
     int DeletedCards,
     int DeletedPages,
     int DeletedSubAreas,
-    int DeletedBuildings);
+    int DeletedBuildings,
+    Guid OperationId = default,
+    ArtifactCleanupResult? ArtifactCleanup = null);

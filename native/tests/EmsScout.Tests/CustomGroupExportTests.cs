@@ -307,6 +307,12 @@ public sealed class CustomGroupExportTests
                 indicator TEXT,
                 comm TEXT
             );
+            CREATE TABLE collection_runs (
+                id INTEGER PRIMARY KEY,
+                completed_at TEXT NOT NULL,
+                imported_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'completed'
+            );
             CREATE TABLE monitor_groups (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL UNIQUE,
@@ -369,6 +375,8 @@ public sealed class CustomGroupExportTests
                 (4, 3, '2-0101-KT', 'ON', '制冷', '26', '24', '中', 'red.png', '开机'),
                 (5, 4, 'DUP-KT', 'ON', '制冷', '26', '24', '中', 'red.png', '开机'),
                 (6, 5, 'DUP-KT', 'OFF', '制冷', '25', '24', '中', 'green.png', '关机');
+            INSERT INTO collection_runs (id, completed_at, imported_at) VALUES
+                (1, '2026-09-18T00:00:00Z', '2026-09-18T00:00:00Z');
             INSERT INTO monitor_groups
                 (id, name, area_label, description, priority, group_kind, locked, enabled)
             VALUES

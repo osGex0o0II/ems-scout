@@ -19,12 +19,53 @@ public sealed class SqliteRealtimeSnapshotStore(Func<string> databasePathResolve
         IReadOnlyList<string> buildings,
         CancellationToken cancellationToken = default)
     {
+        await SaveCoreAsync(runId, null, dataDirectory, buildings, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task SaveAsync(
+        long runId,
+        string batchUid,
+        string dataDirectory,
+        IReadOnlyList<string> buildings,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(batchUid))
+        {
+            throw new ArgumentException("批次 UID 不能为空。", nameof(batchUid));
+        }
+
+        await SaveCoreAsync(runId, batchUid.Trim(), dataDirectory, buildings, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task SaveCoreAsync(
+        long runId,
+        string? expectedBatchUid,
+        string dataDirectory,
+        IReadOnlyList<string> buildings,
+        CancellationToken cancellationToken)
+    {
         EnsureDatabaseExists();
         await using var connection = await OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
         await using var transaction = (SqliteTransaction)await connection
             .BeginTransactionAsync(cancellationToken)
             .ConfigureAwait(false);
+
+        var targetBatchUid = expectedBatchUid ??
+            await LoadBatchUidAsync(connection, runId, cancellationToken).ConfigureAwait(false);
+        if (targetBatchUid is not null &&
+            !await RunHasBatchUidAsync(connection, runId, targetBatchUid, cancellationToken).ConfigureAwait(false))
+        {
+            throw new InvalidOperationException($"目标批次 #{runId} 与 batch_uid 不一致，未保存任何快照数据。");
+        }
+
+        var expectedRunKey = targetBatchUid is null
+            ? null
+            : await LoadRunKeyAsync(connection, runId, cancellationToken).ConfigureAwait(false);
+        if (targetBatchUid is not null && string.IsNullOrWhiteSpace(expectedRunKey))
+        {
+            throw new InvalidOperationException($"目标批次 #{runId} 缺少 runKey，未保存任何快照数据。请先完成数据库迁移。");
+        }
 
         var selectedBuildings = buildings
             .Where(item => !string.IsNullOrWhiteSpace(item))
@@ -54,6 +95,24 @@ public sealed class SqliteRealtimeSnapshotStore(Func<string> databasePathResolve
                 var actual = sourceRunId is null ? "缺失" : $"#{sourceRunId}";
                 throw new InvalidOperationException(
                     $"实时详情文件 {sourceFile} 批次不匹配：目标批次 #{runId}，文件批次 {actual}。请重新采集实时详情。");
+            }
+
+            var sourceBatchUid = RealtimeLatestJsonSource.ReadBatchUid(document.RootElement);
+            if (targetBatchUid is not null &&
+                !string.Equals(sourceBatchUid, targetBatchUid, StringComparison.Ordinal))
+            {
+                var actual = string.IsNullOrWhiteSpace(sourceBatchUid) ? "缺失" : sourceBatchUid;
+                throw new InvalidOperationException(
+                    $"实时详情文件 {sourceFile} 批次 UID 不匹配：目标 {targetBatchUid}，文件 {actual}。请重新采集实时详情。");
+            }
+
+            var sourceRunKey = RealtimeLatestJsonSource.ReadRunKey(document.RootElement);
+            if (expectedRunKey is not null &&
+                !string.Equals(sourceRunKey, expectedRunKey, StringComparison.Ordinal))
+            {
+                var actual = string.IsNullOrWhiteSpace(sourceRunKey) ? "缺失" : sourceRunKey;
+                throw new InvalidOperationException(
+                    $"实时详情文件 {sourceFile} runKey 不匹配：目标 {expectedRunKey}，文件 {actual}。请重新采集实时详情。");
             }
 
             if (!RealtimeLatestJsonSource.HasSourceTimestamp(document.RootElement))
@@ -94,13 +153,14 @@ public sealed class SqliteRealtimeSnapshotStore(Func<string> databasePathResolve
         insert.Transaction = transaction;
         insert.CommandText = """
             INSERT INTO run_realtime_details
-                (run_id, source_row_id, building, floor, sub_area, page_name, name,
+                (run_id, batch_uid, source_row_id, building, floor, sub_area, page_name, name,
                  source_file, source_updated_at, payload_json)
             VALUES
-                ($run_id, $source_row_id, $building, $floor, $sub_area, $page_name, $name,
+                ($run_id, $batch_uid, $source_row_id, $building, $floor, $sub_area, $page_name, $name,
                  $source_file, $source_updated_at, $payload_json)
             """;
         var runIdParameter = insert.Parameters.Add("$run_id", SqliteType.Integer);
+        var batchUidParameter = insert.Parameters.Add("$batch_uid", SqliteType.Text);
         var sourceRowIdParameter = insert.Parameters.Add("$source_row_id", SqliteType.Text);
         var buildingParameter = insert.Parameters.Add("$building", SqliteType.Text);
         var floorParameter = insert.Parameters.Add("$floor", SqliteType.Real);
@@ -116,6 +176,7 @@ public sealed class SqliteRealtimeSnapshotStore(Func<string> databasePathResolve
             foreach (var row in pendingRows[building])
             {
                 runIdParameter.Value = runId;
+                batchUidParameter.Value = targetBatchUid is null ? DBNull.Value : targetBatchUid;
                 sourceRowIdParameter.Value = row.RowId;
                 buildingParameter.Value = row.Building;
                 floorParameter.Value = row.Floor.HasValue ? row.Floor.Value : DBNull.Value;
@@ -137,6 +198,29 @@ public sealed class SqliteRealtimeSnapshotStore(Func<string> databasePathResolve
         IReadOnlyList<string> buildings,
         CancellationToken cancellationToken = default)
     {
+        return await LoadCoreAsync(runId, null, buildings, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<RealtimeDetailSet> LoadAsync(
+        long runId,
+        string batchUid,
+        IReadOnlyList<string> buildings,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(batchUid))
+        {
+            throw new ArgumentException("批次 UID 不能为空。", nameof(batchUid));
+        }
+
+        return await LoadCoreAsync(runId, batchUid.Trim(), buildings, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<RealtimeDetailSet> LoadCoreAsync(
+        long runId,
+        string? expectedBatchUid,
+        IReadOnlyList<string> buildings,
+        CancellationToken cancellationToken)
+    {
         EnsureDatabaseExists();
         await using var connection = await OpenConnectionAsync(cancellationToken, readOnly: true).ConfigureAwait(false);
         if (!await TableExistsAsync(connection, "run_realtime_details", cancellationToken).ConfigureAwait(false))
@@ -144,13 +228,22 @@ public sealed class SqliteRealtimeSnapshotStore(Func<string> databasePathResolve
             return new RealtimeDetailSet([], RealtimeDetailAvailability.MissingSnapshot);
         }
         await using var command = connection.CreateCommand();
-        command.CommandText = """
+        command.CommandText = expectedBatchUid is null ? """
             SELECT payload_json
             FROM run_realtime_details
             WHERE run_id = $run_id
             ORDER BY id
+            """ : """
+            SELECT payload_json
+            FROM run_realtime_details
+            WHERE run_id = $run_id AND batch_uid = $batch_uid
+            ORDER BY id
             """;
         command.Parameters.AddWithValue("$run_id", runId);
+        if (expectedBatchUid is not null)
+        {
+            command.Parameters.AddWithValue("$batch_uid", expectedBatchUid);
+        }
 
         var buildingSet = buildings
             .Where(item => !string.IsNullOrWhiteSpace(item))
@@ -170,7 +263,9 @@ public sealed class SqliteRealtimeSnapshotStore(Func<string> databasePathResolve
         if (rows.Count == 0)
         {
             return new RealtimeDetailSet([], RealtimeDetailAvailability.MissingSnapshot,
-                $"批次 #{runId} 未保存实时详情快照。");
+                expectedBatchUid is null
+                    ? $"批次 #{runId} 未保存实时详情快照。"
+                    : $"批次 #{runId} 未保存匹配 batch_uid 的实时详情快照。");
         }
 
         var expectedCounts = await LoadRunCardCountsAsync(connection, runId, cancellationToken).ConfigureAwait(false);
@@ -196,7 +291,57 @@ public sealed class SqliteRealtimeSnapshotStore(Func<string> databasePathResolve
             }
         }
 
-        return new RealtimeDetailSet(rows, RealtimeDetailAvailability.Available, null, runId);
+        return new RealtimeDetailSet(rows, RealtimeDetailAvailability.Available, null, runId, expectedBatchUid);
+    }
+
+    private static async Task<string?> LoadBatchUidAsync(
+        SqliteConnection connection,
+        long runId,
+        CancellationToken cancellationToken)
+    {
+        if (!await ColumnExistsAsync(connection, "collection_runs", "batch_uid", cancellationToken).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT NULLIF(TRIM(batch_uid), '') FROM collection_runs WHERE id = $run_id LIMIT 1";
+        command.Parameters.AddWithValue("$run_id", runId);
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
+    }
+
+    private static async Task<bool> RunHasBatchUidAsync(
+        SqliteConnection connection,
+        long runId,
+        string batchUid,
+        CancellationToken cancellationToken)
+    {
+        if (!await ColumnExistsAsync(connection, "collection_runs", "batch_uid", cancellationToken).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT 1 FROM collection_runs WHERE id = $run_id AND batch_uid = $batch_uid LIMIT 1";
+        command.Parameters.AddWithValue("$run_id", runId);
+        command.Parameters.AddWithValue("$batch_uid", batchUid);
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null;
+    }
+
+    private static async Task<string?> LoadRunKeyAsync(
+        SqliteConnection connection,
+        long runId,
+        CancellationToken cancellationToken)
+    {
+        if (!await ColumnExistsAsync(connection, "collection_runs", "run_key", cancellationToken).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT NULLIF(TRIM(run_key), '') FROM collection_runs WHERE id = $run_id LIMIT 1";
+        command.Parameters.AddWithValue("$run_id", runId);
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as string;
     }
 
     private static async Task<Dictionary<string, int>> LoadRunCardCountsAsync(
@@ -262,6 +407,7 @@ public sealed class SqliteRealtimeSnapshotStore(Func<string> databasePathResolve
             CREATE TABLE IF NOT EXISTS run_realtime_details (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 run_id INTEGER NOT NULL,
+                batch_uid TEXT,
                 source_row_id TEXT NOT NULL,
                 building TEXT NOT NULL,
                 floor REAL,
@@ -279,6 +425,44 @@ public sealed class SqliteRealtimeSnapshotStore(Func<string> databasePathResolve
                 ON run_realtime_details(run_id, building);
             """;
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(connection, "run_realtime_details", "batch_uid", "TEXT", cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task AddColumnIfMissingAsync(
+        SqliteConnection connection,
+        string tableName,
+        string columnName,
+        string definition,
+        CancellationToken cancellationToken)
+    {
+        if (await ColumnExistsAsync(connection, tableName, columnName, cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {definition}";
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task<bool> ColumnExistsAsync(
+        SqliteConnection connection,
+        string tableName,
+        string columnName,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({tableName})";
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void EnsureDatabaseExists()

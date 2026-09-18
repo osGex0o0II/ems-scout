@@ -9,7 +9,11 @@ public sealed class CollectionRunRow(CollectionRunRecord record, bool isCurrent 
 
     public long Id { get; } = record.Id;
 
+    public long RunNumber { get; } = record.RunNumber > 0 ? record.RunNumber : record.Id;
+
     public string RunKey { get; } = record.RunKey;
+
+    public string BatchLabel => $"批次 {RunNumber} · {RunKey}";
 
     public string CompletedAt { get; } = FormatDateTime(record.ImportedAt, record.CompletedAt);
 

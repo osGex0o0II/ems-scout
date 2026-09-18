@@ -1,3 +1,4 @@
+using EmsScout.Application.Collection;
 using EmsScout.Infrastructure.Sqlite;
 using Microsoft.Data.Sqlite;
 
@@ -5,6 +6,307 @@ namespace EmsScout.Tests;
 
 public sealed class CollectionRunRepositoryTests
 {
+    [Fact]
+    public async Task CannotDeleteCurrentRun()
+    {
+        var databasePath = CreateDatabase();
+        await new SqliteSchemaMigrator(() => databasePath).MigrateAsync();
+        await ExecuteAsync(databasePath, "UPDATE current_data_state SET revision_uid = 'revision-1', updated_at = '2026-07-01T00:02:00Z'; UPDATE current_data_sources SET revision_uid = 'revision-1', run_id = 1, batch_uid = (SELECT batch_uid FROM collection_runs WHERE id = 1), source_updated_at = (SELECT completed_at FROM collection_runs WHERE id = 1), card_count = 1, state = 'bound', reason = '' WHERE building = '1号';");
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => repository.DeleteAsync(1));
+
+        Assert.Contains("当前数据", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ActivityGuardBlocksDeleteEvenWhenUiIsBypassed()
+    {
+        var databasePath = CreateDatabase();
+        var activity = new CollectionRunActivityRegistry();
+        var repository = new SqliteCollectionRunRepository(() => databasePath, activity);
+        using var lease = activity.Begin();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => repository.DeleteAsync(1));
+
+        Assert.Contains("采集任务", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ActivityGuardBlocksRestoreEvenWhenUiIsBypassed()
+    {
+        var databasePath = CreateDatabase();
+        var activity = new CollectionRunActivityRegistry();
+        var repository = new SqliteCollectionRunRepository(() => databasePath, activity);
+        using var lease = activity.Begin();
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => repository.RestoreCurrentAsync(1));
+
+        Assert.Contains("采集任务", error.Message, StringComparison.Ordinal);
+        await using var verify = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+        await verify.OpenAsync();
+        Assert.Equal(1L, await ScalarLongAsync(verify, "SELECT COUNT(*) FROM collection_runs WHERE status = 'completed'"));
+    }
+
+    [Fact]
+    public async Task BatchDeleteValidatesEveryRunBeforeChangingAnyRow()
+    {
+        var databasePath = CreateDatabase();
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => repository.DeleteManyAsync([1, 999]));
+
+        Assert.Single(await repository.ListAsync(null));
+    }
+
+    [Fact]
+    public async Task MigrationRepairsDuplicateBatchUidsWithoutLeavingPartialSchema()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-migration-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var databasePath = Path.Combine(root, "ac.db");
+        File.WriteAllBytes(databasePath, []);
+        await ExecuteAsync(databasePath, """
+            CREATE TABLE collection_runs (
+                id INTEGER PRIMARY KEY,
+                run_key TEXT UNIQUE,
+                batch_uid TEXT NOT NULL DEFAULT '',
+                completed_at TEXT NOT NULL,
+                imported_at TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'completed',
+                scope TEXT NOT NULL DEFAULT 'full',
+                buildings TEXT NOT NULL DEFAULT '[]'
+            );
+            INSERT INTO collection_runs (id, run_key, batch_uid, completed_at, imported_at, buildings)
+            VALUES (1, 'legacy-1', 'duplicate-batch', '2026-09-18', '2026-09-18', '["1号"]'),
+                   (2, 'legacy-2', 'duplicate-batch', '2026-09-18', '2026-09-18', '["2号"]');
+            """);
+
+        await new SqliteSchemaMigrator(() => databasePath).MigrateAsync();
+
+        await using var verify = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+        await verify.OpenAsync();
+        await using var command = verify.CreateCommand();
+        command.CommandText = "SELECT COUNT(*), COUNT(DISTINCT batch_uid) FROM collection_runs WHERE batch_uid <> ''";
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(2, reader.GetInt64(0));
+        Assert.Equal(2, reader.GetInt64(1));
+    }
+
+    [Fact]
+    public async Task DeleteImpactIncludesOnlyIdentityVerifiedArtifacts()
+    {
+        var databasePath = CreateDatabase();
+        var directory = Path.GetDirectoryName(databasePath)!;
+        File.WriteAllText(Path.Combine(directory, "quality_report_run1.json"), "{\"run_id\":1}");
+        File.WriteAllText(Path.Combine(directory, "collection_manifest_1.json"), "{\"runId\":1}");
+        File.WriteAllText(Path.Combine(directory, "realtime_all_buildings_batch_summary_run1.json"), "{\"runId\":1}");
+        File.WriteAllText(Path.Combine(directory, "quality_report.json"), "shared");
+
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+        var impact = await repository.GetDeleteImpactAsync(1);
+
+        Assert.Contains(impact.Artifacts, item => item.RelativePath.EndsWith("quality_report_run1.json", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(impact.Artifacts, item => item.RelativePath.EndsWith("collection_manifest_1.json", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(impact.Artifacts, item => item.RelativePath.EndsWith("realtime_all_buildings_batch_summary_run1.json", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(impact.Artifacts, item => item.RelativePath.EndsWith("quality_report.json", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task ManifestChildrenRequireTheirOwnIdentityAndDirectoriesBecomePending()
+    {
+        var databasePath = CreateDatabase();
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+        await new SqliteSchemaMigrator(() => databasePath).MigrateAsync();
+        var run = Assert.Single(await repository.ListAsync(null));
+        var directory = Path.GetDirectoryName(databasePath)!;
+        var wrongChild = Path.Combine(directory, "wrong-batch.json");
+        var childDirectory = Path.Combine(directory, "artifact-directory");
+        Directory.CreateDirectory(childDirectory);
+        File.WriteAllText(wrongChild, "{\"runId\":999,\"batchUid\":\"other\",\"runKey\":\"other\"}");
+        File.WriteAllText(
+            Path.Combine(directory, "collection_manifest_1.json"),
+            $"{{\"runId\":{run.Id},\"batchUid\":\"{run.BatchUid}\",\"runKey\":\"{run.RunKey}\",\"resultFiles\":[\"wrong-batch.json\",\"artifact-directory\"]}}");
+
+        var impact = await repository.GetDeleteImpactAsync(run.Id);
+
+        var wrongCandidate = Assert.Single(impact.Artifacts, item => item.RelativePath == "wrong-batch.json");
+        Assert.False(wrongCandidate.IdentityVerified);
+        var directoryCandidate = Assert.Single(impact.Artifacts, item => item.RelativePath == "artifact-directory");
+        Assert.False(directoryCandidate.IdentityVerified);
+
+        var result = new CollectionRunArtifactCleaner(() => databasePath)
+            .Cleanup(run, impact.Artifacts);
+
+        Assert.Contains("wrong-batch.json", result.PendingPaths);
+        Assert.Contains("artifact-directory", result.PendingPaths);
+        Assert.True(File.Exists(wrongChild));
+        Assert.True(Directory.Exists(childDirectory));
+    }
+
+    [Fact]
+    public async Task VerifiedManifestAllowsCleanupOfNdjsonAndLogChildren()
+    {
+        var databasePath = CreateDatabase();
+        await new SqliteSchemaMigrator(() => databasePath).MigrateAsync();
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+        var run = Assert.Single(await repository.ListAsync(null));
+        var directory = Path.GetDirectoryName(databasePath)!;
+        var ndjsonPath = Path.Combine(directory, "realtime_1号.ndjson");
+        var logPath = Path.Combine(directory, "realtime_all_batch_20260918_000000.log");
+        File.WriteAllText(ndjsonPath, "{\"runId\":1,\"batchUid\":\"" + run.BatchUid + "\",\"runKey\":\"" + run.RunKey + "\",\"row\":1}\n");
+        File.WriteAllText(logPath, "2026-09-18 INFO realtime batch\n");
+        File.WriteAllText(
+            Path.Combine(directory, "collection_manifest_1.json"),
+            "{\"runId\":1,\"batchUid\":\"" + run.BatchUid + "\",\"runKey\":\"" + run.RunKey + "\",\"resultFiles\":[\"realtime_1号.ndjson\",\"realtime_all_batch_20260918_000000.log\"]}");
+
+        var impact = await repository.GetDeleteImpactAsync(run.Id);
+        var ndjson = Assert.Single(impact.Artifacts, item => item.RelativePath == "realtime_1号.ndjson");
+        var log = Assert.Single(impact.Artifacts, item => item.RelativePath == "realtime_all_batch_20260918_000000.log");
+
+        Assert.True(ndjson.IdentityVerified);
+        Assert.True(log.IdentityVerified);
+        var cleanup = new CollectionRunArtifactCleaner(() => databasePath).Cleanup(run, impact.Artifacts);
+        Assert.True(cleanup.IsComplete);
+        Assert.False(File.Exists(ndjsonPath));
+        Assert.False(File.Exists(logPath));
+    }
+
+    [Fact]
+    public async Task RestoreUpdatesCurrentDataSourceToRestoredBatchIdentity()
+    {
+        var databasePath = CreateDatabase();
+        await new SqliteSchemaMigrator(() => databasePath).MigrateAsync();
+        await ExecuteAsync(databasePath, "UPDATE current_data_state SET revision_uid = 'revision-before', updated_at = '2026-07-01T00:02:00Z'; UPDATE current_data_sources SET revision_uid = 'revision-before', run_id = 1, batch_uid = (SELECT batch_uid FROM collection_runs WHERE id = 1), source_updated_at = (SELECT completed_at FROM collection_runs WHERE id = 1), card_count = 1, state = 'bound', reason = '' WHERE building = '1号';");
+        await ExecuteAsync(databasePath, "UPDATE cards SET name = 'BROKEN' WHERE id = 1");
+
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+        await repository.RestoreCurrentAsync(1);
+
+        await using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT s.run_id, s.batch_uid, s.revision_uid, r.batch_uid FROM current_data_sources s JOIN collection_runs r ON r.id = s.run_id WHERE s.building = '1号'";
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal(1L, reader.GetInt64(0));
+        Assert.Equal(reader.GetString(1), reader.GetString(3));
+        Assert.NotEqual("revision-before", reader.GetString(2));
+    }
+
+    [Fact]
+    public async Task DeleteWritesMinimalOperationWithImmutableBatchIdentity()
+    {
+        var databasePath = CreateDatabase();
+        await new SqliteSchemaMigrator(() => databasePath).MigrateAsync();
+        await ExecuteAsync(databasePath, "UPDATE current_data_sources SET state = 'bound', reason = '', run_id = 1, batch_uid = (SELECT batch_uid FROM collection_runs WHERE id = 1) WHERE building = '1号'; INSERT INTO collection_runs (id, run_key, batch_uid, completed_at, imported_at, status, scope, buildings, card_count) VALUES (2, 'run_2', 'batch-2', '2026-07-02T00:00:00Z', '2026-07-02T00:00:00Z', 'completed', 'partial', '[\"1号\"]', 0);");
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+
+        var result = await repository.DeleteAsync(2);
+
+        Assert.NotEqual(Guid.Empty, result.OperationId);
+        Assert.NotNull(result.ArtifactCleanup);
+        await using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT run_key, batch_uid, result, summary FROM run_operations WHERE operation_id = $id";
+        command.Parameters.AddWithValue("$id", result.OperationId.ToString());
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("run_2", reader.GetString(0));
+        Assert.Equal("batch-2", reader.GetString(1));
+        Assert.Equal("completed", reader.GetString(2));
+        Assert.DoesNotContain("1-0101-KT", reader.GetString(3), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task MigratesImmutableBatchIdentityAndGovernanceTables()
+    {
+        var databasePath = CreateDatabase();
+
+        await new SqliteSchemaMigrator(() => databasePath).MigrateAsync();
+
+        var columns = await ReadColumnsAsync(databasePath, "collection_runs");
+        Assert.Contains("batch_uid", columns);
+        Assert.Contains("lifecycle_state", columns);
+        Assert.Contains("current_revision_uid", columns);
+        Assert.Contains("run_key_registry", await ReadTablesAsync(databasePath));
+        Assert.Contains("run_operations", await ReadTablesAsync(databasePath));
+        Assert.Contains("current_data_sources", await ReadTablesAsync(databasePath));
+    }
+
+    [Fact]
+    public async Task MigrationPreservesLegacySqliteSequenceHighWaterMark()
+    {
+        var databasePath = CreateDatabase();
+        await ExecuteAsync(databasePath, "INSERT INTO collection_runs (id, run_key, completed_at, imported_at, scope, buildings) VALUES (41, 'deleted-41', '2026-07-02T00:00:00Z', '2026-07-02T00:00:00Z', 'partial', '[\"1号\"]'); DELETE FROM collection_runs WHERE id = 41;");
+
+        await new SqliteSchemaMigrator(() => databasePath).MigrateAsync();
+
+        await using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+        await connection.OpenAsync();
+        Assert.Equal(41L, await ScalarLongAsync(connection, "SELECT MAX(technical_id) FROM run_id_registry"));
+    }
+
+    [Fact]
+    public async Task MigrationPreservesLegacyRunIdAsDisplayNumberWhenRunNumberIsMissing()
+    {
+        var databasePath = CreateDatabase();
+        await ExecuteAsync(databasePath, "INSERT INTO collection_runs (id, run_key, completed_at, imported_at, scope, buildings) VALUES (37, 'run_37', '2026-07-02T00:00:00Z', '2026-07-02T00:00:00Z', 'partial', '[\"1号\"]'), (39, 'run_39', '2026-07-03T00:00:00Z', '2026-07-03T00:00:00Z', 'partial', '[\"1号\"]'), (41, 'run_41', '2026-07-04T00:00:00Z', '2026-07-04T00:00:00Z', 'partial', '[\"1号\"]');");
+
+        await new SqliteSchemaMigrator(() => databasePath).MigrateAsync();
+
+        await using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT id, run_no FROM collection_runs WHERE id IN (37, 39, 41) ORDER BY id";
+        await using var reader = await command.ExecuteReaderAsync();
+        var values = new Dictionary<long, long>();
+        while (await reader.ReadAsync())
+        {
+            values[reader.GetInt64(0)] = reader.GetInt64(1);
+        }
+
+        Assert.Equal(37L, values[37]);
+        Assert.Equal(39L, values[39]);
+        Assert.Equal(41L, values[41]);
+    }
+
+    [Fact]
+    public async Task PartialRestoreDoesNotRewriteRevisionOfUnselectedBuilding()
+    {
+        var databasePath = CreateDatabase();
+        await new SqliteSchemaMigrator(() => databasePath).MigrateAsync();
+        await ExecuteAsync(databasePath, "UPDATE current_data_sources SET state = 'bound', reason = '', run_id = 1, batch_uid = (SELECT batch_uid FROM collection_runs WHERE id = 1), revision_uid = 'revision-1' WHERE building = '1号'; INSERT INTO current_data_sources (building, revision_uid, run_id, batch_uid, source_updated_at, card_count, state, reason) VALUES ('2号', 'revision-2', 99, 'batch-99', '2026-07-02T00:00:00Z', 1, 'bound', '');");
+
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+        await repository.RestoreCurrentAsync(1);
+
+        await using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT revision_uid, run_id, batch_uid FROM current_data_sources WHERE building = '2号'";
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        Assert.Equal("revision-2", reader.GetString(0));
+        Assert.Equal(99L, reader.GetInt64(1));
+        Assert.Equal("batch-99", reader.GetString(2));
+    }
+
+    [Fact]
+    public async Task PartialComparisonExcludesCurrentCardsOutsideSnapshotScope()
+    {
+        var databasePath = CreateDatabase();
+        await ExecuteAsync(databasePath, "INSERT INTO buildings (building, sub_area_count, menu_clicked, updated_at) VALUES ('2号', 1, 'yes', '2026-07-02T00:00:00Z'); INSERT INTO sub_areas (id, building, sub_idx, floor, text, x, y) VALUES (2, '2号', 1, 2, '2F A', 30, 40); INSERT INTO pages (id, sub_area_id, page_name, count, raw_count, unique_count, duplicate_names, on_href, off_href, layout, quality_reason, err) VALUES (2, 2, '2F', 1, 1, 1, '', '', '', 'grid', 'current_quality', ''); INSERT INTO cards (id, page_id, name, switch, mode, indoor, set_temp, fan, indicator, comm) VALUES (2, 2, '2-0201-KT', 'ON', '制冷', '27', '24', '高', 'red.png', '开机');");
+
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+        var comparison = await repository.CompareCurrentAsync(1);
+
+        Assert.Equal(1, comparison.CurrentCardCount);
+        Assert.DoesNotContain(comparison.BuildingDifferences, difference => difference.Building == "2号");
+    }
+
     [Fact]
     public async Task MigratesLegacyRunMetadataAndComparesSnapshotToCurrentData()
     {
@@ -154,7 +456,7 @@ public sealed class CollectionRunRepositoryTests
         var result = await repository.RestoreCurrentAsync(1);
 
         Assert.True(result.IsPartial);
-        Assert.Equal(2L, result.BackupRunId);
+        Assert.Equal(4L, result.BackupRunId);
         await using var verify = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
         verify.Open();
         Assert.Equal(2L, await ScalarLongAsync(verify, "SELECT COUNT(*) FROM buildings"));
@@ -164,6 +466,22 @@ public sealed class CollectionRunRepositoryTests
         Assert.Equal(1L, await ScalarLongAsync(verify, "SELECT COUNT(*) FROM collection_runs WHERE status = 'backup' AND note LIKE '恢复批次 #1 前自动备份%'"));
         Assert.Equal(1L, await ScalarLongAsync(verify, "SELECT COUNT(*) FROM collection_runs WHERE status = 'backup' AND source = '手动恢复' AND restored_from_run_id = 1"));
         Assert.Equal(2L, await ScalarLongAsync(verify, $"SELECT COUNT(*) FROM run_cards WHERE run_id = {result.BackupRunId}"));
+    }
+
+    [Fact]
+    public async Task TechnicalRunIdIsNotReusedAfterDeletingTheHighestBackup()
+    {
+        var databasePath = CreateDatabase();
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+
+        var firstRestore = await repository.RestoreCurrentAsync(1);
+        Assert.Equal(2L, firstRestore.BackupRunId);
+
+        await repository.DeleteAsync(firstRestore.BackupRunId!.Value);
+
+        var secondRestore = await repository.RestoreCurrentAsync(1);
+
+        Assert.Equal(3L, secondRestore.BackupRunId);
     }
 
     [Fact]
@@ -275,6 +593,8 @@ public sealed class CollectionRunRepositoryTests
             INSERT INTO run_realtime_details (run_id, source_row_id, building, payload_json)
             VALUES (1, 'out/realtime_1号_latest.json#0', '1号', '{}');
             """);
+        await new SqliteSchemaMigrator(() => databasePath).MigrateAsync();
+        await ExecuteAsync(databasePath, "UPDATE current_data_sources SET state = 'bound', reason = '', run_id = 999, batch_uid = 'current-external', source_updated_at = '2026-07-01T00:02:00Z' WHERE building = '1号';");
         var repository = new SqliteCollectionRunRepository(() => databasePath);
 
         var deleted = await repository.DeleteAsync(1);
@@ -302,22 +622,38 @@ public sealed class CollectionRunRepositoryTests
     public async Task DeletesRunArtifactsInsideTheDatabaseDirectory()
     {
         var databasePath = CreateDatabase();
+        await new SqliteSchemaMigrator(() => databasePath).MigrateAsync();
         var directory = Path.GetDirectoryName(databasePath)!;
         var jsonPath = Path.Combine(directory, "enum_run1.json");
         var snapshotPath = Path.Combine(directory, "snapshot_run1.db");
         var reportPath = Path.Combine(directory, "quality_report_run1.json");
         var textPath = Path.Combine(directory, "quality_report_run1.txt");
-        foreach (var path in new[] { jsonPath, snapshotPath, reportPath, textPath })
+        var knownRun = Assert.Single(await new SqliteCollectionRunRepository(() => databasePath).ListAsync());
+        File.WriteAllText(jsonPath, $"{{\"runId\":1,\"runKey\":\"{knownRun.RunKey}\",\"batchUid\":\"{knownRun.BatchUid}\"}}");
+        File.WriteAllText(textPath, "artifact");
+        File.WriteAllText(reportPath, $"{{\"run_id\":1,\"run_key\":\"{knownRun.RunKey}\",\"batch_uid\":\"{knownRun.BatchUid}\"}}");
+        await using (var snapshot = new SqliteConnection($"Data Source={snapshotPath}"))
         {
-            File.WriteAllText(path, "artifact");
+            await snapshot.OpenAsync();
+            await using var snapshotCommand = snapshot.CreateCommand();
+            snapshotCommand.CommandText = $"CREATE TABLE collection_runs (id INTEGER PRIMARY KEY, run_key TEXT, batch_uid TEXT); INSERT INTO collection_runs VALUES (1, '{knownRun.RunKey}', '{knownRun.BatchUid}');";
+            await snapshotCommand.ExecuteNonQueryAsync();
         }
 
         await ExecuteAsync(databasePath, "UPDATE collection_runs SET json_path = 'enum_run1.json', db_snapshot_path = 'snapshot_run1.db' WHERE id = 1");
+        await ExecuteAsync(databasePath, "UPDATE current_data_sources SET state = 'bound', reason = '', run_id = 999, batch_uid = 'current-external', source_updated_at = '2026-07-01T00:02:00Z' WHERE building = '1号';");
         var repository = new SqliteCollectionRunRepository(() => databasePath);
+        var impact = await repository.GetDeleteImpactAsync(1);
+        var snapshotCandidate = Assert.Single(impact.Artifacts, item => item.RelativePath == "snapshot_run1.db");
+        Assert.True(snapshotCandidate.IdentityVerified);
 
-        await repository.DeleteAsync(1);
+        var deleteResult = await repository.DeleteAsync(1);
 
-        Assert.All(new[] { jsonPath, snapshotPath, reportPath, textPath }, path => Assert.False(File.Exists(path), path));
+        Assert.All(
+            new[] { jsonPath, snapshotPath, reportPath, textPath },
+            path => Assert.False(
+                File.Exists(path),
+                $"{path}; pending={string.Join(",", deleteResult.ArtifactCleanup!.PendingPaths)}; reasons={string.Join(",", deleteResult.ArtifactCleanup.PendingReasons)}"));
     }
 
     private static async Task<long> ScalarLongAsync(SqliteConnection connection, string sql)
@@ -342,6 +678,22 @@ public sealed class CollectionRunRepositoryTests
         }
 
         return columns;
+    }
+
+    private static async Task<IReadOnlyList<string>> ReadTablesAsync(string databasePath)
+    {
+        await using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT name FROM sqlite_master WHERE type = 'table'";
+        await using var reader = await command.ExecuteReaderAsync();
+        var tables = new List<string>();
+        while (await reader.ReadAsync())
+        {
+            tables.Add(reader.GetString(0));
+        }
+
+        return tables;
     }
 
     private static async Task ExecuteAsync(string databasePath, string sql)

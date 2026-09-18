@@ -1,5 +1,6 @@
 using System.Text.Json;
 using EmsScout.Application.Quality;
+using Microsoft.Data.Sqlite;
 
 namespace EmsScout.Infrastructure.Quality;
 
@@ -40,6 +41,8 @@ public sealed class JsonQualityAuditService(
         var generatedAt = ReadString(root, "generated_at");
         var generatedAtLocal = ReadString(root, "generated_at_local");
         var reportRunId = ReadNullableInt64(root, "run_id");
+        var reportBatchUid = ReadString(root, "batch_uid", "batchUid");
+        var reportRunKey = ReadString(root, "run_key", "runKey");
         var reportTime = File.GetLastWriteTimeUtc(path);
         var databasePath = databasePathResolver();
         var databaseTime = File.Exists(databasePath)
@@ -56,6 +59,47 @@ public sealed class JsonQualityAuditService(
             reasons.Add($"报告批次 #{reportRunId?.ToString() ?? "缺失"} 与所选批次 #{runId} 不一致");
         }
 
+        if (!reportRunId.HasValue)
+        {
+            reasons.Add("质量报告缺少 run_id，批次身份无法验证");
+        }
+
+        if (string.IsNullOrWhiteSpace(reportBatchUid))
+        {
+            reasons.Add("质量报告缺少 batch_uid，批次身份无法验证");
+        }
+
+        if (string.IsNullOrWhiteSpace(reportRunKey))
+        {
+            reasons.Add("质量报告缺少 run_key，批次身份无法验证");
+        }
+
+        var identity = await LoadRunIdentityAsync(
+            databasePath,
+            runId ?? reportRunId,
+            cancellationToken).ConfigureAwait(false);
+        if (identity is null)
+        {
+            reasons.Add("SQLite 中不存在可核对的批次身份");
+        }
+        else
+        {
+            if (reportRunId != identity.Value.RunId)
+            {
+                reasons.Add($"报告 run_id #{reportRunId?.ToString() ?? "缺失"} 与 SQLite 批次 #{identity.Value.RunId} 不一致");
+            }
+
+            if (!string.Equals(reportBatchUid, identity.Value.BatchUid, StringComparison.Ordinal))
+            {
+                reasons.Add("报告 batch_uid 与 SQLite 批次身份不一致");
+            }
+
+            if (!string.Equals(reportRunKey, identity.Value.RunKey, StringComparison.Ordinal))
+            {
+                reasons.Add("报告 run_key 与 SQLite 批次身份不一致");
+            }
+        }
+
         return new QualityAuditReport(
             SourcePath: path,
             GeneratedAt: generatedAt,
@@ -64,7 +108,9 @@ public sealed class JsonQualityAuditService(
             Summary: summary,
             Issues: issues,
             IsStale: reasons.Count > 0,
-            StaleReason: string.Join("；", reasons));
+            StaleReason: string.Join("；", reasons),
+            BatchUid: reportBatchUid,
+            RunKey: reportRunKey);
     }
 
     private static QualityAuditSummary ReadSummary(JsonElement root)
@@ -137,15 +183,54 @@ public sealed class JsonQualityAuditService(
             : null;
     }
 
-    private static string ReadString(JsonElement element, string propertyName)
+    private static string ReadString(JsonElement element, params string[] propertyNames)
     {
-        if (!element.TryGetProperty(propertyName, out var property) || property.ValueKind == JsonValueKind.Null)
+        foreach (var propertyName in propertyNames)
         {
-            return string.Empty;
+            if (!element.TryGetProperty(propertyName, out var property) || property.ValueKind == JsonValueKind.Null)
+            {
+                continue;
+            }
+
+            return property.ValueKind == JsonValueKind.String
+                ? property.GetString() ?? string.Empty
+                : property.ToString();
         }
 
-        return property.ValueKind == JsonValueKind.String
-            ? property.GetString() ?? string.Empty
-            : property.ToString();
+        return string.Empty;
     }
+
+    private static async Task<RunIdentity?> LoadRunIdentityAsync(
+        string databasePath,
+        long? runId,
+        CancellationToken cancellationToken)
+    {
+        if (!runId.HasValue || !File.Exists(databasePath))
+        {
+            return null;
+        }
+
+        try
+        {
+            await using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
+            await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT id, NULLIF(TRIM(batch_uid), ''), NULLIF(TRIM(run_key), '') FROM collection_runs WHERE id = $id LIMIT 1";
+            command.Parameters.AddWithValue("$id", runId.Value);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
+                reader.IsDBNull(1) || reader.IsDBNull(2))
+            {
+                return null;
+            }
+
+            return new RunIdentity(reader.GetInt64(0), reader.GetString(1), reader.GetString(2));
+        }
+        catch (SqliteException)
+        {
+            return null;
+        }
+    }
+
+    private readonly record struct RunIdentity(long RunId, string BatchUid, string RunKey);
 }

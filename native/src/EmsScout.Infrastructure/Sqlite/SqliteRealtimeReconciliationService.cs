@@ -1,6 +1,7 @@
 using EmsScout.Application.Devices;
 using Microsoft.Data.Sqlite;
 using System.Globalization;
+using EmsScout.Application.Collection;
 
 namespace EmsScout.Infrastructure.Sqlite;
 
@@ -31,10 +32,9 @@ public sealed class SqliteRealtimeReconciliationService(
         await using var connection = OpenConnection();
         var buildings = ResolveBuildings(query.Building);
         var dbRows = await LoadDbRowsAsync(connection, buildings, cancellationToken).ConfigureAwait(false);
-        var expectedRunId = await LoadCurrentRunIdAsync(connection, cancellationToken).ConfigureAwait(false);
         var realtimeSet = await LoadCurrentRealtimeDetailsAsync(
+            connection,
             buildings,
-            expectedRunId,
             cancellationToken).ConfigureAwait(false);
         var realtimeRows = realtimeSet.Rows.ToList();
         var overrides = await LoadRealtimeMatchOverridesAsync(connection, cancellationToken).ConfigureAwait(false);
@@ -80,24 +80,166 @@ public sealed class SqliteRealtimeReconciliationService(
     }
 
     private async Task<RealtimeDetailSet> LoadCurrentRealtimeDetailsAsync(
+        SqliteConnection connection,
         IReadOnlyList<string> buildings,
-        long? expectedRunId,
         CancellationToken cancellationToken)
     {
+        if (await TableExistsAsync(connection, "current_data_sources", cancellationToken).ConfigureAwait(false))
+        {
+            return await LoadCurrentRealtimeDetailsBySourcesAsync(
+                connection,
+                buildings,
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        // Legacy databases are read using the old single-run path until startup migration creates source bindings.
+        var expectedRunId = await LoadCurrentRunIdAsync(connection, cancellationToken).ConfigureAwait(false);
         if (realtimeSnapshotStore is not null && expectedRunId is not null)
         {
-            var snapshot = await realtimeSnapshotStore
-                .LoadAsync(expectedRunId.Value, buildings, cancellationToken)
-                .ConfigureAwait(false);
+            var expectedBatchUid = await LoadRunBatchUidAsync(connection, expectedRunId.Value, cancellationToken).ConfigureAwait(false);
+            var snapshot = expectedBatchUid is null
+                ? await realtimeSnapshotStore.LoadAsync(expectedRunId.Value, buildings, cancellationToken).ConfigureAwait(false)
+                : await realtimeSnapshotStore.LoadAsync(expectedRunId.Value, expectedBatchUid, buildings, cancellationToken).ConfigureAwait(false);
             if (snapshot.IsAvailable)
             {
                 return snapshot;
             }
         }
 
-        return await realtimeDetailSource
-            .LoadAsync(buildings, expectedRunId, cancellationToken)
-            .ConfigureAwait(false);
+        var batchUid = expectedRunId is null
+            ? null
+            : await LoadRunBatchUidAsync(connection, expectedRunId.Value, cancellationToken).ConfigureAwait(false);
+        return batchUid is null
+            ? await realtimeDetailSource.LoadAsync(buildings, expectedRunId, cancellationToken).ConfigureAwait(false)
+            : await realtimeDetailSource.LoadAsync(buildings, batchUid, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<RealtimeDetailSet> LoadCurrentRealtimeDetailsBySourcesAsync(
+        SqliteConnection connection,
+        IReadOnlyList<string> buildings,
+        CancellationToken cancellationToken)
+    {
+        var sourceRows = await LoadCurrentDataSourcesAsync(connection, buildings, cancellationToken).ConfigureAwait(false);
+        var missing = buildings.Where(building => !sourceRows.ContainsKey(building)).ToArray();
+        var unresolved = sourceRows.Values
+            .Where(row => !string.Equals(row.State, CurrentDataSourceStates.Bound, StringComparison.OrdinalIgnoreCase) ||
+                          row.RunId is null ||
+                          string.IsNullOrWhiteSpace(row.BatchUid) ||
+                          string.IsNullOrWhiteSpace(row.RunKey))
+            .ToArray();
+        if (missing.Length > 0 || unresolved.Length > 0)
+        {
+            var details = missing.Length > 0
+                ? $"缺少来源记录：{string.Join("、", missing)}"
+                : string.Join("、", unresolved.Select(row =>
+                    string.IsNullOrWhiteSpace(row.Reason) ? row.Building : $"{row.Building}：{row.Reason}"));
+            return new RealtimeDetailSet(
+                [],
+                RealtimeDetailAvailability.MissingSnapshot,
+                $"当前数据来源未确定，实时详情无法安全绑定（{details}）。");
+        }
+
+        var rows = new List<RealtimeDetailRecord>();
+        var failures = new List<string>();
+        foreach (var group in sourceRows.Values.GroupBy(row => (RunId: row.RunId!.Value, row.BatchUid, row.RunKey)))
+        {
+            var groupBuildings = group.Select(row => row.Building).ToArray();
+            RealtimeDetailSet loaded;
+            if (realtimeSnapshotStore is not null)
+            {
+                loaded = await realtimeSnapshotStore.LoadAsync(
+                    group.Key.Item1,
+                    group.Key.Item2,
+                    groupBuildings,
+                    cancellationToken).ConfigureAwait(false);
+                if (loaded.IsAvailable)
+                {
+                    rows.AddRange(loaded.Rows);
+                    continue;
+                }
+            }
+
+            loaded = string.IsNullOrWhiteSpace(group.Key.RunKey)
+                ? await realtimeDetailSource.LoadAsync(
+                    groupBuildings,
+                    group.Key.BatchUid,
+                    cancellationToken).ConfigureAwait(false)
+                : await realtimeDetailSource.LoadAsync(
+                    groupBuildings,
+                    group.Key.RunId,
+                    group.Key.BatchUid,
+                    group.Key.RunKey,
+                    cancellationToken).ConfigureAwait(false);
+            if (loaded.IsAvailable)
+            {
+                rows.AddRange(loaded.Rows);
+            }
+            else
+            {
+                failures.Add(string.IsNullOrWhiteSpace(loaded.StatusText)
+                    ? string.Join("、", groupBuildings)
+                    : loaded.StatusText);
+            }
+        }
+
+        return new RealtimeDetailSet(
+            rows,
+            failures.Count == 0 && rows.Count > 0
+                ? RealtimeDetailAvailability.Available
+                : rows.Count > 0 ? RealtimeDetailAvailability.Unavailable : RealtimeDetailAvailability.MissingSnapshot,
+            failures.Count == 0 && rows.Count > 0
+                ? null
+                : failures.Count > 0 ? string.Join("；", failures) : "当前数据来源对应的实时详情尚未保存。");
+    }
+
+    private static async Task<Dictionary<string, CurrentDataSourceRow>> LoadCurrentDataSourcesAsync(
+        SqliteConnection connection,
+        IReadOnlyList<string> buildings,
+        CancellationToken cancellationToken)
+    {
+        var parameterNames = string.Join(",", buildings.Select((_, index) => "$building_" + index));
+        var hasRunKey = await TableExistsAsync(connection, "collection_runs", cancellationToken).ConfigureAwait(false) &&
+                        await ColumnExistsAsync(connection, "collection_runs", "run_key", cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText = hasRunKey
+            ? $"SELECT s.building, s.state, s.run_id, s.batch_uid, s.reason, COALESCE(r.run_key, '') FROM current_data_sources s LEFT JOIN collection_runs r ON r.id = s.run_id WHERE s.building IN ({parameterNames})"
+            : $"SELECT building, state, run_id, batch_uid, reason, '' FROM current_data_sources WHERE building IN ({parameterNames})";
+        for (var index = 0; index < buildings.Count; index++)
+        {
+            command.Parameters.AddWithValue("$building_" + index, buildings[index]);
+        }
+
+        var result = new Dictionary<string, CurrentDataSourceRow>(StringComparer.OrdinalIgnoreCase);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            result[reader.GetString(0)] = new CurrentDataSourceRow(
+                reader.GetString(0),
+                reader.IsDBNull(1) ? CurrentDataSourceStates.Bound : reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetInt64(2),
+                reader.IsDBNull(3) ? string.Empty : reader.GetString(3),
+                reader.IsDBNull(4) ? string.Empty : reader.GetString(4),
+                reader.IsDBNull(5) ? string.Empty : reader.GetString(5));
+        }
+
+        return result;
+    }
+
+    private static async Task<string?> LoadRunBatchUidAsync(
+        SqliteConnection connection,
+        long runId,
+        CancellationToken cancellationToken)
+    {
+        if (!await ColumnExistsAsync(connection, "collection_runs", "batch_uid", cancellationToken).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT NULLIF(TRIM(batch_uid), '') FROM collection_runs WHERE id = $run_id LIMIT 1";
+        command.Parameters.AddWithValue("$run_id", runId);
+        var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return value is null or DBNull ? null : Convert.ToString(value, CultureInfo.InvariantCulture);
     }
 
     private SqliteConnection OpenConnection()
@@ -888,6 +1030,14 @@ public sealed class SqliteRealtimeReconciliationService(
         string Name,
         string SwitchState,
         string CommunicationText);
+
+    private sealed record CurrentDataSourceRow(
+        string Building,
+        string State,
+        long? RunId,
+        string BatchUid,
+        string Reason,
+        string RunKey);
 
     private sealed class ReconcileState
     {

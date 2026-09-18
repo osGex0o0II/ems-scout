@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { formatLocalTimestamp } = require('../src/time');
+const { readBatchIdentity, withBatchIdentity } = require('../src/run-identity');
 const { installRealtimeLog } = require('./realtime-logger');
 const { DEFAULT_REALTIME_CDP_PORT, ensureRealtimeBrowser } = require('./realtime-browser');
 
@@ -37,9 +38,11 @@ const SKIP_INVENTORY = FAST_BATCH || process.argv.includes('--skip-inventory');
 const PREPARE_PAGE = !process.argv.includes('--no-prepare-page');
 const SKIP_AUDIT = process.argv.includes('--skip-audit');
 const LOG_FILE = process.argv.includes('--log-file') || process.argv.some(a => a.startsWith('--log-file='));
-const RUN_ID = Number(
-  ((process.argv.find(a => a.startsWith('--run-id=')) || '').split('=').slice(1).join('=') ||
-    process.env.EMS_RUN_ID || 0));
+const IDENTITY = readBatchIdentity({
+  ...process.env,
+  EMS_RUN_ID: ((process.argv.find(a => a.startsWith('--run-id=')) || '').split('=').slice(1).join('=') || process.env.EMS_RUN_ID || 0),
+});
+const RUN_ID = IDENTITY.runId || 0;
 const MANIFEST_PATH = path.join(OUT_DIR, `collection_manifest_${RUN_ID > 0 ? RUN_ID : `${Date.now()}-${process.pid}`}.json`);
 installRealtimeLog({ prefix: 'realtime_all_batch' });
 
@@ -72,12 +75,13 @@ function childRunEnv() {
     EMS_OUT_DIR: OUT_DIR,
     EMS_ENUM_PATH: ENUM_PATH,
     ...(RUN_ID > 0 ? { EMS_RUN_ID: String(RUN_ID) } : {}),
+    ...(IDENTITY.batchUid ? { EMS_BATCH_UID: IDENTITY.batchUid } : {}),
+    ...(IDENTITY.runKey ? { EMS_RUN_KEY: IDENTITY.runKey } : {}),
   };
 }
 
 function writeManifest(status, extra = {}) {
-  fs.writeFileSync(MANIFEST_PATH, JSON.stringify({
-    runId: RUN_ID > 0 ? RUN_ID : null,
+  fs.writeFileSync(MANIFEST_PATH, JSON.stringify(withBatchIdentity({
     status,
     startedAt: _runStartedAt ? new Date(_runStartedAt).toISOString() : null,
     outputDirectory: OUT_DIR,
@@ -85,7 +89,7 @@ function writeManifest(status, extra = {}) {
     buildings: BUILDINGS,
     collectionStrategy: COLLECTION_STRATEGY,
     ...extra,
-  }, null, 2), 'utf8');
+  }, IDENTITY), null, 2), 'utf8');
 }
 
 let _runStartedAt = 0;
@@ -549,9 +553,8 @@ async function main() {
   }, { devices: 0, success: 0, failed: 0, defaultLike: 0, invalidLock: 0, preservedRawRows: 0, rawAnomalyRows: 0, elapsedMs: 0 });
 
     const outPath = path.join(OUT_DIR, `realtime_all_buildings_batch_summary_${timestamp()}.json`);
-    const summary = {
+    const summary = withBatchIdentity({
     createdAt: formatLocalTimestamp(),
-    runId: RUN_ID > 0 ? RUN_ID : null,
     wallElapsedMs: Date.now() - startedAt,
     options: {
       buildings: BUILDINGS,
@@ -575,11 +578,27 @@ async function main() {
     },
     total,
     results,
-  };
+    }, IDENTITY);
     fs.writeFileSync(outPath, JSON.stringify(summary, null, 2), 'utf8');
+    const generatedArtifacts = [
+      outPath,
+      ...results.flatMap(result => {
+        const jsonPath = result.file;
+        const ndjsonPath = jsonPath && jsonPath.endsWith('.json')
+          ? jsonPath.slice(0, -'.json'.length) + '.ndjson'
+          : null;
+        return [jsonPath, ndjsonPath].filter(Boolean);
+      }),
+      ...fs.readdirSync(OUT_DIR)
+        .filter(name => /^realtime_.*\.log$/i.test(name))
+        .map(name => path.join(OUT_DIR, name))
+        .filter(file => {
+          try { return fs.statSync(file).mtimeMs >= startedAt - 1000; } catch { return false; }
+        }),
+    ];
     writeManifest('completed', {
       summaryPath: outPath,
-      resultFiles: results.map(result => result.file),
+      resultFiles: [...new Set(generatedArtifacts)],
       total,
     });
     console.log(`[ALL DONE] ${outPath}`);

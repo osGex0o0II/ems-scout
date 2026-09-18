@@ -181,6 +181,44 @@ public sealed class RealtimeLatestJsonSourceTests
     }
 
     [Fact]
+    public async Task SearchesOlderFileWhenNewestFileBelongsToAnotherBatch()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-realtime-source-identity-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(root, "realtime_1号_20260917_010000.json"), """
+                {
+                  "runId": 7,
+                  "batchUid": "target-batch",
+                  "runKey": "target-run",
+                  "capturedAt": "2026-09-17T01:00:00+08:00",
+                  "rows": [{"building":"1号","name":"target"}]
+                }
+                """);
+            await File.WriteAllTextAsync(Path.Combine(root, "realtime_1号_20260917_020000.json"), """
+                {
+                  "runId": 8,
+                  "batchUid": "other-batch",
+                  "runKey": "other-run",
+                  "capturedAt": "2026-09-17T02:00:00+08:00",
+                  "rows": [{"building":"1号","name":"other"}]
+                }
+                """);
+
+            var source = new RealtimeLatestJsonSource(root, root);
+            var details = await source.LoadAsync(["1号"], 7, "target-batch", "target-run");
+
+            Assert.Equal(RealtimeDetailAvailability.Available, details.Availability);
+            Assert.Equal("target", Assert.Single(details.Rows).Name);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task RejectsRealtimeFileFromAnotherRun()
     {
         var root = Path.Combine(Path.GetTempPath(), "ems-scout-realtime-source-tests", Guid.NewGuid().ToString("N"));
@@ -202,6 +240,34 @@ public sealed class RealtimeLatestJsonSourceTests
         Assert.Empty(details.Rows);
         Assert.Contains("当前批次 #8", details.StatusText);
         Assert.Equal(7, details.SourceRunId);
+    }
+
+    [Fact]
+    public async Task RejectsRealtimeFileWithMatchingRunIdButDifferentBatchUid()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "ems-scout-realtime-batch-identity-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            await File.WriteAllTextAsync(Path.Combine(root, "realtime_1号_20260917_010000.json"), """
+                {
+                  "runId": 7,
+                  "batchUid": "old-batch",
+                  "capturedAt": "2026-09-17T01:00:00+08:00",
+                  "rows": [{"building":"1号","name":"1-0101-KT"}]
+                }
+                """);
+
+            IRealtimeDetailSource source = new RealtimeLatestJsonSource(root, root);
+            var details = await source.LoadAsync(["1号"], "new-batch");
+
+            Assert.Equal(RealtimeDetailAvailability.MissingSnapshot, details.Availability);
+            Assert.Contains("批次", details.StatusText, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]

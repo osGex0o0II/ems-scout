@@ -73,7 +73,10 @@ public partial class App : Microsoft.UI.Xaml.Application
         }
         catch (Exception exception)
         {
-            Debug.WriteLine("SQLite schema migration was skipped: " + exception.Message);
+            Debug.WriteLine("SQLite schema migration failed: " + exception);
+            _window = new StartupFailureWindow(exception);
+            _window.Activate();
+            return;
         }
         _window = new MainWindow();
         _window.Activate();
@@ -145,9 +148,14 @@ public partial class App : Microsoft.UI.Xaml.Application
             () => provider.GetRequiredService<AppDataPathService>().QualityOutputDirectory,
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
         services.AddSingleton<IRealtimeQualityAuditService>(provider => new JsonRealtimeQualityAuditService(
-            () => provider.GetRequiredService<AppDataPathService>().QualityOutputDirectory));
-        services.AddSingleton<ICollectionRunRepository>(provider => new SqliteCollectionRunRepository(
+            () => provider.GetRequiredService<AppDataPathService>().QualityOutputDirectory,
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
+        services.AddSingleton<CollectionRunActivityRegistry>();
+        services.AddSingleton<ICollectionRunActivity>(provider =>
+            provider.GetRequiredService<CollectionRunActivityRegistry>());
+        services.AddSingleton<ICollectionRunRepository>(provider => new SqliteCollectionRunRepository(
+            () => provider.GetRequiredService<AppDataPathService>().DatabasePath,
+            provider.GetRequiredService<ICollectionRunActivity>()));
         services.AddSingleton<IAreaGroupRepository>(provider => new SqliteAreaGroupRepository(
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
         services.AddSingleton<NavigationService>();
