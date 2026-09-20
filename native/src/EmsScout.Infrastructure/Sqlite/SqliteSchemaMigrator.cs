@@ -15,6 +15,11 @@ public sealed class SqliteSchemaMigrator(Func<string> databasePathResolver)
 
         await using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadWrite");
         await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using (var pragma = connection.CreateCommand())
+        {
+            pragma.CommandText = "PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 10000;";
+            await pragma.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
         await using var transaction = (SqliteTransaction)await connection
             .BeginTransactionAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -26,7 +31,133 @@ public sealed class SqliteSchemaMigrator(Func<string> databasePathResolver)
         await EnsureLegacyCurrentDataStateAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         await EnsureQualityColumnsAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         await EnsureRealtimeSnapshotSchemaAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        await EnsureAreaGroupRuleSchemaAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        await AreaGroupRuleOrderMigration.ApplyAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task EnsureAreaGroupRuleSchemaAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, transaction, "monitor_groups", cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
+
+        await AddColumnIfMissingAsync(connection, transaction, "monitor_groups", "group_key", "TEXT NOT NULL DEFAULT ''", cancellationToken).ConfigureAwait(false);
+        await using (var schema = connection.CreateCommand())
+        {
+            schema.Transaction = transaction;
+            schema.CommandText = """
+                CREATE UNIQUE INDEX IF NOT EXISTS ux_monitor_groups_group_key
+                    ON monitor_groups(group_key) WHERE group_key <> '';
+                CREATE TABLE IF NOT EXISTS area_group_rules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    group_id INTEGER NOT NULL,
+                    rule_order INTEGER NOT NULL DEFAULT 0,
+                    building TEXT NOT NULL,
+                    zuo TEXT NOT NULL DEFAULT '-',
+                    floor_label TEXT NOT NULL DEFAULT '',
+                    floor_value REAL,
+                    match_mode TEXT NOT NULL,
+                    keywords TEXT NOT NULL,
+                    note TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(group_id) REFERENCES monitor_groups(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_area_group_rules_group_order
+                    ON area_group_rules(group_id, rule_order, id);
+                CREATE TABLE IF NOT EXISTS run_area_group_rules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER NOT NULL,
+                    group_id INTEGER NOT NULL,
+                    group_key TEXT NOT NULL DEFAULT '',
+                    group_name TEXT NOT NULL DEFAULT '',
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    rule_order INTEGER NOT NULL,
+                    building TEXT NOT NULL,
+                    zuo TEXT NOT NULL DEFAULT '-',
+                    floor_label TEXT NOT NULL DEFAULT '',
+                    floor_value REAL,
+                    match_mode TEXT NOT NULL,
+                    keywords TEXT NOT NULL DEFAULT '',
+                    note TEXT NOT NULL DEFAULT '',
+                    FOREIGN KEY(run_id) REFERENCES collection_runs(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_run_area_group_rules_run_group
+                    ON run_area_group_rules(run_id, group_id, rule_order, id);
+                CREATE TABLE IF NOT EXISTS ems_schema_migrations (
+                    name TEXT PRIMARY KEY,
+                    applied_at TEXT NOT NULL
+                );
+                """;
+            await schema.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using var exists = connection.CreateCommand();
+        exists.Transaction = transaction;
+        exists.CommandText = "SELECT 1 FROM ems_schema_migrations WHERE name = 'area-groups-rules-v1'";
+        if (await exists.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
+        {
+            await CleanupLegacyAreaStorageAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        var clearStatements = new List<string> { "DELETE FROM area_group_rules" };
+        if (await TableExistsAsync(connection, transaction, "monitor_group_items", cancellationToken).ConfigureAwait(false))
+        {
+            // Legacy members reference monitor_groups without cascade delete.
+            // Remove them before deleting groups that are not retained for Watch.
+            clearStatements.Add("DELETE FROM monitor_group_items");
+        }
+        if (await TableExistsAsync(connection, transaction, "device_watch_rules", cancellationToken).ConfigureAwait(false))
+        {
+            clearStatements.Add("UPDATE monitor_groups SET enabled = 0, group_kind = 'custom', system_key = NULL, locked = 0, group_key = '' WHERE EXISTS (SELECT 1 FROM device_watch_rules WHERE device_watch_rules.group_id = monitor_groups.id)");
+            clearStatements.Add("DELETE FROM monitor_groups WHERE NOT EXISTS (SELECT 1 FROM device_watch_rules WHERE device_watch_rules.group_id = monitor_groups.id)");
+            clearStatements.Add("DELETE FROM device_watch_rules WHERE NOT EXISTS (SELECT 1 FROM monitor_groups WHERE monitor_groups.id = device_watch_rules.group_id)");
+        }
+        else
+        {
+            clearStatements.Add("DELETE FROM monitor_groups");
+        }
+        if (await TableExistsAsync(connection, transaction, "monitor_group_items", cancellationToken).ConfigureAwait(false))
+            clearStatements.Add("DROP TABLE monitor_group_items");
+        if (await TableExistsAsync(connection, transaction, "legacy_area_api_state", cancellationToken).ConfigureAwait(false))
+            clearStatements.Add("DROP TABLE legacy_area_api_state");
+        await using (var clear = connection.CreateCommand())
+        {
+            clear.Transaction = transaction;
+            clear.CommandText = string.Join(';', clearStatements);
+            await clear.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using var mark = connection.CreateCommand();
+        mark.Transaction = transaction;
+        mark.CommandText = "INSERT INTO ems_schema_migrations(name, applied_at) VALUES ('area-groups-rules-v1', $applied_at)";
+        mark.Parameters.AddWithValue("$applied_at", StoredTimestamp.FormatLocal(DateTimeOffset.Now));
+        await mark.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task CleanupLegacyAreaStorageAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        CancellationToken cancellationToken)
+    {
+        var statements = new List<string>();
+        if (await TableExistsAsync(connection, transaction, "monitor_group_items", cancellationToken).ConfigureAwait(false))
+            statements.Add("DROP TABLE monitor_group_items");
+        if (await TableExistsAsync(connection, transaction, "legacy_area_api_state", cancellationToken).ConfigureAwait(false))
+            statements.Add("DROP TABLE legacy_area_api_state");
+        if (statements.Count == 0)
+            return;
+
+        await using var cleanup = connection.CreateCommand();
+        cleanup.Transaction = transaction;
+        cleanup.CommandText = string.Join(';', statements);
+        await cleanup.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task EnsureCollectionRunColumnsAsync(
@@ -42,6 +173,7 @@ public sealed class SqliteSchemaMigrator(Func<string> databasePathResolver)
         await AddColumnIfMissingAsync(connection, transaction, "collection_runs", "source", "TEXT NOT NULL DEFAULT '采集导入'", cancellationToken).ConfigureAwait(false);
         await AddColumnIfMissingAsync(connection, transaction, "collection_runs", "run_no", "INTEGER", cancellationToken).ConfigureAwait(false);
         await AddColumnIfMissingAsync(connection, transaction, "collection_runs", "data_version", "TEXT NOT NULL DEFAULT 'v1.0.0'", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(connection, transaction, "collection_runs", "collection_mode", "TEXT NOT NULL DEFAULT ''", cancellationToken).ConfigureAwait(false);
         await AddColumnIfMissingAsync(connection, transaction, "collection_runs", "operator_name", "TEXT NOT NULL DEFAULT '本机'", cancellationToken).ConfigureAwait(false);
         await AddColumnIfMissingAsync(connection, transaction, "collection_runs", "restored_from_run_id", "INTEGER", cancellationToken).ConfigureAwait(false);
         await AddColumnIfMissingAsync(connection, transaction, "collection_runs", "batch_uid", "TEXT NOT NULL DEFAULT ''", cancellationToken).ConfigureAwait(false);

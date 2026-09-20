@@ -1222,7 +1222,7 @@ public sealed partial class CollectionTaskViewModel(
                     : runQualityAfterImport ? 88 : 94;
                 ProgressValue = Math.Max(ProgressValue, importProgress - 2);
                 ProgressText = "正在导入 SQLite";
-                await RunImportAsync(selectedBuildings, settings, _activeTask.Token);
+                await RunImportAsync(selectedBuildings, settings, realtimeCollectionStrategy, _activeTask.Token);
                 if (_targetRunId is > 0)
                 {
                     await EnsureTargetRunIdentityAsync(_targetRunId.Value, _activeTask.Token).ConfigureAwait(true);
@@ -1616,6 +1616,7 @@ public sealed partial class CollectionTaskViewModel(
     private Task RunImportAsync(
         IReadOnlyList<string> buildings,
         AppSettings settings,
+        string collectionStrategy,
         CancellationToken cancellationToken)
     {
         return RunStepAsync(
@@ -1623,7 +1624,7 @@ public sealed partial class CollectionTaskViewModel(
             Path.Combine("scripts", "import.js"),
             ["--bldg=" + string.Join(",", buildings)],
             cancellationToken,
-            BuildTaskEnvironment(settings));
+            BuildTaskEnvironment(settings, collectionStrategy));
     }
 
     private Task RunValidationAsync(
@@ -1860,7 +1861,7 @@ public sealed partial class CollectionTaskViewModel(
             BuildTaskEnvironment(settings));
     }
 
-    private IReadOnlyDictionary<string, string> BuildTaskEnvironment(AppSettings settings)
+    private IReadOnlyDictionary<string, string> BuildTaskEnvironment(AppSettings settings, string? collectionStrategy = null)
     {
         var environment = new Dictionary<string, string>(pathService.BuildDataEnvironment())
         {
@@ -1869,6 +1870,10 @@ public sealed partial class CollectionTaskViewModel(
             ["REALTIME_BROWSER_MODE"] = "cdp",
             ["EMS_RUN_STARTED_AT"] = StoredTimestamp.FormatLocal(_taskStartedAt),
         };
+        if (!string.IsNullOrWhiteSpace(collectionStrategy))
+        {
+            environment["EMS_COLLECTION_STRATEGY"] = collectionStrategy;
+        }
         if (_targetRunId is > 0)
         {
             environment["EMS_RUN_ID"] = _targetRunId.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);

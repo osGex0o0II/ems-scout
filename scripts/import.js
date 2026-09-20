@@ -101,7 +101,26 @@ function ensureSchema() {
     CREATE INDEX IF NOT EXISTS idx_cd_pg ON cards(page_id);
     CREATE INDEX IF NOT EXISTS idx_cd_sw ON cards(switch);
     CREATE INDEX IF NOT EXISTS idx_cd_name ON cards(name);
+
+    CREATE TABLE IF NOT EXISTS area_group_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_id INTEGER NOT NULL,
+      rule_order INTEGER NOT NULL DEFAULT 0,
+      building TEXT NOT NULL,
+      zuo TEXT NOT NULL DEFAULT '-',
+      floor_label TEXT NOT NULL DEFAULT '',
+      floor_value REAL,
+      match_mode TEXT NOT NULL,
+      keywords TEXT NOT NULL DEFAULT '',
+      note TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(group_id) REFERENCES monitor_groups(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_area_group_rules_group_order
+      ON area_group_rules(group_id, rule_order, id);
   `);
+  try { db.exec("ALTER TABLE monitor_groups ADD COLUMN group_key TEXT NOT NULL DEFAULT ''"); } catch {}
   ensureHistorySchema(db);
   try { db.exec('ALTER TABLE buildings ADD COLUMN updated_at TEXT'); } catch {}
   try { db.exec('ALTER TABLE sub_areas ADD COLUMN sub_idx INT'); } catch {}
@@ -217,6 +236,7 @@ const importCurrent = db.transaction(() => {
     startedAt: process.env.EMS_RUN_STARTED_AT || undefined,
     completedAt: collectedAt,
     jsonPath: JSON_PATH,
+    collectionMode: process.env.EMS_COLLECTION_STRATEGY || '',
     note: IMPORT_FILTER ? 'Native/脚本单栋或多栋导入' : 'Native/脚本全量导入',
   });
 });

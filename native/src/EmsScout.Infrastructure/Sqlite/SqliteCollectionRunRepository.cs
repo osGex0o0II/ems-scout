@@ -760,6 +760,7 @@ public sealed class SqliteCollectionRunRepository(
             SnapshotCardCount: ReadInt32(reader, "snapshot_card_count"),
             Source: ReadString(reader, "source", "采集导入"),
             DataVersion: ReadString(reader, "data_version", "v1.0.0"),
+            CollectionMode: ReadString(reader, "collection_mode"),
             Operator: ReadString(reader, "operator_name", "本机"),
             RestoredFromRunId: ReadNullableInt64(reader, "restored_from_run_id"),
             BatchUid: ReadString(reader, "batch_uid"),
@@ -1681,6 +1682,12 @@ public sealed class SqliteCollectionRunRepository(
             "collection_runs",
             "data_version",
             "TEXT NOT NULL DEFAULT 'v1.0.0'",
+            cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(
+            connection,
+            "collection_runs",
+            "collection_mode",
+            "TEXT NOT NULL DEFAULT ''",
             cancellationToken).ConfigureAwait(false);
         await AddColumnIfMissingAsync(
             connection,

@@ -3,99 +3,56 @@ namespace EmsScout.Tests;
 public sealed class HistoryDataUiContractTests
 {
     [Fact]
-    public void AuditPageMakesHistoryTheDefaultWorkspace()
+    public void AuditPageExposesHistoryIssuesAndDetailsAsTheOnlyAuditWorkspaces()
     {
         var root = LocateRepositoryRoot();
         var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "AuditPage.xaml"));
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "AuditViewModel.cs"));
 
-        Assert.Contains("x:Name=\"WorkspacePivot\"", xaml);
-        Assert.Contains("SelectedIndex=\"0\"", xaml);
-        Assert.Contains("Header=\"历史数据\"", xaml);
-        Assert.Contains("Header=\"数据对比\"", xaml);
-        Assert.Contains("Header=\"质量审计\"", xaml);
-        Assert.Contains("FilteredRuns", xaml);
-        Assert.Contains("HistoryBuildingOptions", xaml);
-        Assert.Contains("ApplyHistoryFilterCommand", xaml);
+        Assert.Contains("Header=\"历史批次\"", xaml);
+        Assert.Contains("Header=\"采集问题\"", xaml);
+        Assert.Contains("Header=\"问题详情\"", xaml);
+        Assert.Contains("完成时间", xaml);
+        Assert.Contains("用时", xaml);
+        Assert.Contains("范围", xaml);
+        Assert.Contains("卡片数量", xaml);
+        Assert.Contains("采集模式", xaml);
+        Assert.Contains("版本", xaml);
+        Assert.Contains("DeleteRun_Click", xaml);
+        Assert.Contains("IssueCategories", xaml);
+        Assert.Contains("IssueRecords", xaml);
+        Assert.Contains("ICollectionIssueService", viewModel);
     }
 
     [Fact]
-    public void AuditPageDoesNotKeepNestedDualAuditScrollLayout()
-    {
-        var root = LocateRepositoryRoot();
-        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "AuditPage.xaml"));
-
-        Assert.DoesNotContain("<ScrollViewer VerticalScrollBarVisibility=\"Auto\">", xaml);
-        Assert.DoesNotContain("<ScrollViewer Grid.Column", xaml);
-        Assert.Contains("SelectedRunDetail", xaml);
-        Assert.Contains("SelectedBuildingDifferences", xaml);
-    }
-
-    [Fact]
-    public void AuditPageRequiresComparisonBeforeRestore()
+    public void AuditPageRemovesComparisonRestoreAndStandaloneAuditActions()
     {
         var root = LocateRepositoryRoot();
         var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "AuditPage.xaml"));
         var codeBehind = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "AuditPage.xaml.cs"));
         var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "AuditViewModel.cs"));
 
-        Assert.Contains("LoadSelectedComparisonCommand", xaml);
-        Assert.Contains("RestoreRun_Click", codeBehind);
-        Assert.Contains("SelectedComparison is { IsRestorable: true }", viewModel);
-        Assert.Contains("恢复前会自动备份当前数据", codeBehind);
+        foreach (var removed in new[] { "数据对比", "恢复当前数据", "基础审计", "实时审计", "运行质量审计", "运行实时审计", "刷新对比", "SelectedComparison", "RestoreRunAsync", "CompareCurrentAsync" })
+        {
+            Assert.DoesNotContain(removed, xaml);
+            Assert.DoesNotContain(removed, codeBehind);
+            Assert.DoesNotContain(removed, viewModel);
+        }
     }
 
     [Fact]
-    public void ComparisonPageProvidesBatchSelectionAndRefreshesTheDefaultSelection()
+    public void AuditPageShowsAllIssueDetailFieldsAndBatchDeleteScope()
     {
         var root = LocateRepositoryRoot();
         var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "AuditPage.xaml"));
-        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "AuditViewModel.cs"));
+        var codeBehind = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "AuditPage.xaml.cs"));
 
-        Assert.Contains("AutomationProperties.Name=\"选择对比批次\"", xaml);
-        Assert.Contains("ItemsSource=\"{x:Bind ViewModel.FilteredRuns, Mode=OneWay}\"", xaml);
-        Assert.Contains("SelectedItem=\"{x:Bind ViewModel.SelectedRun, Mode=TwoWay}\"", xaml);
-        Assert.Contains("SelectedRun = selectedId.HasValue", viewModel);
-        Assert.Contains("FilteredRuns.FirstOrDefault", viewModel);
-    }
-
-    [Fact]
-    public void ComparisonBatchPickerUsesContentDrivenWidth()
-    {
-        var root = LocateRepositoryRoot();
-        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "AuditPage.xaml"));
-
-        var pickerStart = xaml.IndexOf("AutomationProperties.Name=\"选择对比批次\"", StringComparison.Ordinal);
-        var pickerEnd = xaml.IndexOf(" />", pickerStart, StringComparison.Ordinal);
-        Assert.True(pickerStart >= 0);
-        Assert.True(pickerEnd > pickerStart);
-
-        var picker = xaml[pickerStart..pickerEnd];
-        Assert.DoesNotContain("Width=\"460\"", picker);
-        Assert.Contains("HorizontalAlignment=\"Left\"", picker);
-        Assert.Contains("PlaceholderText=\"没有可用历史批次\"", picker);
-    }
-
-    [Fact]
-    public void ComparisonSelectionUpdatesRestoreStateAndRejectsStaleResults()
-    {
-        var root = LocateRepositoryRoot();
-        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "AuditViewModel.cs"));
-
-        Assert.Contains("[NotifyPropertyChangedFor(nameof(CanRestoreSelectedRun))]", viewModel);
-        Assert.Contains("SelectedRun?.Id != runId", viewModel);
-        Assert.Contains("CancellationTokenSource", viewModel);
-        Assert.Contains("!run.IsCurrent", viewModel);
-    }
-
-    [Fact]
-    public void SelectedHistoryBatchShowsMissingQualityReportAsBatchSpecificState()
-    {
-        var root = LocateRepositoryRoot();
-        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "AuditViewModel.cs"));
-
-        Assert.Contains("批次 #{SelectedRun.Id} 没有质量报告", viewModel);
-        Assert.Contains("该批次没有可关联的质量审计结果", viewModel);
-        Assert.Contains("reportRunId != runId", File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Infrastructure", "Quality", "JsonQualityAuditService.cs")));
+        Assert.Contains("页面现象 / 证据", xaml);
+        Assert.Contains("采集判断 / 原因", xaml);
+        Assert.Contains("设备", xaml);
+        Assert.Contains("清除筛选", xaml);
+        Assert.Contains("SQLite 数据、批次 JSON、NDJSON、质量报告和实时报告", codeBehind);
+        Assert.Contains("日志文件不会随批次删除", codeBehind);
     }
 
     private static string LocateRepositoryRoot()

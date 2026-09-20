@@ -61,7 +61,8 @@ public sealed record CollectionRunRecord(
     string LifecycleState = "completed",
     string? CurrentRevisionUid = null,
     string? RestoredFromBatchUid = null,
-    long RunNumber = 0)
+    long RunNumber = 0,
+    string CollectionMode = "")
 {
     public IReadOnlyDictionary<string, int> BuildingCardCounts { get; init; } =
         new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);

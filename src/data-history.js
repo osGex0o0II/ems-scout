@@ -61,6 +61,7 @@ function ensureHistorySchema(db) {
       offline_count INTEGER NOT NULL DEFAULT 0,
       unknown_count INTEGER NOT NULL DEFAULT 0,
       quality_summary TEXT NOT NULL DEFAULT '{}',
+      collection_mode TEXT NOT NULL DEFAULT '',
       is_anomaly INTEGER NOT NULL DEFAULT 0,
       note TEXT NOT NULL DEFAULT '',
       restored_from_run_id INTEGER,
@@ -212,6 +213,26 @@ function ensureHistorySchema(db) {
     CREATE INDEX IF NOT EXISTS idx_run_realtime_details_run_building
       ON run_realtime_details(run_id, building);
 
+    CREATE TABLE IF NOT EXISTS run_area_group_rules (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      run_id INTEGER NOT NULL,
+      group_id INTEGER NOT NULL,
+      group_key TEXT NOT NULL DEFAULT '',
+      group_name TEXT NOT NULL DEFAULT '',
+      enabled INTEGER NOT NULL DEFAULT 1,
+      rule_order INTEGER NOT NULL,
+      building TEXT NOT NULL,
+      zuo TEXT NOT NULL DEFAULT '-',
+      floor_label TEXT NOT NULL DEFAULT '',
+      floor_value REAL,
+      match_mode TEXT NOT NULL,
+      keywords TEXT NOT NULL DEFAULT '',
+      note TEXT NOT NULL DEFAULT '',
+      FOREIGN KEY(run_id) REFERENCES collection_runs(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_run_area_group_rules_run_group
+      ON run_area_group_rules(run_id, group_id, rule_order, id);
+
     CREATE TABLE IF NOT EXISTS floor_catalog (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       building TEXT NOT NULL,
@@ -230,6 +251,7 @@ function ensureHistorySchema(db) {
   try { db.exec("ALTER TABLE collection_runs ADD COLUMN quality_summary TEXT NOT NULL DEFAULT '{}'"); } catch {}
   try { db.exec('ALTER TABLE collection_runs ADD COLUMN run_no INTEGER'); } catch {}
   try { db.exec('ALTER TABLE collection_runs ADD COLUMN is_anomaly INTEGER NOT NULL DEFAULT 0'); } catch {}
+  try { db.exec("ALTER TABLE collection_runs ADD COLUMN collection_mode TEXT NOT NULL DEFAULT ''"); } catch {}
   try { db.exec('ALTER TABLE collection_runs ADD COLUMN restored_from_run_id INTEGER'); } catch {}
   try { db.exec("ALTER TABLE collection_runs ADD COLUMN batch_uid TEXT NOT NULL DEFAULT ''"); } catch {}
   try { db.exec("ALTER TABLE collection_runs ADD COLUMN lifecycle_state TEXT NOT NULL DEFAULT 'completed'"); } catch {}
@@ -736,11 +758,14 @@ function createRunFromCurrent(db, options = {}) {
   const revisionUid = options.currentRevisionUid || crypto.randomUUID();
   const scope = selected.length && selected.length < BLDG_ORDER.length ? 'partial' : 'full';
   const buildings = selected.length ? selected : db.prepare('SELECT DISTINCT building FROM sub_areas ORDER BY building').all().map(r => r.building);
+  const hasAreaRuleSnapshotSource = hasTable(db, 'monitor_groups') &&
+    hasTable(db, 'area_group_rules') &&
+    hasColumn(db, 'monitor_groups', 'group_key');
 
   const insertRun = db.prepare(`
     INSERT INTO collection_runs
-      (id, run_no, run_key, batch_uid, started_at, completed_at, imported_at, status, scope, buildings, json_path, db_snapshot_path, note, lifecycle_state, current_revision_uid)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, run_no, run_key, batch_uid, started_at, completed_at, imported_at, status, scope, buildings, json_path, db_snapshot_path, note, lifecycle_state, current_revision_uid, collection_mode)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertRunBuilding = db.prepare(`
     INSERT INTO run_buildings (run_id, building, sub_area_count, menu_clicked, updated_at)
@@ -765,6 +790,18 @@ function createRunFromCurrent(db, options = {}) {
     SET card_count = ?, on_count = ?, off_count = ?, offline_count = ?, unknown_count = ?
     WHERE id = ?
   `);
+  const insertAreaGroupRules = hasAreaRuleSnapshotSource
+    ? db.prepare(`
+        INSERT INTO run_area_group_rules
+          (run_id, group_id, group_key, group_name, enabled, rule_order, building, zuo,
+           floor_label, floor_value, match_mode, keywords, note)
+        SELECT ?, g.id, g.group_key, g.name, g.enabled, r.rule_order, r.building, r.zuo,
+               r.floor_label, r.floor_value, r.match_mode, r.keywords, r.note
+        FROM area_group_rules r
+        JOIN monitor_groups g ON g.id = r.group_id
+        WHERE COALESCE(g.group_key, '') <> ''
+      `)
+    : null;
 
   const tx = db.transaction(() => {
     const runKey = uniqueRunKey(db, requestedRunKey);
@@ -789,12 +826,14 @@ function createRunFromCurrent(db, options = {}) {
       options.dbSnapshotPath || null,
       options.note || '',
       options.lifecycleState || options.status || 'completed',
-      revisionUid
+      revisionUid,
+      options.collectionMode || ''
     );
     const insertedRunId = Number(res.lastInsertRowid);
     if (insertedRunId !== runId) {
       throw new Error(`Allocated collection run id ${runId}, but SQLite inserted ${insertedRunId}`);
     }
+    if (insertAreaGroupRules) insertAreaGroupRules.run(runId);
     const bRows = db.prepare(`
       SELECT building, sub_area_count, menu_clicked, updated_at
       FROM buildings
@@ -953,6 +992,18 @@ function seedCurrentRun(db) {
 function tableCount(db, table) {
   try { return db.prepare(`SELECT COUNT(*) AS c FROM ${table}`).get().c; }
   catch { return 0; }
+}
+
+function hasTable(db, table) {
+  return Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table));
+}
+
+function hasColumn(db, table, column) {
+  try {
+    return db.prepare(`PRAGMA table_info(${table})`).all().some(row => row.name === column);
+  } catch {
+    return false;
+  }
 }
 
 function syncFloorCatalogFromCurrent(db) {

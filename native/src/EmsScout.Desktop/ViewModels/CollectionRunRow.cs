@@ -35,6 +35,10 @@ public sealed class CollectionRunRow(CollectionRunRecord record, bool isCurrent 
 
     public string VersionLabel { get; } = string.IsNullOrWhiteSpace(record.DataVersion) ? "v1.0.0" : record.DataVersion;
 
+    public string DurationLabel { get; } = CollectionRunDisplay.DurationLabel(record);
+
+    public string CollectionModeLabel { get; } = CollectionRunDisplay.CollectionModeLabel(record);
+
     public string OperatorLabel { get; } = string.IsNullOrWhiteSpace(record.Operator) ? "本机" : record.Operator;
 
     public bool IsCurrent { get; } = isCurrent;
