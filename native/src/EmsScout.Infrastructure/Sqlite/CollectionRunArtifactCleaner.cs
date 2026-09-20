@@ -21,6 +21,8 @@ public sealed class CollectionRunArtifactCleaner(Func<string> databasePathResolv
             ($"collection_manifest_{run.Id}.json", "manifest"),
             ($"realtime_all_buildings_batch_summary_run{run.Id}.json", "realtime-summary"),
             ($"realtime_all_buildings_batch_failure_run{run.Id}.json", "realtime-failure"),
+            ($"realtime_quality_classified_run{run.Id}.json", "realtime-quality"),
+            ($"realtime_quality_classified_{run.Id}.json", "realtime-quality"),
             ($"realtime_all_batch_run{run.Id}.log", "realtime-log"),
         };
 
