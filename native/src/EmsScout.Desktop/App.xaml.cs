@@ -117,6 +117,8 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton(provider => new AppDataPathService(
             workspaceRoot,
             provider.GetRequiredService<AppSettingsService>()));
+        services.AddSingleton<LocalLogCleanupService>(provider => new LocalLogCleanupService(
+            () => provider.GetRequiredService<AppDataPathService>().DataDirectory));
         services.AddSingleton(provider => new SqliteSchemaMigrator(
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
         services.AddSingleton<AppUiSettingsService>();

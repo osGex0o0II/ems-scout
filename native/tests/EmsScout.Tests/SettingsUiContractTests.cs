@@ -3,6 +3,22 @@ namespace EmsScout.Tests;
 public sealed class SettingsUiContractTests
 {
     [Fact]
+    public void SettingsProvidesLocalLogCleanupWithoutBatchDataDeletion()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "SettingsPage.xaml"));
+        var codeBehind = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "SettingsPage.xaml.cs"));
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "SettingsViewModel.cs"));
+        var app = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "App.xaml.cs"));
+
+        Assert.Contains("清空本地日志", xaml);
+        Assert.Contains("PreviewLocalLogCleanup", viewModel);
+        Assert.Contains("ClearLocalLogs", codeBehind);
+        Assert.Contains("LocalLogCleanupService", app);
+        Assert.DoesNotContain("SQLite", xaml);
+    }
+
+    [Fact]
     public void SettingsModelExposesTheNewUserPreferences()
     {
         var root = LocateRepositoryRoot();

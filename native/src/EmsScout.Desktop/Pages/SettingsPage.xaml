@@ -277,6 +277,13 @@
                                     <ComboBoxItem Content="调试" />
                                 </ComboBox>
                                 <ToggleSwitch Header="保存 NDJSON 日志" OnContent="开" OffContent="关" IsOn="{x:Bind ViewModel.SaveNdjsonLog, Mode=TwoWay}" />
+                                <Button Click="ClearLocalLogs_Click" Style="{StaticResource ToolbarButtonStyle}" HorizontalAlignment="Left">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <SymbolIcon Symbol="Delete" />
+                                        <TextBlock Text="清空本地日志" />
+                                    </StackPanel>
+                                </Button>
+                                <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="只清理日志文件，不删除批次数据、报告或导出文件。" TextWrapping="WrapWholeWords" />
                             </StackPanel>
                             <StackPanel Spacing="4">
                                 <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="设置文件" />

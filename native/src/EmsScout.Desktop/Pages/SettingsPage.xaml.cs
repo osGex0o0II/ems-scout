@@ -86,6 +86,39 @@ public sealed partial class SettingsPage : Page
         }
     }
 
+    private async void ClearLocalLogs_Click(object sender, RoutedEventArgs e)
+    {
+        var preview = ViewModel.PreviewLocalLogCleanup();
+        var content = preview.FileCount == 0
+            ? "当前数据目录没有可清理的本地日志。"
+            : $"将清理 {preview.FileCount:N0} 个本地日志文件，共 {preview.TotalBytes:N0} 字节。\n\n" +
+              "不会删除 SQLite、JSON、NDJSON、质量报告、实时报告或导出文件。";
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "清空本地日志？",
+            Content = content,
+            PrimaryButtonText = preview.FileCount == 0 ? "关闭" : "清空日志",
+            CloseButtonText = preview.FileCount == 0 ? null : "取消",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        if (preview.FileCount == 0 || await dialog.ShowAsync() != ContentDialogResult.Primary)
+        {
+            return;
+        }
+
+        var result = ViewModel.ClearLocalLogs();
+        var detail = $"已清理：{result.DeletedCount:N0} 个\n跳过：{result.SkippedPaths.Count:N0} 个\n失败：{result.FailedPaths.Count:N0} 个";
+        await new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = result.IsComplete ? "本地日志已清理" : "本地日志清理未完全成功",
+            Content = detail,
+            CloseButtonText = "关闭",
+            DefaultButton = ContentDialogButton.Close,
+        }.ShowAsync();
+    }
+
     private async Task<string?> PickFolderAsync()
     {
         var picker = new FolderPicker

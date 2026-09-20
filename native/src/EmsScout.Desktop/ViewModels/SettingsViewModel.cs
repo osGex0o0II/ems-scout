@@ -5,7 +5,9 @@ using Windows.UI;
 
 namespace EmsScout.Desktop.ViewModels;
 
-public sealed partial class SettingsViewModel(AppSettingsService settingsService) : ObservableObject
+public sealed partial class SettingsViewModel(
+    AppSettingsService settingsService,
+    LocalLogCleanupService localLogCleanupService) : ObservableObject
 {
     public event EventHandler? SettingsApplied;
 
@@ -123,6 +125,19 @@ public sealed partial class SettingsViewModel(AppSettingsService settingsService
     public partial string StatusText { get; private set; } = "设置尚未加载";
 
     public string SettingsPath => settingsService.SettingsPath;
+
+    public LocalLogCleanupPreview PreviewLocalLogCleanup() => localLogCleanupService.Preview();
+
+    public LocalLogCleanupResult ClearLocalLogs()
+    {
+        var result = localLogCleanupService.Clear();
+        StatusText = result.IsComplete
+            ? result.DeletedCount == 0
+                ? "没有可清理的本地日志"
+                : $"已清理 {result.DeletedCount:N0} 个本地日志文件"
+            : $"已清理 {result.DeletedCount:N0} 个日志文件；跳过 {result.SkippedPaths.Count:N0} 个；失败 {result.FailedPaths.Count:N0} 个";
+        return result;
+    }
 
     public void SetStatus(string text)
     {
