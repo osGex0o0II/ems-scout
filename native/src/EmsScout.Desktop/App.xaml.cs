@@ -150,6 +150,9 @@ public partial class App : Microsoft.UI.Xaml.Application
         services.AddSingleton<IRealtimeQualityAuditService>(provider => new JsonRealtimeQualityAuditService(
             () => provider.GetRequiredService<AppDataPathService>().QualityOutputDirectory,
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
+        services.AddSingleton<ICollectionIssueService>(provider => new JsonCollectionIssueService(
+            () => provider.GetRequiredService<AppDataPathService>().QualityOutputDirectory,
+            () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
         services.AddSingleton<CollectionRunActivityRegistry>();
         services.AddSingleton<ICollectionRunActivity>(provider =>
             provider.GetRequiredService<CollectionRunActivityRegistry>());
