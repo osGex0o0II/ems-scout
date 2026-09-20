@@ -137,7 +137,7 @@ public sealed class DashboardUiContractTests
             "ViewModels",
             "HomeViewModel.cs"));
 
-        Assert.Contains("自动分类", homeViewModelTail);
+        Assert.Contains("启用区域组", homeViewModelTail);
         Assert.Contains("summary.AreaType", row);
         Assert.Contains("summary.AreaType)", row);
     }
@@ -234,7 +234,7 @@ public sealed class DashboardUiContractTests
     }
 
     [Fact]
-    public void DashboardRendersGroupPriorityAndStateSummary()
+    public void DashboardRendersGroupNotesInsteadOfPriorityAndStateSummary()
     {
         var root = LocateRepositoryRoot();
         var xaml = File.ReadAllText(Path.Combine(
@@ -260,14 +260,28 @@ public sealed class DashboardUiContractTests
             "AuditPage.xaml"));
 
         Assert.DoesNotContain("优先处理", xaml);
-        Assert.Contains("{x:Bind Priority}", xaml);
-        Assert.Contains("{x:Bind StateText}", xaml);
-        Assert.Contains("{x:Bind Glyph}", xaml);
+        Assert.Equal(2, xaml.Split("Text=\"{x:Bind Description}\"", StringSplitOptions.None).Length - 1);
+        Assert.DoesNotContain("{x:Bind Priority}", xaml);
+        Assert.DoesNotContain("{x:Bind StateText}", xaml);
+        Assert.Contains("public string Description", File.ReadAllText(Path.Combine(
+            root,
+            "native",
+            "src",
+            "EmsScout.Desktop",
+            "ViewModels",
+            "HomeViewModel.cs")));
+        Assert.DoesNotContain("? \"自定义区域\"", File.ReadAllText(Path.Combine(
+            root,
+            "native",
+            "src",
+            "EmsScout.Desktop",
+            "ViewModels",
+            "HomeViewModel.cs")));
         Assert.DoesNotContain("RiskPanel", xaml);
         Assert.DoesNotContain("Risks_ItemClick", codeBehind);
-        Assert.Contains("基础质量审计", audit);
-        Assert.Contains("实时点位审计", audit);
-        Assert.Contains("实时对账", audit);
+        Assert.Contains("审计中心", audit);
+        Assert.DoesNotContain("运行质量审计", audit);
+        Assert.DoesNotContain("运行实时审计", audit);
     }
 
     [Fact]
@@ -365,7 +379,7 @@ public sealed class DashboardUiContractTests
     }
 
     [Fact]
-    public void AreaGroupsPageExposesPublicAndPrivateStateBreakdown()
+    public void AreaGroupsPageUsesGenericAreaGroupPresentation()
     {
         var root = LocateRepositoryRoot();
         var xaml = File.ReadAllText(Path.Combine(
@@ -383,17 +397,10 @@ public sealed class DashboardUiContractTests
             "ViewModels",
             "GroupSummaryRow.cs"));
 
-        Assert.Contains("Text=\"公区\"", xaml);
-        Assert.Contains("Text=\"非公区\"", xaml);
-        Assert.Contains("Text=\"公区开机\"", xaml);
-        Assert.Contains("Text=\"公区关机\"", xaml);
-        Assert.Contains("RunningCount", xaml);
-        Assert.Contains("StoppedCount", xaml);
-        Assert.Contains("PublicCount", row);
-        Assert.Contains("PrivateCount", row);
-        Assert.Contains("AreaBreakdownText", row);
-        Assert.Contains("PublicRunningCount", row);
-        Assert.Contains("PublicStoppedCount", row);
+        Assert.Contains("区域组规则", xaml);
+        Assert.Contains("GroupKey", row);
+        Assert.Contains("StateLabel", row);
+        Assert.DoesNotContain("不可编辑", row);
     }
 
     private static string LocateRepositoryRoot()

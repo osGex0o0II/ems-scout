@@ -20,51 +20,53 @@ public sealed partial class AuditPage : Page
         await ViewModel.InitializeAsync();
     }
 
-    private void OpenData_Click(object sender, RoutedEventArgs e)
-    {
-        ViewModel.OpenData();
-    }
-
-    private async void RestoreRun_Click(object sender, RoutedEventArgs e)
-    {
-        if (!ViewModel.CanRestoreSelectedRun || ViewModel.SelectedRun is null || ViewModel.SelectedComparison is null)
-        {
-            return;
-        }
-
-        var run = ViewModel.SelectedRun;
-        var comparison = ViewModel.SelectedComparison;
-        var scopeText = run.Scope.Equals("partial", StringComparison.OrdinalIgnoreCase)
-            ? $"只会替换 {string.Join("、", run.Buildings)} 的当前数据，其他楼栋保持不变。"
-            : "将替换全部楼栋的当前数据。";
-        var result = await ConfirmAsync(
-            "恢复历史批次",
-            $"将把批次 #{run.RunNumber} 恢复为当前数据，共 {run.CardCount:N0} 张卡片。\n\n" +
-            $"对比结果：历史 {comparison.SnapshotCardCount:N0} 张，当前 {comparison.CurrentCardCount:N0} 张，新增 {comparison.AddedCount:N0}，缺失 {comparison.MissingCount:N0}，字段差异 {comparison.ChangedCount:N0}。\n\n" +
-            $"{scopeText}\n恢复前会自动备份当前数据；备注和标签不会被删除。",
-            "恢复");
-        if (result)
-        {
-            await ViewModel.RestoreRunAsync();
-        }
-    }
-
     private async void DeleteRun_Click(object sender, RoutedEventArgs e)
     {
+        if (sender is FrameworkElement { DataContext: CollectionRunRow row })
+        {
+            ViewModel.SelectedRun = row;
+        }
+
         if (!ViewModel.CanDeleteSelectedRun || ViewModel.SelectedRun is null)
         {
             return;
         }
 
         var run = ViewModel.SelectedRun;
-        var result = await ConfirmAsync(
-            "删除历史批次",
-            $"将删除批次 #{run.RunNumber} 的历史快照和证据记录。\n\n当前 SQLite 数据、设备备注和标签不会被删除。",
-            "删除");
+        var impact = await ViewModel.GetSelectedDeleteImpactAsync();
+        var artifactCount = impact?.Artifacts.Count(candidate => !candidate.IsShared) ?? 0;
+        var content =
+            $"完成时间：{run.CompletedAt}\n" +
+            $"范围：{run.ScopeLabel}\n" +
+            $"卡片数量：{run.CountLabel}\n" +
+            $"采集模式：{run.CollectionModeLabel}\n" +
+            $"版本：{run.VersionLabel}\n\n" +
+            $"将删除该批次的 SQLite 数据、批次 JSON、NDJSON、质量报告和实时报告。\n" +
+            $"预计清理本地文件：{artifactCount:N0} 个。\n" +
+            "删除后无法恢复，日志文件不会随批次删除。";
+        var result = await ConfirmAsync("确认删除该批次？", content, "删除批次");
         if (result)
         {
             await ViewModel.DeleteRunAsync();
         }
+    }
+
+    private void IssueCategory_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (sender is ListView list && list.SelectedItem is CollectionIssueCategoryRow category)
+        {
+            ViewModel.ShowIssueDetails(category);
+        }
+    }
+
+    private void ShowDetails_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.ShowIssueDetails(ViewModel.SelectedIssueCategory);
+    }
+
+    private void ShowIssues_Click(object sender, RoutedEventArgs e)
+    {
+        ViewModel.ShowIssues();
     }
 
     private async Task<bool> ConfirmAsync(string title, string content, string primaryButtonText)

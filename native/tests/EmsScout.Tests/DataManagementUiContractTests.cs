@@ -315,10 +315,9 @@ public sealed class DataManagementUiContractTests
         Assert.Contains("MaxWidth=\"260\"", settings);
         Assert.Contains("MaxWidth=\"220\"", data);
         Assert.Contains("MaxWidth=\"420\"", data);
-        Assert.Contains("MaxWidth=\"520\"", areas);
-        Assert.Contains("MaxWidth=\"720\"", areas);
-        Assert.Contains("MaxWidth=\"360\"", audit);
-        Assert.Contains("MaxWidth=\"420\"", audit);
+        Assert.Contains("区域组规则", areas);
+        Assert.Contains("关键词", areas);
+        Assert.Contains("搜索楼层、页名、设备或问题依据", audit);
         Assert.Contains("MaxWidth=\"420\"", home);
     }
 
@@ -349,8 +348,9 @@ public sealed class DataManagementUiContractTests
         var source = File.ReadAllText(viewModelPath);
 
         Assert.Contains("groupSet.Groups", source);
-        Assert.Contains("SystemKey.Equals(\"public\"", source);
-        Assert.Contains("SystemKey.Equals(\"non_public\"", source);
+        Assert.Contains("var value = $\"group:{group.Id.ToString", source);
+        Assert.DoesNotContain("SystemKey.Equals(\"public\"", source);
+        Assert.DoesNotContain("SystemKey.Equals(\"non_public\"", source);
         Assert.Contains("$\"group:{group.Id.ToString", source);
         Assert.Equal(10, source.Split("DataFilterOption.All(\"全部\")", StringSplitOptions.None).Length - 1);
         Assert.DoesNotContain("DataFilterOption.All(\"全部区域组\")", source);
@@ -455,7 +455,6 @@ public sealed class DataManagementUiContractTests
         Assert.True(
             initialize.IndexOf("ApplyNavigationRequest(navigationRequest)", StringComparison.Ordinal) <
             initialize.IndexOf("ReloadFilterOptionsAsync(cancellationToken)", StringComparison.Ordinal));
-        Assert.DoesNotContain("group.Total", replaceAreaGroups);
         Assert.Contains("group.Name", replaceAreaGroups);
     }
 
@@ -660,8 +659,28 @@ public sealed class DataManagementUiContractTests
         Assert.Equal("默认页", EmsScout.Application.Devices.DevicePageNameFormatter.Format("default"));
         Assert.Equal("第1页", EmsScout.Application.Devices.DevicePageNameFormatter.Format("一页"));
         Assert.Equal("第6页", EmsScout.Application.Devices.DevicePageNameFormatter.Format("六页"));
-        Assert.Equal("裙楼 / 第2页", EmsScout.Application.Devices.DevicePageNameFormatter.Format("裙楼/二页"));
+        Assert.Equal("第2页", EmsScout.Application.Devices.DevicePageNameFormatter.Format("裙楼/二页"));
+        Assert.Equal("第1页", EmsScout.Application.Devices.DevicePageNameFormatter.Format("塔楼/一页"));
+        Assert.Equal(
+            EmsScout.Application.Devices.DevicePageNameFormatter.SortValue("一页"),
+            EmsScout.Application.Devices.DevicePageNameFormatter.SortValue("裙楼/一页"));
+        Assert.Equal(
+            EmsScout.Application.Devices.DevicePageNameFormatter.SortValue("一页"),
+            EmsScout.Application.Devices.DevicePageNameFormatter.SortValue("塔楼/一页"));
         Assert.Equal("BM", EmsScout.Application.Devices.DevicePageNameFormatter.Format("BM"));
+    }
+
+    [Fact]
+    public void QuerySpecificationTreatsPrefixedPageNamesAsTheSamePage()
+    {
+        foreach (var storedPageName in new[] { "裙楼/一页", "塔楼/一页" })
+        {
+            var row = DeviceWithRealtimeLock("") with { PageName = storedPageName };
+
+            Assert.True(EmsScout.Application.Devices.DeviceQuerySpecification.MatchesResult(
+                row,
+                new EmsScout.Application.Devices.DeviceQuery(PageName: "一页")));
+        }
     }
 
     [Fact]
