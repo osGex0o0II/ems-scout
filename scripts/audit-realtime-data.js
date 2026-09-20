@@ -6,6 +6,7 @@ const path = require('path');
 const { formatLocalTimestamp } = require('../src/time');
 const { readBatchIdentity, withBatchIdentity } = require('../src/run-identity');
 const { installRealtimeLog } = require('./realtime-logger');
+const { buildQualityDetails } = require('../src/quality-details');
 
 const ROOT = path.resolve(__dirname, '..');
 const OUT_DIR = path.resolve(process.env.EMS_QUALITY_OUT || process.env.EMS_OUT_DIR || path.join(ROOT, 'out'));
@@ -435,6 +436,10 @@ function main() {
   output.collectionErrors.count = output.collectionErrors.rows.length;
   output.deviceAnomalies.rowCount = output.deviceAnomalies.rows.length;
   output.deviceAnomalies.eventCount = output.deviceAnomalies.rows.reduce((sum, row) => sum + row.issues.length, 0);
+  output.details = buildQualityDetails([], {
+    collectionErrors: output.collectionErrors.rows,
+    deviceAnomalies: output.deviceAnomalies.rows,
+  });
   output.conclusion.collectionOk = output.collectionErrors.count === 0;
 
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });

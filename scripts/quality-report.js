@@ -8,6 +8,7 @@ const { BLDG_ORDER, BLDG_META } = require('../src/rules');
 const { ensureHistorySchema, resolveRunId, sourceForRun } = require('../src/data-history');
 const { formatLocalTimestamp } = require('../src/time');
 const { readBatchIdentity, withBatchIdentity } = require('../src/run-identity');
+const { buildQualityDetails } = require('../src/quality-details');
 
 const ROOT = path.join(__dirname, '..');
 const DB_PATH = process.env.EMS_DB_PATH || path.join(ROOT, 'out', 'ac.db');
@@ -466,6 +467,25 @@ function buildReport(options = {}) {
     issues.push({ severity: 'INFO', code: 'xlsx_advisory', count: 1, message: `xlsx${xlsxVersion ? '@' + xlsxVersion : ''} 存在公开 high advisories；当前项目主要导出 Excel，避免读取不可信 xlsx。` });
   }
 
+  const qualityDetailBuckets = [
+    ['placeholder_cards', 'P1', '存在占位卡片。', placeholderCards],
+    ['state_mismatch', 'P1', 'comm 与 switch 不一致。', inconsistentState],
+    ['unknown_comm', 'P2', '存在未知通讯状态。', unknownComm],
+    ['missing_indicator', 'P2', '存在非离线卡缺少 indicator 原图。', missingIndicator],
+    ['unknown_switch', 'P2', '存在非 ON/OFF/- 的开关状态。', unknownSwitch],
+    ['duplicate_cards_same_page', 'P2', '同一页面存在重复卡名。', duplicateCardsSamePage],
+    ['duplicate_rendered_pages', 'INFO', '存在 EMS 同页重复渲染卡。', duplicateRenderedPages],
+    ['empty_sub_areas', 'P2', '存在无页面/无卡片的空子区。', emptyNonInlineSubAreas],
+    ['inline_sub_areas', 'INFO', '存在 BM 内联子区记录。', inlineSubAreas],
+    ['suspicious_uniform_pages', 'P2', '存在统一默认值且未完整加载通讯/开关的页面。', suspiciousUniformPages],
+    ['offline_template_without_stability', 'P2', '存在缺少稳定窗口证据的全离线默认模板页。', unresolvedOfflineTemplatePages],
+    ['offline_template_stable', 'P2', '存在稳定全离线默认模板页，需人工复核。', stableOfflineTemplatePages],
+    ['invalid_card_fields', 'P1', '存在异常温度或开机/关机设备字段缺失。', invalidFieldCards],
+    ['active_field_incomplete_pages', 'P1', '存在开机/关机设备字段不完整的页面。', lowActiveFieldPages],
+    ['known_findings', 'INFO', '存在已登记的质量发现。', knownIssueAnnotations],
+    ['uniform_resolved_pages', 'INFO', '存在字段完全统一但状态完整的页面。', uniformResolvedPages],
+  ].map(([code, severity, message, rows]) => ({ code, severity, message, rows }));
+
   return withBatchIdentity({
     generated_at: formatLocalTimestamp(),
     generated_at_local: nowLocal(),
@@ -504,6 +524,7 @@ function buildReport(options = {}) {
     },
     buildings: buildingSummary,
     issues,
+    details: buildQualityDetails(qualityDetailBuckets),
     samples: {
       placeholder_cards: placeholderCards.slice(0, 50),
       inconsistent_state: inconsistentState.slice(0, 50),
