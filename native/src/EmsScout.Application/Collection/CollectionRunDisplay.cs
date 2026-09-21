@@ -2,6 +2,9 @@ namespace EmsScout.Application.Collection;
 
 public static class CollectionRunDisplay
 {
+    public static string CompletedAtLabel(CollectionRunRecord run) =>
+        FormatTimestamp(run.CompletedAt, run.ImportedAt);
+
     public static string DurationLabel(CollectionRunRecord run)
     {
         if (!StoredTimestamp.TryParse(run.StartedAt, out var started) ||
@@ -23,4 +26,13 @@ public static class CollectionRunDisplay
         "fast-batch" => "快速模式",
         _ => "-",
     };
+
+    private static string FormatTimestamp(string primary, string fallback)
+    {
+        return StoredTimestamp.TryParse(primary, out var parsed)
+            ? parsed.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+            : StoredTimestamp.TryParse(fallback, out parsed)
+                ? parsed.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+                : primary;
+    }
 }

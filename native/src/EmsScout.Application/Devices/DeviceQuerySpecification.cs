@@ -174,9 +174,7 @@ public static class DeviceQuerySpecification
         return areaType?.Trim() switch
         {
             null or "" or "all" => true,
-            "public" or "公区" => row.AreaType == DeviceAreaClassifier.PublicArea,
-            "private" or "非公区" => row.AreaType == DeviceAreaClassifier.PrivateArea,
-            "unmatched" or "未匹配" => row.AreaType == "未匹配",
+            "unmatched" or "未匹配" => row.AreaGroupText == "-",
             _ => true,
         };
     }

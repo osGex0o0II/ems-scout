@@ -1,13 +1,21 @@
-using Microsoft.UI.Xaml.Controls;
+using EmsScout.Desktop.Services;
+using EmsScout.Desktop.ViewModels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
-using EmsScout.Desktop.ViewModels;
+using Windows.Storage.Pickers;
+using Windows.UI;
+using WinRT.Interop;
 
 namespace EmsScout.Desktop.Pages;
 
 public sealed partial class AreasPage : Page
 {
+    private readonly WindowHandleProvider _windowHandleProvider;
+    private readonly SemaphoreSlim _dialogGate = new(1, 1);
+    private bool _suppressGroupSelectionChanged;
     private long? _requestedGroupId;
 
     public GroupsViewModel ViewModel { get; }
@@ -15,17 +23,55 @@ public sealed partial class AreasPage : Page
     public AreasPage()
     {
         ViewModel = App.Services.GetRequiredService<GroupsViewModel>();
+        _windowHandleProvider = App.Services.GetRequiredService<WindowHandleProvider>();
         InitializeComponent();
     }
 
     private async void Page_Loaded(object sender, RoutedEventArgs e)
     {
-        await ViewModel.LoadAsync();
-        if (_requestedGroupId is not null)
+        try
         {
-            ViewModel.SelectGroup(_requestedGroupId.Value);
-            _requestedGroupId = null;
+            await ViewModel.LoadAsync();
+            if (_requestedGroupId is long groupId)
+            {
+                await ViewModel.SelectGroupAsync(groupId);
+                _requestedGroupId = null;
+            }
         }
+        catch (Exception ex)
+        {
+            await ShowErrorAsync("区域组页面加载失败", ex.Message);
+        }
+    }
+
+    private async void GroupList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressGroupSelectionChanged || e.AddedItems.Count == 0 || e.AddedItems[0] is not GroupSummaryRow requestedGroup)
+            return;
+
+        if (ReferenceEquals(ViewModel.SelectedGroup, requestedGroup))
+            return;
+
+        var currentGroup = ViewModel.SelectedGroup;
+        if (ViewModel.HasUnsavedChanges)
+        {
+            _suppressGroupSelectionChanged = true;
+            if (sender is ListView groupList)
+                groupList.SelectedItem = currentGroup;
+            _suppressGroupSelectionChanged = false;
+
+            var result = await ConfirmUnsavedGroupSwitchAsync();
+            if (result == ContentDialogResult.None)
+                return;
+
+            if (result == ContentDialogResult.Primary && !await ViewModel.SaveGroupAsync())
+                return;
+
+            if (result == ContentDialogResult.Secondary)
+                ViewModel.DiscardChanges();
+        }
+
+        await ViewModel.SelectGroupAsync(requestedGroup.Id);
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -34,103 +80,166 @@ public sealed partial class AreasPage : Page
         base.OnNavigatedTo(e);
     }
 
-    private void GroupList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void RuleRowBuilding_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (sender is ListView listView && listView.SelectedItem is GroupSummaryRow row)
+        try
         {
-            ViewModel.SelectedGroup = row;
+            if (sender is ComboBox { DataContext: AreaGroupRuleRow row })
+                await ViewModel.RefreshRuleOptionsAsync(row);
+        }
+        catch (Exception ex)
+        {
+            await ShowErrorAsync("加载楼层失败", ex.Message);
         }
     }
 
-    private async void MemberScope_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async void DeleteRuleRow_Click(object sender, RoutedEventArgs e)
     {
-        if (ViewModel.IsMemberDraftActive)
-        {
-            await ViewModel.RefreshTargetOptionsAsync();
-        }
+        if (sender is not Button { DataContext: AreaGroupRuleRow row })
+            return;
+
+        if (!ViewModel.CanEditSelectedGroup)
+            return;
+
+        await ViewModel.DeleteRuleRowAsync(row);
     }
 
-    private void OpenInData_Click(object sender, RoutedEventArgs e)
-    {
-        ViewModel.OpenSelectedInData();
-    }
+    private void OpenInData_Click(object sender, RoutedEventArgs e) => ViewModel.OpenSelectedInData();
 
     private async void DeleteGroup_Click(object sender, RoutedEventArgs e)
     {
-        if (!ViewModel.CanDeleteSelectedGroup || ViewModel.SelectedGroup is null)
-        {
+        if (ViewModel.SelectedGroup is not { } group)
             return;
-        }
 
-        var group = ViewModel.SelectedGroup;
-        var result = await ConfirmDeleteAsync(
-            "删除区域组",
-            $"将删除“{group.Name}”以及已添加的楼层和设备。\n\n当前设备数据、设备备注和标签不会被删除。");
-
-        if (result == ContentDialogResult.Primary)
+        var content = new StackPanel { Spacing = 8 };
+        content.Children.Add(new TextBlock { Text = $"区域组：{group.Name}" });
+        content.Children.Add(new TextBlock { Text = $"规则数量：{group.ItemCount:N0} 条" });
+        content.Children.Add(new TextBlock { Text = $"覆盖设备：{group.Count:N0} 台" });
+        content.Children.Add(new TextBlock { Text = $"覆盖区域：{group.CoveredAreas:N0} 个" });
+        content.Children.Add(new TextBlock
         {
-            await ViewModel.DeleteGroupAsync();
+            Text = "删除后，区域组及其匹配规则将从本地数据库移除，无法恢复。",
+            Foreground = GetThemeBrush("SystemFillColorCriticalBrush", Color.FromArgb(255, 196, 43, 28)),
+            TextWrapping = TextWrapping.WrapWholeWords,
+        });
+        if (ViewModel.HasUnsavedChanges)
+        {
+            content.Children.Add(new TextBlock
+            {
+                Text = "当前存在未保存修改，删除时将一并放弃。",
+                Foreground = GetThemeBrush("SystemFillColorCautionBrush", Color.FromArgb(255, 196, 119, 6)),
+                TextWrapping = TextWrapping.WrapWholeWords,
+            });
         }
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "删除区域组",
+            Content = content,
+            PrimaryButtonText = "删除",
+            CloseButtonText = "取消",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        if (await ShowDialogAsync(dialog) == ContentDialogResult.Primary)
+            await ViewModel.DeleteGroupCommand.ExecuteAsync(null);
     }
 
-    private async void DeleteItem_Click(object sender, RoutedEventArgs e)
+    private async void ExportRules_Click(object sender, RoutedEventArgs e)
     {
-        var item = sender is Button { DataContext: AreaGroupItemRow row }
-            ? row
-            : ViewModel.SelectedItem;
-        if (item is null)
+        try
         {
-            return;
+            var picker = new FileSavePicker
+            {
+                SuggestedStartLocation = PickerLocationId.DocumentsLibrary,
+                SuggestedFileName = $"区域组规则_{DateTime.Now:yyyyMMdd_HHmmss}",
+            };
+            picker.FileTypeChoices.Add("JSON 文件", [".json"]);
+            InitializeWithWindow.Initialize(picker, _windowHandleProvider.GetWindowHandle());
+            var file = await picker.PickSaveFileAsync();
+            if (file is not null) await ViewModel.ExportRulesAsync(file.Path);
         }
-
-        var result = await ConfirmDeleteAsync(
-            "移除已添加内容",
-            $"将从当前区域组移除：{item.TargetTypeLabel} / {item.TargetLabel}。\n\n这只影响区域组筛选，不会删除设备数据。");
-
-        if (result == ContentDialogResult.Primary)
+        catch (Exception ex)
         {
-            await ViewModel.DeleteItemAsync(item);
+            await ShowErrorAsync("导出规则失败", ex.Message);
         }
     }
 
-    private async void EditItem_Click(object sender, RoutedEventArgs e)
+    private async void ImportRules_Click(object sender, RoutedEventArgs e)
     {
-        if (sender is Button { DataContext: AreaGroupItemRow item })
+        try
         {
-            await ViewModel.BeginEditItemAsync(item);
+            var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.DocumentsLibrary };
+            picker.FileTypeFilter.Add(".json");
+            InitializeWithWindow.Initialize(picker, _windowHandleProvider.GetWindowHandle());
+            var file = await picker.PickSingleFileAsync();
+            if (file is not null) await ViewModel.ImportRulesAsync(file.Path);
+        }
+        catch (Exception ex)
+        {
+            await ShowErrorAsync("导入规则失败", ex.Message);
         }
     }
 
-    private async void DeleteFloor_Click(object sender, RoutedEventArgs e)
-    {
-        if (!ViewModel.CanDeleteSelectedFloor || ViewModel.SelectedFloorCatalog is null)
-        {
-            return;
-        }
-
-        var floor = ViewModel.SelectedFloorCatalog;
-        var result = await ConfirmDeleteAsync(
-            "停用楼层目录",
-            $"将停用可选楼层：{floor.DisplayLabel}。\n\n区域组里已经添加的内容不会被删除，但后续下拉选择不再显示该楼层。");
-
-        if (result == ContentDialogResult.Primary)
-        {
-            await ViewModel.DeleteFloorAsync();
-        }
-    }
-
-    private async Task<ContentDialogResult> ConfirmDeleteAsync(string title, string content)
+    private async Task ShowErrorAsync(string title, string content)
     {
         var dialog = new ContentDialog
         {
             XamlRoot = XamlRoot,
             Title = title,
             Content = content,
-            PrimaryButtonText = "删除",
+            CloseButtonText = "关闭",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        await ShowDialogAsync(dialog);
+    }
+
+    private async Task<ContentDialogResult> ConfirmUnsavedGroupSwitchAsync()
+    {
+        var group = ViewModel.SelectedGroup;
+        var content = new StackPanel { Spacing = 8 };
+        content.Children.Add(new TextBlock { Text = $"当前区域组：{group?.Name ?? ViewModel.EditName}" });
+        content.Children.Add(new TextBlock { Text = $"当前规则：{ViewModel.Rules.Count:N0} 条" });
+        content.Children.Add(new TextBlock { Text = $"已保存覆盖设备：{(group?.Count ?? 0):N0} 台" });
+        content.Children.Add(new TextBlock { Text = $"已保存覆盖区域：{(group?.CoveredAreas ?? 0):N0} 个" });
+        content.Children.Add(new TextBlock
+        {
+            Text = "当前规则尚未保存。请选择保存修改、放弃修改，或取消切换。",
+            Foreground = GetThemeBrush("SystemFillColorCautionBrush", Color.FromArgb(255, 196, 119, 6)),
+            TextWrapping = TextWrapping.WrapWholeWords,
+        });
+
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = "切换区域组前处理未保存修改",
+            Content = content,
+            PrimaryButtonText = "保存",
+            SecondaryButtonText = "放弃",
             CloseButtonText = "取消",
             DefaultButton = ContentDialogButton.Close,
         };
+        return await ShowDialogAsync(dialog);
+    }
 
-        return await dialog.ShowAsync();
+    private async Task<ContentDialogResult> ShowDialogAsync(ContentDialog dialog)
+    {
+        await _dialogGate.WaitAsync();
+        try
+        {
+            return await dialog.ShowAsync();
+        }
+        finally
+        {
+            _dialogGate.Release();
+        }
+    }
+
+    private static Brush GetThemeBrush(string key, Color fallback)
+    {
+        if (Microsoft.UI.Xaml.Application.Current.Resources.TryGetValue(key, out var resource) && resource is Brush brush)
+            return brush;
+
+        return new SolidColorBrush(fallback);
     }
 }

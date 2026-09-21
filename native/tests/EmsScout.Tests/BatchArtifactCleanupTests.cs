@@ -43,6 +43,7 @@ public sealed class BatchArtifactCleanupTests
         File.WriteAllText(Path.Combine(root, $"realtime_all_buildings_batch_summary_run{run.Id}.json"), identity);
         File.WriteAllText(Path.Combine(root, $"realtime_all_buildings_batch_failure_run{run.Id}.json"), identity);
         File.WriteAllText(Path.Combine(root, $"realtime_quality_classified_{run.Id}.json"), identity);
+        File.WriteAllText(Path.Combine(root, "realtime_quality_classified_20260921_000001.json"), identity);
         File.WriteAllText(Path.Combine(root, "realtime_1号.ndjson"), identity);
         File.WriteAllText(Path.Combine(root, "realtime_all_batch_20260921_000000.log"), "log");
         File.WriteAllText(Path.Combine(root, "collection_manifest_1.json"),
@@ -55,11 +56,14 @@ public sealed class BatchArtifactCleanupTests
         var cleanup = cleaner.Cleanup(run, candidates);
 
         Assert.Contains(candidates, item => item.RelativePath == $"realtime_quality_classified_{run.Id}.json" && item.IdentityVerified);
+        Assert.Contains(candidates, item => item.RelativePath == "realtime_quality_classified_20260921_000001.json" && item.IdentityVerified);
         Assert.Contains(candidates, item => item.RelativePath == "realtime_1号.ndjson" && item.IdentityVerified);
         Assert.True(cleanup.IsComplete);
         Assert.False(File.Exists(Path.Combine(root, $"quality_report_run{run.Id}.json")));
         Assert.False(File.Exists(Path.Combine(root, $"realtime_quality_classified_{run.Id}.json")));
+        Assert.False(File.Exists(Path.Combine(root, "realtime_quality_classified_20260921_000001.json")));
         Assert.False(File.Exists(Path.Combine(root, "realtime_1号.ndjson")));
+        Assert.True(File.Exists(Path.Combine(root, "realtime_all_batch_20260921_000000.log")));
         Assert.True(File.Exists(Path.Combine(root, "quality_report.json")));
         Assert.True(File.Exists(Path.Combine(root, "realtime_all_buildings_latest.json")));
     }

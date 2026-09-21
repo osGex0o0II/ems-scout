@@ -20,6 +20,18 @@ public sealed class AuditIssueViewModelTests
         Assert.Equal("-", CollectionRunDisplay.CollectionModeLabel(CreateRun("legacy-mode")));
     }
 
+    [Fact]
+    public void CollectionRunRowUsesCompletionTimeBeforeImportTime()
+    {
+        var run = CreateRun("stable-full") with
+        {
+            CompletedAt = "2026-09-21T10:01:30+08:00",
+            ImportedAt = "2026-09-21T10:04:00+08:00",
+        };
+
+        Assert.Equal("2026-09-21 10:01", CollectionRunDisplay.CompletedAtLabel(run));
+    }
+
     private static CollectionRunRecord CreateRun(string collectionMode) => new(
         Id: 24,
         RunKey: "run-24",

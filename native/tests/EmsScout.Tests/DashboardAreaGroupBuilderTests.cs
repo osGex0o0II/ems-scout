@@ -200,6 +200,32 @@ public sealed class DashboardAreaGroupBuilderTests
     }
 
     [Fact]
+    public void BuildsGenericDashboardGroupsFromAreaRulesAndHidesDisabledGroups()
+    {
+        var enabled = Group(20, "公共区域设备", enabled: true);
+        var disabled = Group(21, "停用组", enabled: false);
+        var rules = new[]
+        {
+            Rule(enabled.Id, "1号", "-", "1F", "include", "GQ"),
+            Rule(disabled.Id, "1号", "-", "1F", "include", "GQ"),
+        };
+        var devices = new[]
+        {
+            Device(1, "GQ-0101-KT", 1, "1F A", DeviceCommunicationState.Running),
+            Device(2, "QL-0102-KT", 1, "1F A", DeviceCommunicationState.Stopped),
+        };
+
+        var summaries = DashboardAreaGroupBuilder.Build(
+            devices,
+            new AreaGroupSet([enabled, disabled], [], rules));
+
+        var summary = Assert.Single(summaries);
+        Assert.Equal(enabled.Id, summary.Id);
+        Assert.Equal(1, summary.Total);
+        Assert.Equal(string.Empty, summary.AreaType);
+    }
+
+    [Fact]
     public void NameRulesIncludeMatchingDevicesAndExcludeExplicitNames()
     {
         var include = new AreaGroupItemRecord(
@@ -261,6 +287,27 @@ public sealed class DashboardAreaGroupBuilderTests
             FloorValue: floor,
             SubAreaText: string.Empty,
             CardName: string.Empty,
+            Note: string.Empty);
+    }
+
+    private static AreaGroupRuleRecord Rule(
+        long groupId,
+        string building,
+        string zuo,
+        string floor,
+        string mode,
+        string keywords)
+    {
+        return new AreaGroupRuleRecord(
+            Id: groupId,
+            GroupId: groupId,
+            RuleOrder: 0,
+            Building: building,
+            Zuo: zuo,
+            FloorLabel: floor,
+            FloorValue: null,
+            MatchMode: mode,
+            Keywords: AreaGroupRuleNormalizer.NormalizeKeywords(keywords),
             Note: string.Empty);
     }
 

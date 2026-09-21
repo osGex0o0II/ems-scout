@@ -146,7 +146,7 @@ public sealed class CollectionRunRepositoryTests
     }
 
     [Fact]
-    public async Task VerifiedManifestAllowsCleanupOfNdjsonAndLogChildren()
+    public async Task VerifiedManifestAllowsCleanupOfNdjsonButKeepsLogChildren()
     {
         var databasePath = CreateDatabase();
         await new SqliteSchemaMigrator(() => databasePath).MigrateAsync();
@@ -163,14 +163,13 @@ public sealed class CollectionRunRepositoryTests
 
         var impact = await repository.GetDeleteImpactAsync(run.Id);
         var ndjson = Assert.Single(impact.Artifacts, item => item.RelativePath == "realtime_1号.ndjson");
-        var log = Assert.Single(impact.Artifacts, item => item.RelativePath == "realtime_all_batch_20260918_000000.log");
 
         Assert.True(ndjson.IdentityVerified);
-        Assert.True(log.IdentityVerified);
+        Assert.DoesNotContain(impact.Artifacts, item => item.RelativePath == "realtime_all_batch_20260918_000000.log");
         var cleanup = new CollectionRunArtifactCleaner(() => databasePath).Cleanup(run, impact.Artifacts);
         Assert.True(cleanup.IsComplete);
         Assert.False(File.Exists(ndjsonPath));
-        Assert.False(File.Exists(logPath));
+        Assert.True(File.Exists(logPath));
     }
 
     [Fact]
@@ -477,6 +476,8 @@ public sealed class CollectionRunRepositoryTests
         var firstRestore = await repository.RestoreCurrentAsync(1);
         Assert.Equal(2L, firstRestore.BackupRunId);
 
+        await ExecuteAsync(databasePath, "UPDATE current_data_sources SET state = 'bound', reason = '', run_id = 1, batch_uid = 'batch-current' WHERE building = '1号';");
+
         await repository.DeleteAsync(firstRestore.BackupRunId!.Value);
 
         var secondRestore = await repository.RestoreCurrentAsync(1);
@@ -616,6 +617,46 @@ public sealed class CollectionRunRepositoryTests
         Assert.Equal(1L, await ScalarLongAsync(verify, "SELECT COUNT(*) FROM buildings"));
         Assert.Equal(1L, await ScalarLongAsync(verify, "SELECT COUNT(*) FROM device_notes"));
         Assert.Equal(0L, await ScalarLongAsync(verify, "SELECT COUNT(*) FROM run_realtime_details"));
+    }
+
+    [Fact]
+    public async Task DeleteIsBlockedWhenBoundCurrentSourceHasIncompleteIdentity()
+    {
+        var databasePath = CreateDatabase();
+        await new SqliteSchemaMigrator(() => databasePath).MigrateAsync();
+        await ExecuteAsync(databasePath, "UPDATE current_data_sources SET state = 'bound', run_id = NULL, batch_uid = NULL, reason = '' WHERE building = '1号';");
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => repository.DeleteAsync(1));
+
+        Assert.Contains("身份未完整", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task FullRunDeleteIsBlockedWhenCurrentSourcesDoNotCoverAllDeclaredBuildings()
+    {
+        var databasePath = CreateDatabase();
+        await new SqliteSchemaMigrator(() => databasePath).MigrateAsync();
+        await ExecuteAsync(databasePath, "UPDATE collection_runs SET scope = 'full', buildings = '[\"1号\",\"2号\"]', batch_uid = 'batch-full' WHERE id = 1; DELETE FROM current_data_sources; INSERT INTO current_data_sources (building, revision_uid, run_id, batch_uid, source_updated_at, card_count, state, reason) VALUES ('1号', 'revision-1', 999, 'external-1', '2026-07-01T00:02:00Z', 1, 'bound', '');");
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => repository.DeleteAsync(1));
+
+        Assert.Contains("未覆盖", error.Message, StringComparison.Ordinal);
+        Assert.Contains("2号", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HistoryIsOrderedByCompletionTimeBeforeImportTime()
+    {
+        var databasePath = CreateDatabase();
+        await new SqliteSchemaMigrator(() => databasePath).MigrateAsync();
+        await ExecuteAsync(databasePath, "INSERT INTO collection_runs (id, run_key, batch_uid, completed_at, imported_at, status, scope, buildings, card_count) VALUES (2, 'run_2', 'batch-2', '2026-06-30T00:00:00Z', '2026-07-02T00:00:00Z', 'completed', 'partial', '[\"1号\"]', 0);");
+        var repository = new SqliteCollectionRunRepository(() => databasePath);
+
+        var runs = await repository.ListAsync();
+
+        Assert.Equal([1L, 2L], runs.Select(run => run.Id).ToArray());
     }
 
     [Fact]

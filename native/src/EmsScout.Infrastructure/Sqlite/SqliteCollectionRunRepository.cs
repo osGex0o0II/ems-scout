@@ -32,7 +32,7 @@ public sealed class SqliteCollectionRunRepository(
             SELECT collection_runs.*,
                    {snapshotCardCount} AS snapshot_card_count
             FROM collection_runs
-            ORDER BY datetime(COALESCE(imported_at, completed_at)) DESC, id DESC
+            ORDER BY datetime(COALESCE(completed_at, imported_at)) DESC, id DESC
             {limitClause}
             """;
         if (limit.HasValue)
@@ -479,16 +479,34 @@ public sealed class SqliteCollectionRunRepository(
             }
 
             var unresolved = overlapping.Where(row =>
-                !string.Equals(row.State, CurrentDataSourceStates.Bound, StringComparison.OrdinalIgnoreCase)).ToArray();
+                !string.Equals(row.State, CurrentDataSourceStates.Bound, StringComparison.OrdinalIgnoreCase) ||
+                row.RunId is null or <= 0 ||
+                string.IsNullOrWhiteSpace(row.BatchUid)).ToArray();
             if (unresolved.Length > 0)
             {
-                var detail = unresolved.Select(row => string.IsNullOrWhiteSpace(row.Reason) ? row.Building : $"{row.Building}：{row.Reason}");
+                var detail = unresolved.Select(row =>
+                    string.IsNullOrWhiteSpace(row.Reason)
+                        ? row.State.Equals(CurrentDataSourceStates.Bound, StringComparison.OrdinalIgnoreCase)
+                            ? $"{row.Building}：身份未完整"
+                            : row.Building
+                        : $"{row.Building}：{row.Reason}");
                 reasons.Add("当前数据来源未确定，不能安全删除重叠楼栋的历史批次（" + string.Join("、", detail) + "）");
             }
 
-            if (overlapping.Length == 0 && run.Scope.Equals("full", StringComparison.OrdinalIgnoreCase) && sourceRows.Count == 0)
+            if (run.Scope.Equals("full", StringComparison.OrdinalIgnoreCase))
             {
-                reasons.Add("当前数据来源记录为空，不能安全删除全量历史批次");
+                var missingBuildings = declaredBuildings
+                    .Except(sourceRows.Select(row => row.Building), StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(building => building, StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+                if (declaredBuildings.Count == 0)
+                {
+                    reasons.Add("全量历史批次没有声明楼栋范围，不能安全删除");
+                }
+                else if (missingBuildings.Length > 0)
+                {
+                    reasons.Add("当前数据来源未覆盖全量批次声明的楼栋（" + string.Join("、", missingBuildings) + "）");
+                }
             }
         }
         else

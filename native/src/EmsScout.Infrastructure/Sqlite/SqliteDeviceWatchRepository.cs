@@ -1,6 +1,8 @@
 using System.Globalization;
 using EmsScout.Application;
 using EmsScout.Application.Devices;
+using EmsScout.Application.Groups;
+using EmsScout.Domain;
 using EmsScout.Application.Watch;
 using Microsoft.Data.Sqlite;
 
@@ -27,8 +29,9 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
 
         foreach (var rule in rules)
         {
-            var members = await LoadCurrentRuleMembersAsync(connection, rule.GroupId, cancellationToken).ConfigureAwait(false);
-            var samples = await LoadRuleSamplesAsync(connection, rule.GroupId, cancellationToken).ConfigureAwait(false);
+            var areaRules = await LoadAreaRulesAsync(connection, rule.GroupId, cancellationToken).ConfigureAwait(false);
+            var members = await LoadCurrentRuleMembersAsync(connection, areaRules, cancellationToken).ConfigureAwait(false);
+            var samples = await LoadRuleSamplesAsync(connection, areaRules, cancellationToken).ConfigureAwait(false);
             var ruleIncidents = DetectIncidents(rule, samples).ToList();
             incidents.AddRange(ruleIncidents);
 
@@ -318,31 +321,33 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
 
     private static async Task<IReadOnlyList<DeviceWatchKey>> LoadCurrentRuleMembersAsync(
         SqliteConnection connection,
-        long groupId,
+        IReadOnlyList<AreaGroupRuleRecord> rules,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = $"""
-            SELECT s.building, s.floor, s.text AS sub_area, p.page_name, c.name
+        command.CommandText = """
+            SELECT s.building, s.floor, s.text AS sub_area, s.x, p.page_name, c.name
             FROM cards c
             JOIN pages p ON p.id = c.page_id
             JOIN sub_areas s ON s.id = p.sub_area_id
-            WHERE {SqliteAreaGroupRepository.CustomGroupExistsSql()}
             ORDER BY s.building, s.floor, s.text, p.page_name, c.name
             """;
-        command.Parameters.AddWithValue("$group_id", groupId);
         var rows = new Dictionary<string, DeviceWatchKey>(StringComparer.OrdinalIgnoreCase);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            var key = new DeviceWatchKey(
-                ReadString(reader, "building"),
-                DeviceFloorLabelFormatter.Format(
-                    ReadNullableDouble(reader, "floor"),
-                    ReadString(reader, "sub_area")),
-                ReadString(reader, "sub_area"),
-                ReadString(reader, "page_name"),
-                ReadString(reader, "name"));
+            var building = ReadString(reader, "building");
+            var floor = ReadNullableDouble(reader, "floor");
+            var subArea = ReadString(reader, "sub_area");
+            var pageName = ReadString(reader, "page_name");
+            var name = ReadString(reader, "name");
+            var device = CreateRuleDevice(building, floor, subArea, ReadNullableDouble(reader, "x"), pageName, name);
+            if (!AreaGroupRuleMatcher.MatchesAny(device, rules))
+            {
+                continue;
+            }
+
+            var key = new DeviceWatchKey(building, device.FloorLabel, subArea, pageName, name);
             rows[key.Key] = key;
         }
 
@@ -351,61 +356,44 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
 
     private static async Task<IReadOnlyList<WatchSample>> LoadRuleSamplesAsync(
         SqliteConnection connection,
-        long groupId,
+        IReadOnlyList<AreaGroupRuleRecord> rules,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = $"""
+        command.CommandText = """
             SELECT cr.id AS run_id, cr.completed_at, rsa.building, rsa.floor, rsa.text AS sub_area,
-                   rp.page_name, rc.name, rc.switch, rc.comm
+                   rsa.x, rp.page_name, rc.name, rc.switch, rc.comm
             FROM collection_runs cr
             JOIN run_cards rc ON rc.run_id = cr.id
             JOIN run_pages rp ON rp.id = rc.run_page_id
             JOIN run_sub_areas rsa ON rsa.id = rp.run_sub_area_id
             WHERE cr.is_anomaly = 0
-              AND EXISTS (
-                SELECT 1
-                FROM monitor_group_items mgi
-                WHERE mgi.group_id = $group_id
-                  AND mgi.building = rsa.building
-                  AND (
-                    (
-                      mgi.target_type = 'device'
-                      AND (mgi.card_name = rc.name OR rc.name LIKE mgi.card_name || '#%')
-                      AND (
-                        (mgi.floor_value IS NULL AND IFNULL(mgi.sub_area_text, '') = '')
-                        OR (
-                          (mgi.floor_value IS NULL OR ABS(COALESCE(rsa.floor, -999999) - COALESCE(mgi.floor_value, -999998)) < 0.001)
-                          AND (IFNULL(mgi.sub_area_text, '') = '' OR IFNULL(mgi.sub_area_text, '') = IFNULL(rsa.text, ''))
-                        )
-                      )
-                    )
-                    OR (
-                      mgi.target_type = 'sub_area'
-                      AND ABS(COALESCE(rsa.floor, -999999) - COALESCE(mgi.floor_value, -999998)) < 0.001
-                      AND IFNULL(mgi.sub_area_text, '') = IFNULL(rsa.text, '')
-                    )
-                    OR (
-                      mgi.target_type = 'floor'
-                      AND ABS(COALESCE(rsa.floor, -999999) - COALESCE(mgi.floor_value, -999998)) < 0.001
-                    )
-                  )
-              )
             ORDER BY rsa.building, rsa.floor, rsa.text, rp.page_name, rc.name, datetime(cr.completed_at), cr.id
             """;
-        command.Parameters.AddWithValue("$group_id", groupId);
         var rows = new List<WatchSample>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            var key = new DeviceWatchKey(
-                ReadString(reader, "building"),
-                DeviceFloorLabelFormatter.Format(
-                    ReadNullableDouble(reader, "floor"),
-                    ReadString(reader, "sub_area")),
-                ReadString(reader, "sub_area"),
-                ReadString(reader, "page_name"),
-                ReadString(reader, "name"));
+            var building = ReadString(reader, "building");
+            var floor = ReadNullableDouble(reader, "floor");
+            var subArea = ReadString(reader, "sub_area");
+            var pageName = ReadString(reader, "page_name");
+            var name = ReadString(reader, "name");
+            var device = CreateRuleDevice(
+                building,
+                floor,
+                subArea,
+                ReadNullableDouble(reader, "x"),
+                pageName,
+                name,
+                ReadString(reader, "switch"),
+                ReadString(reader, "comm"));
+            if (!AreaGroupRuleMatcher.MatchesAny(device, rules))
+            {
+                continue;
+            }
+
+            var key = new DeviceWatchKey(building, device.FloorLabel, subArea, pageName, name);
             rows.Add(new WatchSample(
                 RunId: reader.GetInt64(reader.GetOrdinal("run_id")),
                 CompletedAt: ReadDateTimeOffset(reader, "completed_at"),
@@ -414,6 +402,77 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
         }
 
         return rows;
+    }
+
+    private static async Task<IReadOnlyList<AreaGroupRuleRecord>> LoadAreaRulesAsync(
+        SqliteConnection connection,
+        long groupId,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, "area_group_rules", cancellationToken).ConfigureAwait(false))
+        {
+            return [];
+        }
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, group_id, rule_order, building, zuo, floor_label, floor_value,
+                   match_mode, keywords, note
+            FROM area_group_rules
+            WHERE group_id = $group_id
+            ORDER BY rule_order, id
+            """;
+        command.Parameters.AddWithValue("$group_id", groupId);
+        var rules = new List<AreaGroupRuleRecord>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            rules.Add(new AreaGroupRuleRecord(
+                reader.GetInt64(reader.GetOrdinal("id")),
+                reader.GetInt64(reader.GetOrdinal("group_id")),
+                ReadInt32(reader, "rule_order"),
+                ReadString(reader, "building"),
+                ReadString(reader, "zuo"),
+                ReadString(reader, "floor_label"),
+                ReadNullableDouble(reader, "floor_value"),
+                ReadString(reader, "match_mode"),
+                AreaGroupRuleNormalizer.NormalizeKeywords(ReadString(reader, "keywords")),
+                ReadString(reader, "note")));
+        }
+
+        return rules;
+    }
+
+    private static DeviceRecord CreateRuleDevice(
+        string building,
+        double? floor,
+        string subArea,
+        double? x,
+        string pageName,
+        string name,
+        string switchState = "",
+        string communication = "")
+    {
+        return new DeviceRecord(
+            Id: 0,
+            Building: building,
+            Floor: floor,
+            FloorLabel: DeviceFloorLabelFormatter.Format(floor, subArea),
+            SubArea: subArea,
+            X: x,
+            Y: null,
+            PageName: pageName,
+            Name: name,
+            Layout: string.Empty,
+            SwitchState: switchState,
+            Mode: string.Empty,
+            IndoorTemperature: string.Empty,
+            SetTemperature: string.Empty,
+            Fan: string.Empty,
+            Indicator: string.Empty,
+            CommunicationText: communication,
+            CommunicationState: DeviceCommunicationStateParser.Parse(communication),
+            Zuo: DeviceZuoClassifier.Classify(building, x));
     }
 
     private static IEnumerable<DeviceWatchIncident> DetectIncidents(

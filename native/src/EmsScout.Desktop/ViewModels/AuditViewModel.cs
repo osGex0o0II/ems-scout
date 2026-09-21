@@ -35,6 +35,9 @@ public sealed partial class AuditViewModel(
     public partial string SelectedIssueBuilding { get; set; } = string.Empty;
 
     [ObservableProperty]
+    public partial string SelectedIssueSeverity { get; set; } = "全部级别";
+
+    [ObservableProperty]
     public partial string IssueSearchText { get; set; } = string.Empty;
 
     [ObservableProperty]
@@ -45,8 +48,11 @@ public sealed partial class AuditViewModel(
     public ObservableCollection<CollectionIssueCategoryRow> IssueCategories { get; } = [];
     public ObservableCollection<CollectionIssueRow> IssueRecords { get; } = [];
     public ObservableCollection<string> IssueBuildingOptions { get; } = ["全部楼栋"];
+    public ObservableCollection<string> IssueSeverityOptions { get; } = ["全部级别"];
 
     private IReadOnlyList<CollectionIssueRecord> _allIssueRecords = [];
+    private CancellationTokenSource? _issuesLoadCancellation;
+    private long _issuesLoadVersion;
 
     public bool CanDeleteSelectedRun => SelectedRun is not null && !IsBusy;
 
@@ -156,12 +162,20 @@ public sealed partial class AuditViewModel(
         ApplyIssueFilter();
     }
 
-    partial void OnSelectedRunChanged(CollectionRunRow? value) => _ = LoadIssuesAsync(value?.Id);
+    partial void OnSelectedRunChanged(CollectionRunRow? value)
+    {
+        _issuesLoadCancellation?.Cancel();
+        _issuesLoadCancellation?.Dispose();
+        _issuesLoadCancellation = new CancellationTokenSource();
+        var version = Interlocked.Increment(ref _issuesLoadVersion);
+        _ = LoadIssuesAsync(value?.Id, version, _issuesLoadCancellation.Token);
+    }
     partial void OnSelectedIssueCategoryChanged(CollectionIssueCategoryRow? value) => ApplyIssueFilter();
     partial void OnSelectedIssueBuildingChanged(string value) => ApplyIssueFilter();
+    partial void OnSelectedIssueSeverityChanged(string value) => ApplyIssueFilter();
     partial void OnIssueSearchTextChanged(string value) => ApplyIssueFilter();
 
-    private async Task LoadIssuesAsync(long? runId)
+    private async Task LoadIssuesAsync(long? runId, long version, CancellationToken cancellationToken)
     {
         if (!runId.HasValue)
         {
@@ -171,7 +185,11 @@ public sealed partial class AuditViewModel(
 
         try
         {
-            var report = await collectionIssueService.LoadForRunAsync(runId.Value).ConfigureAwait(true);
+            var report = await collectionIssueService.LoadForRunAsync(runId.Value, cancellationToken).ConfigureAwait(true);
+            if (version != Volatile.Read(ref _issuesLoadVersion) || SelectedRun?.Id != runId.Value)
+            {
+                return;
+            }
             _allIssueRecords = report.Records;
             IssueCategories.Clear();
             foreach (var category in report.Categories)
@@ -189,9 +207,24 @@ public sealed partial class AuditViewModel(
                 IssueBuildingOptions.Add(building);
             }
 
+            IssueSeverityOptions.Clear();
+            IssueSeverityOptions.Add("全部级别");
+            foreach (var severity in report.Records.Select(record => record.Severity)
+                         .Where(severity => !string.IsNullOrWhiteSpace(severity))
+                         .Distinct(StringComparer.OrdinalIgnoreCase)
+                         .OrderBy(severity => severity, StringComparer.OrdinalIgnoreCase))
+            {
+                IssueSeverityOptions.Add(severity);
+            }
+
             if (!IssueBuildingOptions.Contains(SelectedIssueBuilding, StringComparer.OrdinalIgnoreCase))
             {
                 SelectedIssueBuilding = "全部楼栋";
+            }
+
+            if (!IssueSeverityOptions.Contains(SelectedIssueSeverity, StringComparer.OrdinalIgnoreCase))
+            {
+                SelectedIssueSeverity = "全部级别";
             }
 
             ApplyIssueFilter();
@@ -199,7 +232,10 @@ public sealed partial class AuditViewModel(
                 ? $"批次 #{runId.Value} 已加载 {report.Records.Count:N0} 条问题记录"
                 : $"批次 #{runId.Value} 已加载问题记录；{report.Warnings.Count} 个报告需复核";
         }
-        catch (Exception ex)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex) when (version == Volatile.Read(ref _issuesLoadVersion) && SelectedRun?.Id == runId.Value)
         {
             ClearIssues("问题报告读取失败：" + ex.Message);
         }
@@ -212,10 +248,14 @@ public sealed partial class AuditViewModel(
         var building = string.Equals(SelectedIssueBuilding, "全部楼栋", StringComparison.OrdinalIgnoreCase)
             ? string.Empty
             : SelectedIssueBuilding.Trim();
+        var severity = string.Equals(SelectedIssueSeverity, "全部级别", StringComparison.OrdinalIgnoreCase)
+            ? string.Empty
+            : SelectedIssueSeverity.Trim();
         var search = IssueSearchText.Trim();
         foreach (var record in _allIssueRecords.Where(record =>
                      string.IsNullOrWhiteSpace(category) || string.Equals(record.IssueType, category, StringComparison.OrdinalIgnoreCase))
                  .Where(record => string.IsNullOrWhiteSpace(building) || string.Equals(record.Building, building, StringComparison.OrdinalIgnoreCase))
+                 .Where(record => string.IsNullOrWhiteSpace(severity) || string.Equals(record.Severity, severity, StringComparison.OrdinalIgnoreCase))
                  .Where(record => string.IsNullOrWhiteSpace(search) || MatchesSearch(record, search)))
         {
             IssueRecords.Add(new CollectionIssueRow(record));
@@ -229,8 +269,11 @@ public sealed partial class AuditViewModel(
         IssueRecords.Clear();
         IssueBuildingOptions.Clear();
         IssueBuildingOptions.Add("全部楼栋");
+        IssueSeverityOptions.Clear();
+        IssueSeverityOptions.Add("全部级别");
         SelectedIssueCategory = null;
         SelectedIssueBuilding = "全部楼栋";
+        SelectedIssueSeverity = "全部级别";
         StatusText = status;
     }
 

@@ -141,18 +141,27 @@ function childBrowserArgs(managed) {
 }
 
 function runAudit(summaryPath) {
-  const args = ['scripts/audit-realtime-data.js', `--summary=${summaryPath}`, ...(LOG_FILE ? ['--log-file'] : [])];
+  const outputPath = RUN_ID > 0
+    ? path.join(OUT_DIR, `realtime_quality_classified_run${RUN_ID}.json`)
+    : path.join(OUT_DIR, `realtime_quality_classified_${timestamp()}.json`);
+  const args = [
+    'scripts/audit-realtime-data.js',
+    `--summary=${summaryPath}`,
+    `--output=${outputPath}`,
+    ...(LOG_FILE ? ['--log-file'] : []),
+  ];
   const command = args.join(' ');
   console.log(`[RUN] node ${command}`);
   const result = spawnSync(NODE, args, {
     cwd: ROOT,
     stdio: 'inherit',
-    env: process.env,
+    env: { ...process.env, ...childRunEnv(), EMS_QUALITY_OUT: OUT_DIR },
   });
   if (result.error) throw result.error;
-  if (result.status !== 0) {
+  if (result.status !== 0 && result.status !== 2) {
     throw new Error(`Realtime quality audit failed (${result.status}): node ${command}`);
   }
+  return { outputPath, needsReview: result.status === 2 };
 }
 
 function latestFile(prefix, building) {
@@ -596,9 +605,11 @@ async function main() {
           try { return fs.statSync(file).mtimeMs >= startedAt - 1000; } catch { return false; }
         }),
     ];
-    writeManifest('completed', {
+    const audit = !SKIP_AUDIT ? runAudit(outPath) : null;
+    writeManifest(audit?.needsReview ? 'needs_review' : 'completed', {
       summaryPath: outPath,
-      resultFiles: [...new Set(generatedArtifacts)],
+      realtimeQualityPath: audit?.outputPath || null,
+      resultFiles: [...new Set([...generatedArtifacts, audit?.outputPath].filter(Boolean))],
       total,
     });
     console.log(`[ALL DONE] ${outPath}`);
@@ -613,7 +624,6 @@ async function main() {
       percent: 100,
       message: `实时详情采集完成：${total.devices} 台`,
     });
-    if (!SKIP_AUDIT) runAudit(outPath);
   } finally {
     if (browserSession && browserSession.context) {
       await browserSession.context.close().catch(() => {});

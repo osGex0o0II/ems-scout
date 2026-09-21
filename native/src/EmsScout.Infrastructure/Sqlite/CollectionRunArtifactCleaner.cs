@@ -23,7 +23,6 @@ public sealed class CollectionRunArtifactCleaner(Func<string> databasePathResolv
             ($"realtime_all_buildings_batch_failure_run{run.Id}.json", "realtime-failure"),
             ($"realtime_quality_classified_run{run.Id}.json", "realtime-quality"),
             ($"realtime_quality_classified_{run.Id}.json", "realtime-quality"),
-            ($"realtime_all_batch_run{run.Id}.log", "realtime-log"),
         };
 
         foreach (var (name, kind) in generated)
@@ -42,6 +41,17 @@ public sealed class CollectionRunArtifactCleaner(Func<string> databasePathResolv
             if (kind == "manifest" && identityVerified)
             {
                 AddManifestFiles(candidates, root, path, run);
+            }
+        }
+
+        if (Directory.Exists(root))
+        {
+            foreach (var path in Directory.EnumerateFiles(root, "realtime_quality_classified_*.json"))
+            {
+                if (HasMatchingIdentity(path, run))
+                {
+                    AddPath(candidates, root, path, "realtime-quality", identityVerified: true);
+                }
             }
         }
 
@@ -70,6 +80,13 @@ public sealed class CollectionRunArtifactCleaner(Func<string> databasePathResolv
             {
                 pendingPaths.Add(candidate.RelativePath);
                 pendingReasons.Add("文件路径不在本地数据目录内，未删除");
+                continue;
+            }
+
+            if (ContainsReparsePoint(root, path))
+            {
+                pendingPaths.Add(candidate.RelativePath);
+                pendingReasons.Add("产物路径包含符号链接、junction 或其他重解析点，未删除");
                 continue;
             }
 
@@ -149,9 +166,13 @@ public sealed class CollectionRunArtifactCleaner(Func<string> databasePathResolv
                 }
 
                 var childPath = Path.IsPathRooted(value) ? value : Path.Combine(root, value);
+                if (string.Equals(Path.GetExtension(childPath), ".log", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 var identityVerified = HasMatchingIdentity(childPath, run) ||
-                    HasMatchingNdjsonIdentity(childPath, run) ||
-                    IsManifestBoundLog(childPath);
+                    HasMatchingNdjsonIdentity(childPath, run);
                 AddPath(candidates, root, childPath, "realtime-detail", identityVerified);
             }
         }
@@ -273,10 +294,6 @@ public sealed class CollectionRunArtifactCleaner(Func<string> databasePathResolv
         return foundRecord;
     }
 
-    private static bool IsManifestBoundLog(string path) =>
-        string.Equals(Path.GetExtension(path), ".log", StringComparison.OrdinalIgnoreCase) &&
-        Path.GetFileName(path).StartsWith("realtime_", StringComparison.OrdinalIgnoreCase);
-
     private static bool HasMatchingIdentity(JsonElement root, CollectionRunRecord run)
     {
         var runId = ReadLong(root, "runId") ?? ReadLong(root, "run_id");
@@ -301,6 +318,37 @@ public sealed class CollectionRunArtifactCleaner(Func<string> databasePathResolv
     private static bool IsInside(string root, string path) =>
         string.Equals(path, root, StringComparison.OrdinalIgnoreCase) ||
         path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+
+    private static bool ContainsReparsePoint(string root, string path)
+    {
+        if (!IsInside(root, path))
+        {
+            return true;
+        }
+
+        var current = root;
+        if (Directory.Exists(current) && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+        {
+            return true;
+        }
+
+        var relative = Path.GetRelativePath(root, path);
+        foreach (var segment in relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        {
+            if (string.IsNullOrWhiteSpace(segment) || segment == ".")
+            {
+                continue;
+            }
+
+            current = Path.Combine(current, segment);
+            if (Directory.Exists(current) && (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+            {
+                return true;
+            }
+        }
+
+        return File.Exists(path) && (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+    }
 
     private static bool IsProtectedArtifact(string relativePath, string root)
     {

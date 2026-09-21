@@ -376,7 +376,7 @@ public sealed class SqliteDeviceAnnotationService(Func<string> databasePathResol
 
     private static string NormalizePageName(string value)
     {
-        return string.IsNullOrWhiteSpace(value) ? "default" : value.Trim();
+        return DevicePageNameFormatter.NormalizeValue(value);
     }
 
     private static string NormalizeZuo(string value, string building)

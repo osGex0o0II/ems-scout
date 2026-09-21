@@ -90,5 +90,34 @@
             </NavigationView.FooterMenuItems>
             <Frame x:Name="NavFrame" />
         </NavigationView>
+
+        <Grid
+            x:Name="StartupOverlay"
+            Grid.Row="1"
+            Background="{ThemeResource ApplicationPageBackgroundThemeBrush}"
+            IsHitTestVisible="False"
+            Visibility="Collapsed"
+            AutomationProperties.Name="EMS Scout 正在启动">
+            <Grid
+                x:Name="StartupLogoStage"
+                Width="160"
+                Height="160"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Opacity="0"
+                RenderTransformOrigin="0.5,0.5">
+                <Grid.RenderTransform>
+                    <ScaleTransform x:Name="StartupLogoScale" ScaleX="0.88" ScaleY="0.88" />
+                </Grid.RenderTransform>
+                <Image
+                    x:Name="StartupLogo"
+                    Width="112"
+                    Height="112"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Source="ms-appx:///Assets/EmsScoutLogo.png"
+                    Stretch="Uniform" />
+            </Grid>
+        </Grid>
     </Grid>
 </Window>

@@ -25,13 +25,6 @@ public static class DevicePageNameFormatter
             return $"第{pageNumber}页";
         }
 
-        const string podiumPrefix = "裙楼/";
-        if (pageName.StartsWith(podiumPrefix, StringComparison.OrdinalIgnoreCase) &&
-            PageNumbers.TryGetValue(pageName[podiumPrefix.Length..], out pageNumber))
-        {
-            return $"裙楼 / 第{pageNumber}页";
-        }
-
         return pageName;
     }
 
@@ -48,18 +41,20 @@ public static class DevicePageNameFormatter
             return 10 + pageNumber;
         }
 
-        const string podiumPrefix = "裙楼/";
-        if (pageName.StartsWith(podiumPrefix, StringComparison.OrdinalIgnoreCase) &&
-            PageNumbers.TryGetValue(pageName[podiumPrefix.Length..], out pageNumber))
-        {
-            return 20 + pageNumber;
-        }
-
         return pageName.Equals("BM", StringComparison.OrdinalIgnoreCase) ? 100 : 200;
     }
 
     public static string NormalizeValue(string? value)
     {
-        return string.IsNullOrWhiteSpace(value) ? "default" : value.Trim();
+        var normalized = string.IsNullOrWhiteSpace(value) ? "default" : value.Trim();
+        foreach (var prefix in new[] { "裙楼/", "塔楼/" })
+        {
+            if (normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return normalized[prefix.Length..].Trim();
+            }
+        }
+
+        return normalized;
     }
 }

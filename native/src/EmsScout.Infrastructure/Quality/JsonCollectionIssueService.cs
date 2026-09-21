@@ -17,6 +17,20 @@ public sealed class JsonCollectionIssueService(
         ["offline_template_without_stability"] = "默认值疑似",
         ["offline_template_stable"] = "全离线待复核",
         ["realtime_device_anomaly"] = "实时设备异常",
+        ["state_mismatch"] = "状态不一致",
+        ["duplicate_cards_same_page"] = "同页重复卡片",
+        ["empty_sub_areas"] = "空子区",
+        ["suspicious_uniform_pages"] = "页面疑似默认值",
+        ["active_field_incomplete_pages"] = "运行字段不完整",
+        ["duplicate_rendered_pages"] = "重复渲染页面",
+        ["inline_sub_areas"] = "内联子区",
+        ["realtime_timeout"] = "实时采集超时",
+        ["realtime_invalidenum"] = "实时枚举异常",
+        ["realtime_outofrange"] = "实时数值越界",
+        ["realtime_invalidlock"] = "实时集控锁异常",
+        ["report_missing"] = "报告缺失",
+        ["report_parse_failure"] = "报告解析失败",
+        ["report_identity_mismatch"] = "报告批次身份不匹配",
     };
 
     public async Task<CollectionIssueReport> LoadForRunAsync(
@@ -36,6 +50,7 @@ public sealed class JsonCollectionIssueService(
         else
         {
             warnings.Add("未找到该批次质量报告");
+            AddReportMissing(records, runId, batchIdentity, "quality", qualityPath, "未找到该批次质量报告");
         }
 
         var realtimeFiles = Directory.Exists(directory)
@@ -53,9 +68,16 @@ public sealed class JsonCollectionIssueService(
             }
         }
 
-        if (realtimeFiles.Length > 0 && !realtimeMatched)
+        if (!realtimeMatched && !records.Any(record => record.SourceArtifact == "realtime"))
         {
             warnings.Add("未找到与所选批次匹配的实时报告");
+            AddReportMissing(
+                records,
+                runId,
+                batchIdentity,
+                "realtime",
+                Path.Combine(directory, $"realtime_quality_classified_run{runId}.json"),
+                "未找到与所选批次匹配的实时报告");
         }
 
         var deduplicated = records
@@ -98,14 +120,30 @@ public sealed class JsonCollectionIssueService(
             if (ReadNullableLong(root, "run_id") is { } reportRunId && reportRunId != runId)
             {
                 warnings.Add($"质量报告批次 #{reportRunId} 与所选批次 #{runId} 不一致");
+                AddReportIdentityMismatch(records, runId, batchIdentity, "quality", path, $"质量报告批次 #{reportRunId} 与所选批次 #{runId} 不一致");
                 return;
             }
 
+            if (!MatchesBatchIdentity(root, batchIdentity))
+            {
+                var message = $"质量报告批次身份与所选批次 #{runId} 不一致";
+                warnings.Add(message);
+                AddReportIdentityMismatch(records, runId, batchIdentity, "quality", path, message);
+                return;
+            }
+
+            var before = records.Count;
             ReadDetailsObject(root, "details", "quality", runId, batchIdentity, path, records);
+            if (records.Count == before)
+            {
+                ReadLegacyQualityReport(root, runId, batchIdentity, path, records);
+            }
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
-            warnings.Add($"质量报告无法解析：{Path.GetFileName(path)} ({ex.Message})");
+            var message = $"质量报告无法解析：{Path.GetFileName(path)} ({ex.Message})";
+            warnings.Add(message);
+            AddReportFailure(records, runId, batchIdentity, "quality", path, message);
         }
     }
 
@@ -127,6 +165,14 @@ public sealed class JsonCollectionIssueService(
                 return false;
             }
 
+            if (!MatchesBatchIdentity(root, batchIdentity))
+            {
+                var message = $"实时报告批次身份与所选批次 #{runId} 不一致";
+                warnings.Add(message);
+                AddReportIdentityMismatch(records, runId, batchIdentity, "realtime", path, message);
+                return false;
+            }
+
             var before = records.Count;
             ReadDetailsObject(root, "details", "realtime", runId, batchIdentity, path, records);
             if (root.TryGetProperty("details", out _) == false)
@@ -138,9 +184,96 @@ public sealed class JsonCollectionIssueService(
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {
-            warnings.Add($"实时报告无法解析：{Path.GetFileName(path)} ({ex.Message})");
+            var message = $"实时报告无法解析：{Path.GetFileName(path)} ({ex.Message})";
+            warnings.Add(message);
+            AddReportFailure(records, runId, batchIdentity, "realtime", path, message);
             return false;
         }
+    }
+
+    private static void AddReportFailure(
+        ICollection<CollectionIssueRecord> records,
+        long runId,
+        BatchIdentity? batchIdentity,
+        string sourceKind,
+        string sourcePath,
+        string reason)
+    {
+        AddReportProblem(records, runId, batchIdentity, sourceKind, sourcePath, "report_parse_failure", "报告无法解析", reason);
+    }
+
+    private static void AddReportIdentityMismatch(
+        ICollection<CollectionIssueRecord> records,
+        long runId,
+        BatchIdentity? batchIdentity,
+        string sourceKind,
+        string sourcePath,
+        string reason)
+    {
+        AddReportProblem(records, runId, batchIdentity, sourceKind, sourcePath, "report_identity_mismatch", "报告身份不匹配", reason);
+    }
+
+    private static void AddReportMissing(
+        ICollection<CollectionIssueRecord> records,
+        long runId,
+        BatchIdentity? batchIdentity,
+        string sourceKind,
+        string sourcePath,
+        string reason) =>
+        AddReportProblem(records, runId, batchIdentity, sourceKind, sourcePath, "report_missing", "报告缺失", reason);
+
+    private static void AddReportProblem(
+        ICollection<CollectionIssueRecord> records,
+        long runId,
+        BatchIdentity? batchIdentity,
+        string sourceKind,
+        string sourcePath,
+        string issueType,
+        string collectorDecision,
+        string reason)
+    {
+        records.Add(new CollectionIssueRecord(
+            BatchId: runId,
+            BatchUid: batchIdentity?.BatchUid ?? string.Empty,
+            IssueType: issueType,
+            Severity: "P1",
+            Building: string.Empty,
+            Floor: string.Empty,
+            Zone: string.Empty,
+            PageName: string.Empty,
+            DeviceName: string.Empty,
+            DeviceId: string.Empty,
+            CollectedAt: string.Empty,
+            ObservedValue: string.Empty,
+            Evidence: reason,
+            CollectorDecision: collectorDecision,
+            Reason: reason,
+            Attribution: sourceKind == "realtime" ? "实时报告" : "质量报告",
+            ResolutionState: "需复核",
+            SourceArtifact: sourceKind,
+            SourcePath: sourcePath));
+    }
+
+    private static bool MatchesBatchIdentity(JsonElement root, BatchIdentity? batchIdentity)
+    {
+        if (batchIdentity is null)
+        {
+            return true;
+        }
+
+        var batchUid = ReadString(root, "batch_uid", "batchUid");
+        var runKey = ReadString(root, "run_key", "runKey");
+        if (string.IsNullOrWhiteSpace(batchUid) && string.IsNullOrWhiteSpace(runKey))
+        {
+            // Legacy reports only carried run_id/runId. The caller has already
+            // verified that technical id, so keep those reports inspectable.
+            return true;
+        }
+
+        return !string.IsNullOrWhiteSpace(batchUid) &&
+               !string.IsNullOrWhiteSpace(runKey) &&
+               string.Equals(batchUid, batchIdentity.BatchUid, StringComparison.Ordinal) &&
+               string.Equals(runKey, batchIdentity.RunKey, StringComparison.Ordinal);
     }
 
     private static void ReadDetailsObject(
@@ -176,6 +309,59 @@ public sealed class JsonCollectionIssueService(
             }
         }
     }
+
+    private static void ReadLegacyQualityReport(
+        JsonElement root,
+        long runId,
+        BatchIdentity? batchIdentity,
+        string sourcePath,
+        ICollection<CollectionIssueRecord> records)
+    {
+        if (root.TryGetProperty("issues", out var issues) && issues.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var issue in issues.EnumerateArray())
+            {
+                var code = ReadString(issue, "code", "issue_code");
+                if (string.IsNullOrWhiteSpace(code)) continue;
+                records.Add(new CollectionIssueRecord(
+                    runId,
+                    batchIdentity?.BatchUid ?? string.Empty,
+                    code,
+                    ReadString(issue, "severity") is { Length: > 0 } severity ? severity : "P2",
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    "批次统计",
+                    string.Empty,
+                    string.Empty,
+                    ReadString(issue, "count"),
+                    ReadString(issue, "message", "detail"),
+                    "需复核",
+                    ReadString(issue, "message", "detail"),
+                    "采集质量报告",
+                    "需复核",
+                    "quality",
+                    sourcePath));
+            }
+        }
+
+        if (!root.TryGetProperty("samples", out var samples) || samples.ValueKind != JsonValueKind.Object) return;
+        foreach (var property in samples.EnumerateObject())
+        {
+            if (property.Value.ValueKind != JsonValueKind.Array) continue;
+            foreach (var row in property.Value.EnumerateArray())
+            {
+                AddRecord(records, row, NormalizeLegacyQualityIssueType(property.Name), "quality", runId, batchIdentity, sourcePath);
+            }
+        }
+    }
+
+    private static string NormalizeLegacyQualityIssueType(string value) => value switch
+    {
+        "inconsistent_state" => "state_mismatch",
+        _ => value,
+    };
 
     private static void ReadLegacyRealtimeRows(
         JsonElement root,

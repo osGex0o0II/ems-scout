@@ -59,6 +59,26 @@ CREATE INDEX IF NOT EXISTS idx_cd_pg ON cards(page_id);
 CREATE INDEX IF NOT EXISTS idx_cd_sw ON cards(switch);
 CREATE INDEX IF NOT EXISTS idx_cd_name ON cards(name);
 
+CREATE TABLE IF NOT EXISTS run_area_group_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL,
+    group_id INTEGER NOT NULL,
+    group_key TEXT NOT NULL DEFAULT '',
+    group_name TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    rule_order INTEGER NOT NULL,
+    building TEXT NOT NULL,
+    zuo TEXT NOT NULL DEFAULT '-',
+    floor_label TEXT NOT NULL DEFAULT '',
+    floor_value REAL,
+    match_mode TEXT NOT NULL,
+    keywords TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY(run_id) REFERENCES collection_runs(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_run_area_group_rules_run_group
+    ON run_area_group_rules(run_id, group_id, rule_order, id);
+
 -- Native custom group tables. These store manual classification choices across imports.
 CREATE TABLE IF NOT EXISTS monitor_groups (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

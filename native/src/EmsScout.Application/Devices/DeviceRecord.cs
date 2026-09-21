@@ -36,7 +36,8 @@ public sealed record DeviceRecord(
     DeviceWatchState? Watch = null,
     string? PageSection = null,
     DateTimeOffset? CollectedAt = null,
-    string? RealtimeUnavailableReason = null)
+    string? RealtimeUnavailableReason = null,
+    IReadOnlyList<string>? AreaGroups = null)
 {
     public string Location => $"{Building} / {FloorLabel} / {SubArea}";
 
@@ -45,6 +46,12 @@ public sealed record DeviceRecord(
     public string AreaType => string.IsNullOrWhiteSpace(AreaTypeOverride)
         ? DeviceAreaClassifier.Classify(Name, Layout)
         : AreaTypeOverride;
+
+    public IReadOnlyList<string> AreaGroupList => AreaGroups ?? [];
+
+    public string AreaGroupText => AreaGroupList.Count == 0
+        ? "-"
+        : string.Join(" / ", AreaGroupList.Where(name => !string.IsNullOrWhiteSpace(name)));
 
     public DeviceHealthAssessment Health => DeviceHealthRules.Evaluate(this);
 

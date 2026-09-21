@@ -20,12 +20,12 @@ public sealed class GroupSummaryRow(
     public GroupSummaryRow(AreaGroupRecord record)
         : this(
             record.Name,
-            record.GroupKind.Equals("system", StringComparison.OrdinalIgnoreCase) ? "系统区域" : "自定义区域",
+            "区域组",
             record.Total,
             string.IsNullOrWhiteSpace(record.Description) ? record.AreaLabel : record.Description,
-            record.SystemKey == "public" ? DeviceAreaClassifier.PublicArea : record.SystemKey == "non_public" ? DeviceAreaClassifier.PrivateArea : string.Empty,
-            groupId: record.GroupKind.Equals("custom", StringComparison.OrdinalIgnoreCase) ? record.Id : null,
-            isCustom: record.GroupKind.Equals("custom", StringComparison.OrdinalIgnoreCase),
+            string.Empty,
+            groupId: record.Id,
+            isCustom: !string.IsNullOrWhiteSpace(record.GroupKey),
             isLocked: record.Locked,
             isEnabled: record.Enabled,
             itemCount: record.ItemCount)
@@ -33,6 +33,7 @@ public sealed class GroupSummaryRow(
         Id = record.Id;
         AreaLabel = record.AreaLabel;
         Priority = record.Priority;
+        GroupKey = record.GroupKey;
         OnCount = record.OnCount;
         OffCount = record.OffCount;
         OfflineCount = record.OfflineCount;
@@ -76,7 +77,9 @@ public sealed class GroupSummaryRow(
 
     public int ItemCount { get; } = itemCount;
 
-    public string ItemCountText => $"{ItemCount:N0} 个范围";
+    public string GroupKey { get; } = string.Empty;
+
+    public string ItemCountText => $"{ItemCount:N0} 条规则";
 
     public int OnCount { get; } = 0;
 
@@ -106,11 +109,11 @@ public sealed class GroupSummaryRow(
 
     public int PrivateStoppedCount => Math.Max(0, StoppedCount - PublicStoppedCount);
 
-    public string AreaBreakdownText => $"公区 {PublicCount:N0} / 非公区 {PrivateCount:N0}";
+    public string AreaBreakdownText => string.Empty;
 
     public int CoveredAreas { get; } = 0;
 
-    public string StateLabel => IsCustom ? IsEnabled ? "启用" : "停用" : "不可编辑";
+    public string StateLabel => IsEnabled ? "启用" : "停用";
 
     public bool CanOpenInData =>
         GroupId is not null ||

@@ -1005,7 +1005,7 @@ public sealed class SqliteRealtimeReconciliationService(
 
     private static string NormalizePageName(string value)
     {
-        return string.IsNullOrWhiteSpace(value) ? "default" : value.Trim();
+        return DevicePageNameFormatter.NormalizeValue(value);
     }
 
     private static string NormalizeOverrideAction(string value)

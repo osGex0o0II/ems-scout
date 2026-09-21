@@ -19,6 +19,8 @@ public sealed partial class MainWindow : Window
     private bool _suppressNavigationSelection;
     private bool _isNavigating;
     private bool _exitRequested;
+    private bool _startupAnimationStarted;
+    private Storyboard? _startupStoryboard;
     private readonly WindowManager _windowManager;
     private readonly AppSettingsService _settingsService;
     private readonly AppUiSettingsService _uiSettings;
@@ -120,6 +122,85 @@ public sealed partial class MainWindow : Window
         {
             WindowSizeConstraint.Minimize(this);
         }
+    }
+
+    public void PlayStartupAnimation()
+    {
+        if (_startupAnimationStarted)
+        {
+            return;
+        }
+
+        _startupAnimationStarted = true;
+        StartupOverlay.Visibility = Visibility.Visible;
+        StartupOverlay.Opacity = 1;
+        StartupOverlay.IsHitTestVisible = true;
+
+        if (_uiSettings.ReduceMotion)
+        {
+            StartupAnimationCompleted(this, null);
+            return;
+        }
+
+        StartupLogoStage.Opacity = 0;
+        StartupLogoScale.ScaleX = 0.88;
+        StartupLogoScale.ScaleY = 0.88;
+
+        var storyboard = new Storyboard();
+        var logoOpacity = new DoubleAnimation
+        {
+            From = 0,
+            To = 1,
+            Duration = TimeSpan.FromMilliseconds(220),
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+        };
+        var scaleX = new DoubleAnimation
+        {
+            From = 0.88,
+            To = 1,
+            Duration = TimeSpan.FromMilliseconds(320),
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+        };
+        var scaleY = new DoubleAnimation
+        {
+            From = 0.88,
+            To = 1,
+            Duration = TimeSpan.FromMilliseconds(320),
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+        };
+        var overlayOpacity = new DoubleAnimation
+        {
+            From = 1,
+            To = 0,
+            BeginTime = TimeSpan.FromMilliseconds(560),
+            Duration = TimeSpan.FromMilliseconds(320),
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseInOut },
+        };
+
+        Storyboard.SetTarget(logoOpacity, StartupLogoStage);
+        Storyboard.SetTargetProperty(logoOpacity, "Opacity");
+        Storyboard.SetTarget(scaleX, StartupLogoScale);
+        Storyboard.SetTargetProperty(scaleX, "ScaleX");
+        Storyboard.SetTarget(scaleY, StartupLogoScale);
+        Storyboard.SetTargetProperty(scaleY, "ScaleY");
+        Storyboard.SetTarget(overlayOpacity, StartupOverlay);
+        Storyboard.SetTargetProperty(overlayOpacity, "Opacity");
+
+        storyboard.Children.Add(logoOpacity);
+        storyboard.Children.Add(scaleX);
+        storyboard.Children.Add(scaleY);
+        storyboard.Children.Add(overlayOpacity);
+        storyboard.Completed += StartupAnimationCompleted;
+        _startupStoryboard = storyboard;
+        storyboard.Begin();
+    }
+
+    private void StartupAnimationCompleted(object? sender, object? args)
+    {
+        _startupStoryboard = null;
+        StartupOverlay.Visibility = Visibility.Collapsed;
+        StartupOverlay.Opacity = 0;
+        StartupOverlay.IsHitTestVisible = false;
     }
 
     private void ExitFromTray()

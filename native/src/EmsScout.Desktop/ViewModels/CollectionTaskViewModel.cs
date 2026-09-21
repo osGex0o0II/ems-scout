@@ -457,8 +457,6 @@ public sealed partial class CollectionTaskViewModel(
                 break;
             case CollectionTaskModeValues.ValidateOnly:
             case CollectionTaskModeValues.ImportOnly:
-            case CollectionTaskModeValues.QualityOnly:
-            case CollectionTaskModeValues.RealtimeAuditOnly:
                 RunImportAfterCollect = false;
                 RunQualityAfterImport = false;
                 RunRealtimeDetailsAfterImport = false;

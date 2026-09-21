@@ -52,16 +52,7 @@ public static class RealtimeKeyBuilder
 
     private static string NormalizePageName(string pageName)
     {
-        var normalized = string.IsNullOrWhiteSpace(pageName) ? "default" : pageName.Trim();
-        foreach (var prefix in new[] { "裙楼/", "塔楼/" })
-        {
-            if (normalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                return normalized[prefix.Length..].Trim();
-            }
-        }
-
-        return normalized;
+        return DevicePageNameFormatter.NormalizeValue(pageName);
     }
 
     private static string FloorKey(double? floor)

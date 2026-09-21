@@ -21,6 +21,9 @@ public sealed class HistoryDataUiContractTests
         Assert.Contains("DeleteRun_Click", xaml);
         Assert.Contains("IssueCategories", xaml);
         Assert.Contains("IssueRecords", xaml);
+        Assert.Contains("IssueSeverityOptions", xaml);
+        Assert.Contains("SelectedIssueSeverity", viewModel);
+        Assert.Contains("string.IsNullOrWhiteSpace(severity)", viewModel);
         Assert.Contains("ICollectionIssueService", viewModel);
     }
 
@@ -49,8 +52,17 @@ public sealed class HistoryDataUiContractTests
 
         Assert.Contains("页面现象 / 证据", xaml);
         Assert.Contains("采集判断 / 原因", xaml);
+        Assert.Contains("LocationLabel", xaml);
+        Assert.Contains("DeviceLabel", xaml);
+        Assert.Contains("ObservationLabel", xaml);
+        Assert.Contains("DecisionLabel", xaml);
+        var issueRow = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "CollectionIssueRow.cs"));
+        Assert.Contains("LocationLabel", issueRow);
+        Assert.Contains("return string.IsNullOrWhiteSpace(result) ? \"-\" : result;", issueRow);
         Assert.Contains("设备", xaml);
         Assert.Contains("清除筛选", xaml);
+        Assert.Contains("WorkspacePivot.SelectedIndex = 2", codeBehind);
+        Assert.Contains("WorkspacePivot.SelectedIndex = 1", codeBehind);
         Assert.Contains("SQLite 数据、批次 JSON、NDJSON、质量报告和实时报告", codeBehind);
         Assert.Contains("日志文件不会随批次删除", codeBehind);
     }

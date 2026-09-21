@@ -13,13 +13,12 @@ public interface IAreaGroupRepository
         AreaGroupEdit edit,
         CancellationToken cancellationToken = default);
 
-    Task DeleteGroupAsync(long id, CancellationToken cancellationToken = default);
-
-    Task<AreaGroupItemRecord> SaveItemAsync(
-        AreaGroupItemEdit edit,
+    Task<AreaGroupRecord> SaveConfigurationAsync(
+        AreaGroupEdit edit,
+        IReadOnlyList<AreaGroupRuleEdit> rules,
         CancellationToken cancellationToken = default);
 
-    Task DeleteItemAsync(long id, CancellationToken cancellationToken = default);
+    Task DeleteGroupAsync(long id, CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<FloorCatalogRecord>> LoadFloorsAsync(
         string building,
@@ -31,11 +30,27 @@ public interface IAreaGroupRepository
         CancellationToken cancellationToken = default);
 
     Task DeleteFloorAsync(long id, CancellationToken cancellationToken = default);
+
+    Task<AreaGroupRuleRecord> SaveRuleAsync(
+        AreaGroupRuleEdit edit,
+        CancellationToken cancellationToken = default);
+
+    Task DeleteRuleAsync(long id, CancellationToken cancellationToken = default);
+
+    Task<AreaGroupTransferDocument> ExportAsync(CancellationToken cancellationToken = default);
+
+    Task ImportAsync(
+        AreaGroupTransferDocument document,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed record AreaGroupSet(
     IReadOnlyList<AreaGroupRecord> Groups,
-    IReadOnlyList<AreaGroupItemRecord> Items);
+    IReadOnlyList<AreaGroupItemRecord> Items,
+    IReadOnlyList<AreaGroupRuleRecord>? Rules = null)
+{
+    public IReadOnlyList<AreaGroupRuleRecord> RuleRecords { get; } = Rules ?? [];
+}
 
 public sealed record AreaGroupRecord(
     long Id,
@@ -59,7 +74,8 @@ public sealed record AreaGroupRecord(
     int PublicOffCount,
     int PublicOfflineCount,
     int PublicUnknownCount,
-    int PublicCoveredAreas);
+    int PublicCoveredAreas,
+    string GroupKey = "");
 
 public sealed record AreaGroupItemRecord(
     long Id,
@@ -79,7 +95,8 @@ public sealed record AreaGroupEdit(
     string AreaLabel,
     string Description,
     string Priority,
-    bool Enabled);
+    bool Enabled,
+    string GroupKey = "");
 
 public sealed record AreaGroupItemEdit(
     long GroupId,

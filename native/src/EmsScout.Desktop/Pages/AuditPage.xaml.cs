@@ -56,17 +56,20 @@ public sealed partial class AuditPage : Page
         if (sender is ListView list && list.SelectedItem is CollectionIssueCategoryRow category)
         {
             ViewModel.ShowIssueDetails(category);
+            WorkspacePivot.SelectedIndex = 2;
         }
     }
 
     private void ShowDetails_Click(object sender, RoutedEventArgs e)
     {
         ViewModel.ShowIssueDetails(ViewModel.SelectedIssueCategory);
+        WorkspacePivot.SelectedIndex = 2;
     }
 
     private void ShowIssues_Click(object sender, RoutedEventArgs e)
     {
         ViewModel.ShowIssues();
+        WorkspacePivot.SelectedIndex = 1;
     }
 
     private async Task<bool> ConfirmAsync(string title, string content, string primaryButtonText)

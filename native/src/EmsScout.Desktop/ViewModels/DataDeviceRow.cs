@@ -30,7 +30,7 @@ public sealed class DataDeviceRow(
 
     public string CommunicationText { get; } = record.CommunicationStatusText;
 
-    public string AreaType { get; } = record.AreaType;
+    public string AreaType { get; } = record.AreaGroupText;
 
     public string Zuo { get; } = string.IsNullOrWhiteSpace(record.Zuo) ? "--" : record.Zuo;
 

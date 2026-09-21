@@ -17,4 +17,6 @@ public sealed record DeviceFilterOptions(
     IReadOnlyList<DeviceFilterOption>? RealtimeModes = null,
     IReadOnlyList<DeviceFilterOption>? RealtimeFans = null,
     IReadOnlyList<DeviceFilterOption>? RealtimeLocks = null,
-    IReadOnlyList<DeviceFilterOption>? RealtimeSystemTypes = null);
+    IReadOnlyList<DeviceFilterOption>? RealtimeSystemTypes = null,
+    int UnmatchedCount = 0,
+    IReadOnlyDictionary<string, int>? AreaGroupCounts = null);

@@ -15,7 +15,7 @@ public sealed class CollectionRunRow(CollectionRunRecord record, bool isCurrent 
 
     public string BatchLabel => $"批次 {RunNumber} · {RunKey}";
 
-    public string CompletedAt { get; } = FormatDateTime(record.ImportedAt, record.CompletedAt);
+    public string CompletedAt { get; } = CollectionRunDisplay.CompletedAtLabel(record);
 
     public string Scope { get; } = record.Scope;
 
@@ -63,12 +63,4 @@ public sealed class CollectionRunRow(CollectionRunRecord record, bool isCurrent 
         return "已记录";
     }
 
-    private static string FormatDateTime(string primary, string fallback)
-    {
-        return StoredTimestamp.TryParse(primary, out var parsed)
-            ? parsed.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
-            : StoredTimestamp.TryParse(fallback, out parsed)
-                ? parsed.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
-                : primary;
-    }
 }

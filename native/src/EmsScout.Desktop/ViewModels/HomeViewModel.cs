@@ -21,7 +21,7 @@ public sealed partial class HomeViewModel(
     private string _offlineRate = "--";
     private string _currentBatchTimestamp = "--";
     private string _realtimeStatusText = "正在读取实时详情状态";
-    private string _areaGroupsStatus = "正在计算区域组公区状态";
+    private string _areaGroupsStatus = "正在计算区域组状态";
     private string _areaGroupsError = string.Empty;
     private bool _isLoading;
     private long? _latestDataSourceRunId;
@@ -377,13 +377,11 @@ public sealed partial class HomeViewModel(
     private void ApplyAreaGroupsStatus(string error)
     {
         AreaGroupsError = error;
-        var automaticCount = AreaGroups.Count(row => !string.IsNullOrWhiteSpace(row.AreaType));
-        var customCount = AreaGroups.Count - automaticCount;
         AreaGroupsStatus = !string.IsNullOrWhiteSpace(error)
             ? "区域组统计暂不可用"
             : AreaGroups.Count == 0
-                ? "尚未配置启用的自定义区域组"
-                : $"{AreaGroups.Count:N0} 个区域组；自动分类 {automaticCount:N0} 个，自定义 {customCount:N0} 个；点击任一组查看设备、继续筛选并导出";
+                ? "尚未配置启用的区域组"
+                : $"{AreaGroups.Count:N0} 个启用区域组；点击任一组查看设备、继续筛选并导出";
         NotifyAreaGroupState();
     }
 
@@ -433,16 +431,16 @@ public sealed class DashboardAreaGroupRow(DashboardAreaGroupSummary summary, lon
     public string Name { get; } = summary.Name;
 
     public string Description { get; } = string.IsNullOrWhiteSpace(summary.Description)
-        ? string.IsNullOrWhiteSpace(summary.AreaLabel) ? "自定义区域" : summary.AreaLabel
-        : summary.Description;
+        ? "-"
+        : summary.Description.Trim();
 
     public string Priority { get; } = string.IsNullOrWhiteSpace(summary.Priority) ? "普通" : summary.Priority;
 
     public string ScopeText { get; } = !string.IsNullOrWhiteSpace(summary.AreaType)
-        ? $"{summary.AreaType}设备自动分类统计"
+        ? $"{summary.Name}规则命中统计"
         : summary.CoveredAreas == 0
-            ? $"{summary.MemberCount:N0} 个已添加范围，暂无设备"
-            : $"{summary.CoveredAreas:N0} 个位置 / {summary.MemberCount:N0} 个已添加范围";
+        ? $"{summary.MemberCount:N0} 条规则，暂无设备"
+            : $"{summary.CoveredAreas:N0} 个位置 / {summary.Total:N0} 台设备";
 
     public string AreaType { get; } = summary.AreaType;
 
@@ -508,7 +506,7 @@ public sealed class DashboardAreaGroupRow(DashboardAreaGroupSummary summary, lon
             ? "\uE7BA"
             : "\uE930";
 
-    public string AutomationName { get; } = $"区域组 {summary.Name}，设备 {summary.Total:N0} 台，在线 {summary.Online:N0} 台，离线 {summary.Offline:N0} 台，开机 {summary.Running:N0} 台，关机 {summary.Stopped:N0} 台，公区开机 {summary.PublicRunning:N0} 台，公区关机 {summary.PublicStopped:N0} 台";
+    public string AutomationName { get; } = $"区域组 {summary.Name}，设备 {summary.Total:N0} 台，在线 {summary.Online:N0} 台，离线 {summary.Offline:N0} 台，开机 {summary.Running:N0} 台，关机 {summary.Stopped:N0} 台";
 
     private static bool IsRealtimeMetricsAvailable(DashboardAreaGroupSummary summary)
     {

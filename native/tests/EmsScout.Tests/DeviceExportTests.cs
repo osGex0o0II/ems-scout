@@ -29,18 +29,17 @@ public sealed class DeviceExportTests
     }
 
     [Fact]
-    public async Task DeviceWorkbookHonorsCurrentWorkbenchAreaFilters()
+    public async Task DeviceWorkbookShowsDashWhenNoAreaGroupMatches()
     {
         var exportService = CurrentExportService();
         var output = Path.Combine(Path.GetTempPath(), "ems-scout-device-export-tests", Guid.NewGuid().ToString("N"));
 
-        var export = await exportService.ExportAsync(new DeviceQuery(AreaType: "公区"), output);
+        var export = await exportService.ExportAsync(new DeviceQuery(AreaType: "未匹配"), output);
 
         Assert.True(export.RowCount > 0);
-        Assert.Equal(export.RowCount, export.Facets.PublicArea);
         UserDeviceWorkbookAssert.AssertShape(export);
         var rows = UserDeviceWorkbookAssert.ReadRows(export.Path);
-        Assert.All(rows.Skip(1), row => Assert.Equal("公区", row[5]));
+        Assert.All(rows.Skip(1), row => Assert.Equal("-", row[5]));
     }
 
     [Fact]
@@ -74,7 +73,7 @@ public sealed class DeviceExportTests
         Assert.Equal(sample.FloorLabel, row[2]);
         Assert.Matches(@"^第\d+页$", row[3]);
         Assert.Equal(sample.Name, row[4]);
-        Assert.Equal(sample.AreaType, row[5]);
+        Assert.Equal(sample.AreaGroupText, row[5]);
         Assert.Equal(sample.CommunicationText, row[6]);
         Assert.Equal(sample.Mode, row[7]);
         Assert.Equal(sample.Fan, row[8]);
@@ -140,7 +139,7 @@ public sealed class DeviceExportTests
             ["2号", "塔楼", "2F", "第1页", "2-0201-KT", "非公区", "开机", "制冷", "中", "25", "26", "无实时数据", collectedAt],
             exportedRows[2]);
         Assert.Equal(
-            ["3号", "-", "3F", "第1页", "3-0301-KT", "未匹配", "未知", "制冷", "中", "25", "26", "未知", collectedAt],
+            ["3号", "-", "3F", "第1页", "3-0301-KT", "-", "未知", "制冷", "中", "25", "26", "未知", collectedAt],
             exportedRows[3]);
         Assert.Equal(["全部设备", "1号楼", "2号楼", "3号楼"], export.Sheets);
         Assert.All(UserDeviceWorkbookAssert.ReadRows(export.Path, 2).Skip(1), row => Assert.Equal("1号", row[0]));
@@ -258,6 +257,7 @@ public sealed class DeviceExportTests
             CommunicationState: DeviceCommunicationStateParser.Parse(communication),
             Realtime: realtimeLock is null ? null : Realtime(building, floorLabel, subArea, name, realtimeLock),
             AreaTypeOverride: areaType,
+            AreaGroups: areaType == "未匹配" ? [] : [areaType],
             Zuo: zuo,
             PageSection: pageSection,
             CollectedAt: TestCollectedAt);

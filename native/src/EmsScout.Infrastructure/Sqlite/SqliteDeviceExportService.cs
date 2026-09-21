@@ -114,7 +114,7 @@ public sealed class SqliteDeviceExportService(IDeviceReadRepository repository) 
             row.FloorLabel,
             ExportPage(row.PageName),
             row.Name,
-            row.AreaType,
+            row.AreaGroupText,
             row.CommunicationStatusText,
             row.Mode,
             row.Fan,

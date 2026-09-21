@@ -22,14 +22,8 @@ public sealed class DeviceWatchRepositoryTests
             Description: "夜间关注设备",
             Priority: "重点",
             Enabled: true));
-        await groups.SaveItemAsync(new AreaGroupItemEdit(
-            group.Id,
-            "device",
-            "1号",
-            "1F",
-            "1F A",
-            "1-0101-KT",
-            "单台关注"));
+        await groups.SaveRuleAsync(new AreaGroupRuleEdit(
+            group.Id, "1号", "-", "1F", "include", "1-0101-KT", "单台关注"));
 
         await watch.SaveRuleAsync(new DeviceWatchEdit(
             Id: null,
@@ -69,7 +63,7 @@ public sealed class DeviceWatchRepositoryTests
             Description: "白天关注设备",
             Priority: "重点",
             Enabled: true));
-        await groups.SaveItemAsync(new AreaGroupItemEdit(group.Id, "device", "1号", "1F", "1F A", "1-0101-KT", string.Empty));
+        await groups.SaveRuleAsync(new AreaGroupRuleEdit(group.Id, "1号", "-", "1F", "include", "1-0101-KT", string.Empty));
         await watch.SaveRuleAsync(new DeviceWatchEdit(
             Id: null,
             GroupId: group.Id,
@@ -128,6 +122,54 @@ public sealed class DeviceWatchRepositoryTests
     }
 
     [Fact]
+    public async Task DoesNotReadLegacyMembersWhenAreaRulesAreMissing()
+    {
+        var databasePath = CreateDatabase();
+        var groups = new SqliteAreaGroupRepository(() => databasePath);
+        var watch = new SqliteDeviceWatchRepository(() => databasePath);
+        var group = await groups.SaveGroupAsync(new AreaGroupEdit(null, "规则关注", "", "", "重点", true));
+
+        using (var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadWrite"))
+        {
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE monitor_group_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    group_id INTEGER NOT NULL,
+                    target_type TEXT NOT NULL,
+                    building TEXT NOT NULL,
+                    floor_label TEXT,
+                    floor_value REAL,
+                    sub_area_text TEXT,
+                    card_name TEXT,
+                    note TEXT NOT NULL DEFAULT ''
+                );
+                CREATE TABLE legacy_area_api_state (id INTEGER PRIMARY KEY CHECK (id = 1), enabled_at TEXT NOT NULL);
+                INSERT INTO monitor_group_items(group_id, target_type, building, floor_label, floor_value)
+                VALUES ($group_id, 'floor', '1号', '1F', 1);
+                INSERT INTO legacy_area_api_state(id, enabled_at) VALUES (1, CURRENT_TIMESTAMP);
+                """;
+            command.Parameters.AddWithValue("$group_id", group.Id);
+            command.ExecuteNonQuery();
+        }
+
+        await watch.SaveRuleAsync(new DeviceWatchEdit(
+            null,
+            group.Id,
+            "规则关注",
+            DateTimeOffset.Parse("2026-07-02T00:00:00Z"),
+            DateTimeOffset.Parse("2026-07-02T12:00:00Z"),
+            true,
+            string.Empty));
+
+        var evaluation = await watch.EvaluateAsync(new DeviceWatchQuery());
+
+        Assert.Equal(0, evaluation.WatchedDevices);
+        Assert.Empty(evaluation.DeviceStates);
+    }
+
+    [Fact]
     public async Task DeviceRepositoryFiltersWatchAbnormalRows()
     {
         var databasePath = CreateDatabase();
@@ -136,7 +178,7 @@ public sealed class DeviceWatchRepositoryTests
         var devices = new SqliteDeviceReadRepository(() => databasePath, watchRepository: watch);
 
         var group = await groups.SaveGroupAsync(new AreaGroupEdit(null, "夜间关注", "夜间", "夜间关注设备", "重点", true));
-        await groups.SaveItemAsync(new AreaGroupItemEdit(group.Id, "device", "1号", "1F", "1F A", "1-0101-KT", string.Empty));
+        await groups.SaveRuleAsync(new AreaGroupRuleEdit(group.Id, "1号", "-", "1F", "include", "1-0101-KT", string.Empty));
         await watch.SaveRuleAsync(new DeviceWatchEdit(
             null,
             group.Id,
@@ -165,7 +207,7 @@ public sealed class DeviceWatchRepositoryTests
         var output = Path.Combine(Path.GetTempPath(), "ems-scout-watch-export-tests", Guid.NewGuid().ToString("N"));
 
         var group = await groups.SaveGroupAsync(new AreaGroupEdit(null, "夜间关注", "夜间", "夜间关注设备", "重点", true));
-        await groups.SaveItemAsync(new AreaGroupItemEdit(group.Id, "device", "1号", "1F", "1F A", "1-0101-KT", string.Empty));
+        await groups.SaveRuleAsync(new AreaGroupRuleEdit(group.Id, "1号", "-", "1F", "include", "1-0101-KT", string.Empty));
         await watch.SaveRuleAsync(new DeviceWatchEdit(
             null,
             group.Id,
@@ -254,8 +296,8 @@ public sealed class DeviceWatchRepositoryTests
         var devices = new SqliteDeviceReadRepository(() => databasePath, watchRepository: watch);
 
         var group = await groups.SaveGroupAsync(new AreaGroupEdit(null, "混合关注", "混合", "楼层加单台设备", "重点", true));
-        await groups.SaveItemAsync(new AreaGroupItemEdit(group.Id, "floor", "1号", "1F", string.Empty, string.Empty, "1号 1F 整层"));
-        await groups.SaveItemAsync(new AreaGroupItemEdit(group.Id, "device", "2号", "1F", "1F A", "2-0101-KT", "2号单台"));
+        await groups.SaveRuleAsync(new AreaGroupRuleEdit(group.Id, "1号", "-", "1F", "include", "*", "1号 1F 整层"));
+        await groups.SaveRuleAsync(new AreaGroupRuleEdit(group.Id, "2号", "-", "1F", "include", "2-0101-KT", "2号单台"));
         await watch.SaveRuleAsync(new DeviceWatchEdit(
             null,
             group.Id,
@@ -285,7 +327,7 @@ public sealed class DeviceWatchRepositoryTests
         var watch = new SqliteDeviceWatchRepository(() => databasePath);
 
         var group = await groups.SaveGroupAsync(new AreaGroupEdit(null, "停用关注", "停用", "停用组关注", "重点", true));
-        await groups.SaveItemAsync(new AreaGroupItemEdit(group.Id, "device", "1号", "1F", "1F A", "1-0101-KT", string.Empty));
+        await groups.SaveRuleAsync(new AreaGroupRuleEdit(group.Id, "1号", "-", "1F", "include", "1-0101-KT", string.Empty));
         await watch.SaveRuleAsync(new DeviceWatchEdit(
             null,
             group.Id,
@@ -353,7 +395,7 @@ public sealed class DeviceWatchRepositoryTests
         }
 
         var group = await groups.SaveGroupAsync(new AreaGroupEdit(null, "同名设备关注", "同名", "同名设备精确关注", "重点", true));
-        await groups.SaveItemAsync(new AreaGroupItemEdit(group.Id, "device", "1号", "3F", "3F C", "DUP-KT", string.Empty));
+        await groups.SaveRuleAsync(new AreaGroupRuleEdit(group.Id, "1号", "-", "3F", "include", "DUP-KT", string.Empty));
         await watch.SaveRuleAsync(new DeviceWatchEdit(
             null,
             group.Id,
@@ -412,7 +454,7 @@ public sealed class DeviceWatchRepositoryTests
         }
 
         var group = await groups.SaveGroupAsync(new AreaGroupEdit(null, "BM关注", "BM", "BM 关注设备", "重点", true));
-        await groups.SaveItemAsync(new AreaGroupItemEdit(group.Id, "sub_area", "6号", "1F", "BM", string.Empty, string.Empty));
+        await groups.SaveRuleAsync(new AreaGroupRuleEdit(group.Id, "6号", "-", "BM", "include", "*", string.Empty));
         await watch.SaveRuleAsync(new DeviceWatchEdit(
             null,
             group.Id,

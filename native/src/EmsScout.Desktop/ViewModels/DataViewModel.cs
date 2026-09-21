@@ -525,7 +525,7 @@ public sealed class DataViewModel(
         ReplaceOptions(
             AreaOptions,
             DataFilterOption.All("全部"),
-            BuildAreaOptions(groupSet.Groups),
+            BuildAreaOptions(groupSet.Groups, options.UnmatchedCount, options.AreaGroupCounts),
             selectedArea);
         ReplaceOptions(BuildingOptions, DataFilterOption.All("全部"), options.Buildings.Select(DataFilterOption.From), selectedBuilding);
         ReplaceOptions(CommunicationOptions, DataFilterOption.All("全部"), options.CommunicationStates.Select(DataFilterOption.From), selectedCommunication);
@@ -943,24 +943,16 @@ public sealed class DataViewModel(
 
     private DataFilterOption? SelectAreaOption(string value)
     {
-        var query = BuildAreaQuery(value);
-        var optionValue = query.AreaType switch
-        {
-            "公区" => "public",
-            "非公区" => "private",
-            _ => value,
-        };
-        return SelectOption(AreaOptions, optionValue);
+        return SelectOption(AreaOptions, value);
     }
 
     private static (string? AreaType, string? MonitorGroupIds) BuildAreaQuery(string? value)
     {
         return value?.Trim() switch
         {
-            "public" or "公区" => ("公区", null),
-            "private" or "非公区" => ("非公区", null),
             var group when group?.StartsWith("group:", StringComparison.OrdinalIgnoreCase) == true
                 => (null, EmptyToNull(group["group:".Length..])),
+            "unmatched" or "未匹配" => ("未匹配", null),
             _ => (null, null),
         };
     }
@@ -1006,33 +998,31 @@ public sealed class DataViewModel(
         }
     }
 
-    private IEnumerable<DataFilterOption> BuildAreaOptions(IEnumerable<AreaGroupRecord> groups)
+    private IEnumerable<DataFilterOption> BuildAreaOptions(
+        IEnumerable<AreaGroupRecord> groups,
+        int unmatchedCount,
+        IReadOnlyDictionary<string, int>? areaGroupCounts)
     {
         _areaGroupFilterValues.Clear();
         var rows = new List<DataFilterOption>();
         foreach (var group in groups.Where(group => group.Enabled).OrderBy(group => group.Name, StringComparer.CurrentCultureIgnoreCase))
         {
-            var value = group.GroupKind.Equals("system", StringComparison.OrdinalIgnoreCase) &&
-                        group.SystemKey.Equals("public", StringComparison.OrdinalIgnoreCase)
-                ? "public"
-                : group.GroupKind.Equals("system", StringComparison.OrdinalIgnoreCase) &&
-                  group.SystemKey.Equals("non_public", StringComparison.OrdinalIgnoreCase)
-                    ? "private"
-                    : group.GroupKind.Equals("custom", StringComparison.OrdinalIgnoreCase)
-                        ? $"group:{group.Id.ToString(CultureInfo.InvariantCulture)}"
-                        : null;
-            if (value is null || rows.Any(option => option.Value.Equals(value, StringComparison.OrdinalIgnoreCase)))
+            var value = $"group:{group.Id.ToString(CultureInfo.InvariantCulture)}";
+            if (rows.Any(option => option.Value.Equals(value, StringComparison.OrdinalIgnoreCase)))
             {
                 continue;
             }
 
             _areaGroupFilterValues[group.Id] = value;
-            rows.Add(new DataFilterOption(value, value switch
-            {
-                "public" => "公区",
-                "private" => "非公区",
-                _ => group.Name,
-            }, -1));
+            var count = areaGroupCounts is not null && areaGroupCounts.TryGetValue(group.Name, out var historicalCount)
+                ? historicalCount
+                : group.Total;
+            rows.Add(new DataFilterOption(value, group.Name, count));
+        }
+
+        if (unmatchedCount > 0)
+        {
+            rows.Add(new DataFilterOption("unmatched", "未匹配", unmatchedCount));
         }
 
         return rows;

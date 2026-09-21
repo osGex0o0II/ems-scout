@@ -228,6 +228,9 @@ public sealed class DashboardOverviewServiceTests
         public Task<AreaGroupRecord> SaveGroupAsync(AreaGroupEdit edit, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
+        public Task<AreaGroupRecord> SaveConfigurationAsync(AreaGroupEdit edit, IReadOnlyList<AreaGroupRuleEdit> rules, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
         public Task DeleteGroupAsync(long id, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
@@ -244,6 +247,18 @@ public sealed class DashboardOverviewServiceTests
             throw new NotSupportedException();
 
         public Task DeleteFloorAsync(long id, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<AreaGroupRuleRecord> SaveRuleAsync(AreaGroupRuleEdit edit, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task DeleteRuleAsync(long id, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<AreaGroupTransferDocument> ExportAsync(CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task ImportAsync(AreaGroupTransferDocument document, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
     }
 }

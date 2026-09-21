@@ -83,6 +83,7 @@ public partial class App : Microsoft.UI.Xaml.Application
         if (_window is MainWindow mainWindow)
         {
             mainWindow.ApplyStartupState();
+            mainWindow.PlayStartupAnimation();
         }
         var settings = Services.GetRequiredService<AppSettingsService>().Current;
         await Services.GetRequiredService<StartupTaskService>().ApplyAsync(settings.LaunchAtLogin);

@@ -20,5 +20,16 @@ public sealed class CollectionIssueRow(CollectionIssueRecord record)
     public string Attribution { get; } = Dash(record.Attribution);
     public string ResolutionState { get; } = Dash(record.ResolutionState);
 
+    public string LocationLabel => Join(Floor, Zone, PageName);
+    public string DeviceLabel => Join(DeviceName, DeviceId);
+    public string ObservationLabel => Join(CollectedAt, ObservedValue, Evidence);
+    public string DecisionLabel => Join(CollectorDecision, Reason, Attribution, ResolutionState);
+
     private static string Dash(string? value) => string.IsNullOrWhiteSpace(value) ? "-" : value;
+
+    private static string Join(params string[] values)
+    {
+        var result = string.Join(" · ", values.Where(value => value != "-"));
+        return string.IsNullOrWhiteSpace(result) ? "-" : result;
+    }
 }

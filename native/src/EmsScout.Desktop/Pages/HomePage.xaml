@@ -266,11 +266,7 @@
                                         <StackPanel Spacing="3">
                                             <StackPanel Orientation="Horizontal" Spacing="8">
                                                 <TextBlock FontWeight="SemiBold" Text="{x:Bind Name}" />
-                                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind Priority}" />
-                                                <StackPanel Orientation="Horizontal" Spacing="4">
-                                                    <FontIcon FontSize="12" Glyph="{x:Bind Glyph}" />
-                                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind StateText}" />
-                                                </StackPanel>
+                                                <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind Description}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind Description}" />
                                             </StackPanel>
                                             <TextBlock
                                                 Foreground="{ThemeResource TextFillColorTertiaryBrush}"
@@ -327,14 +323,10 @@
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="Auto" />
                                             </Grid.ColumnDefinitions>
-                                             <StackPanel Orientation="Horizontal" Spacing="6">
-                                                 <TextBlock FontWeight="SemiBold" Text="{x:Bind Name}" />
-                                                 <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind Priority}" />
-                                                 <StackPanel Orientation="Horizontal" Spacing="3">
-                                                     <FontIcon FontSize="12" Glyph="{x:Bind Glyph}" />
-                                                     <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind StateText}" />
-                                                 </StackPanel>
-                                             </StackPanel>
+                                              <StackPanel Orientation="Horizontal" Spacing="6">
+                                                  <TextBlock FontWeight="SemiBold" Text="{x:Bind Name}" />
+                                                  <TextBlock Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="{x:Bind Description}" TextTrimming="CharacterEllipsis" ToolTipService.ToolTip="{x:Bind Description}" />
+                                              </StackPanel>
                                             <TextBlock
                                                 Grid.Column="1"
                                                 HorizontalAlignment="Right"

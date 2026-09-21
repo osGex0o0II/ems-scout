@@ -38,4 +38,31 @@ public static class DeviceFloorLabelFormatter
     {
         return (value ?? string.Empty).Trim().ToUpperInvariant();
     }
+
+    public static double SortValue(string? floorLabel)
+    {
+        var normalized = Normalize(floorLabel);
+        if (normalized == "BM")
+        {
+            return -0.5;
+        }
+
+        if (normalized.StartsWith('B') &&
+            double.TryParse(
+                normalized[1..].TrimEnd('F'),
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var basement))
+        {
+            return -basement;
+        }
+
+        return double.TryParse(
+            normalized.TrimEnd('F'),
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out var floor)
+            ? floor
+            : double.MaxValue;
+    }
 }

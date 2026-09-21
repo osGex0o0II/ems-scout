@@ -96,12 +96,24 @@ public sealed class SqliteDeviceReadRepositoryTests
         Assert.Equal("默认页", options.PageNames[0].Label);
         Assert.True(options.PageNames.ToList().FindIndex(option => option.Value == "一页") <
                     options.PageNames.ToList().FindIndex(option => option.Value == "二页"));
+        Assert.Single(options.PageNames, option => option.Label == "第1页");
         Assert.Equal("BM", options.PageNames[^1].Value);
         Assert.NotEmpty(options.Modes);
         Assert.NotEmpty(options.Fans);
         Assert.NotEmpty(options.SetTemperatures);
         Assert.NotEmpty(options.IndoorTemperatures);
         Assert.Empty(options.Tags);
+    }
+
+    [Fact]
+    public async Task PageNameFilterIncludesPrefixedPagesAfterNormalization()
+    {
+        var repository = new SqliteDeviceReadRepository(CurrentDatabasePath());
+
+        var result = await repository.SearchAsync(new(PageName: "一页", Limit: 5000));
+
+        Assert.Equal(2357, result.Total);
+        Assert.Contains(result.Rows, row => row.PageName == "裙楼/一页");
     }
 
     [Fact]
@@ -290,14 +302,15 @@ public sealed class SqliteDeviceReadRepositoryTests
     {
         var repository = new SqliteDeviceReadRepository(CurrentDatabasePath());
 
-        var publicArea = await repository.SearchAsync(new(AreaType: "公区", Limit: 1));
-        var privateArea = await repository.SearchAsync(new(AreaType: "非公区", Limit: 1));
+        var unmatchedArea = await repository.SearchAsync(new(AreaType: "未匹配", Limit: 1));
         var needsReview = await repository.SearchAsync(new(QuickFilter: "needs_review", Limit: 1));
         var tempAbnormal = await repository.SearchAsync(new(QuickFilter: "temp_abnormal", Limit: 1));
         var normal = await repository.SearchAsync(new(QuickFilter: "normal", Limit: 1));
 
         var all = await repository.SearchAsync(new(Limit: 1));
-        Assert.Equal(all.Total, publicArea.Total + privateArea.Total);
+        Assert.True(unmatchedArea.Total >= 0);
+        Assert.True(unmatchedArea.Total < all.Total);
+        Assert.All(unmatchedArea.Rows, row => Assert.Equal("-", row.AreaGroupText));
         Assert.True(needsReview.Total > 0);
         Assert.True(tempAbnormal.Total > 0);
         Assert.True(needsReview.Total >= tempAbnormal.Total);

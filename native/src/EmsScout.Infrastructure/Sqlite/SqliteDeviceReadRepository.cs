@@ -47,9 +47,16 @@ public sealed class SqliteDeviceReadRepository(
                 "collected_at",
                 cancellationToken).ConfigureAwait(false));
         var groupIds = ParseGroupIds(query.MonitorGroupIds);
-        var groupItems = await LoadEnabledAreaGroupItemsAsync(
+        var enabledRuleGroups = await LoadEnabledAreaGroupRulesAsync(
             connection,
             groupIds,
+            query.RunId,
+            cancellationToken).ConfigureAwait(false);
+        var groupRules = enabledRuleGroups.SelectMany(group => group.Rules).ToArray();
+        var allEnabledRuleGroups = await LoadEnabledAreaGroupRulesAsync(
+            connection,
+            groupIds: null,
+            query.RunId,
             cancellationToken).ConfigureAwait(false);
         var (whereSql, parameters) = BuildWhereClause(query, source);
         var annotations = source.IsHistory
@@ -63,7 +70,7 @@ public sealed class SqliteDeviceReadRepository(
         var realtimeBuildings = ResolveRealtimeBuildings(
             query,
             rows,
-            groupIds.Count > 0 ? groupItems : null);
+            groupIds.Count > 0 ? groupRules : null);
         var realtimeSet = await LoadRealtimeDetailsAsync(
             connection,
             source,
@@ -71,13 +78,16 @@ public sealed class SqliteDeviceReadRepository(
             realtimeBuildings,
             cancellationToken).ConfigureAwait(false);
         rows = AttachRealtimeRows(rows, realtimeSet, overrides);
+        rows = AttachAreaGroups(rows, allEnabledRuleGroups);
         rows = rows
             .Where(row => DeviceQueryVisibility.ShouldInclude(row, query))
             .ToList();
         if (groupIds.Count > 0)
         {
             rows = rows
-                .Where(row => AreaGroupMembership.MatchesAny(row, groupItems))
+                .Where(row => groupIds.Any(groupId => AreaGroupRuleMatcher.MatchesAny(
+                    row,
+                    groupRules.Where(rule => rule.GroupId == groupId))))
                 .ToList();
         }
         if (!source.IsHistory)
@@ -148,9 +158,16 @@ public sealed class SqliteDeviceReadRepository(
                 "collected_at",
                 cancellationToken).ConfigureAwait(false));
         var groupIds = ParseGroupIds(query.MonitorGroupIds);
-        var groupItems = await LoadEnabledAreaGroupItemsAsync(
+        var enabledRuleGroups = await LoadEnabledAreaGroupRulesAsync(
             connection,
             groupIds,
+            query.RunId,
+            cancellationToken).ConfigureAwait(false);
+        var groupRules = enabledRuleGroups.SelectMany(group => group.Rules).ToArray();
+        var allEnabledRuleGroups = await LoadEnabledAreaGroupRulesAsync(
+            connection,
+            groupIds: null,
+            query.RunId,
             cancellationToken).ConfigureAwait(false);
         var candidateQuery = query.WithoutFacets();
         var (runWhereSql, runParameters) = BuildWhereClause(candidateQuery, source);
@@ -171,7 +188,7 @@ public sealed class SqliteDeviceReadRepository(
         var realtimeBuildings = ResolveRealtimeBuildings(
             candidateQuery,
             rows,
-            groupIds.Count > 0 ? groupItems : null);
+            groupIds.Count > 0 ? groupRules : null);
         var realtimeSet = await LoadRealtimeDetailsAsync(
             connection,
             source,
@@ -179,13 +196,16 @@ public sealed class SqliteDeviceReadRepository(
             realtimeBuildings,
             cancellationToken).ConfigureAwait(false);
         rows = AttachRealtimeRows(rows, realtimeSet, overrides);
+        rows = AttachAreaGroups(rows, allEnabledRuleGroups);
         rows = rows
             .Where(row => DeviceQueryVisibility.ShouldInclude(row, query))
             .ToList();
         if (groupIds.Count > 0)
         {
             rows = rows
-                .Where(row => AreaGroupMembership.MatchesAny(row, groupItems))
+                .Where(row => groupIds.Any(groupId => AreaGroupRuleMatcher.MatchesAny(
+                    row,
+                    groupRules.Where(rule => rule.GroupId == groupId))))
                 .ToList();
         }
         if (!source.IsHistory)
@@ -230,7 +250,12 @@ public sealed class SqliteDeviceReadRepository(
             RealtimeLocks: CountOptions(
                 realtimeLockRows,
                 row => row.RealtimeLockText),
-            RealtimeSystemTypes: CountOptions(realtimeSystemTypeRows, row => row.Realtime?.Field("系统类型") ?? string.Empty));
+            RealtimeSystemTypes: CountOptions(realtimeSystemTypeRows, row => row.Realtime?.Field("系统类型") ?? string.Empty),
+            UnmatchedCount: rows.Count(row => row.AreaGroupList.Count == 0),
+            AreaGroupCounts: rows
+                .SelectMany(row => row.AreaGroupList)
+                .GroupBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase));
     }
 
     private static List<DeviceRecord> FilterFacetRows(
@@ -746,7 +771,11 @@ public sealed class SqliteDeviceReadRepository(
             parameters[parameterName] = allowed[i];
         }
 
-        clauses.Add($"IFNULL(NULLIF(TRIM(p.page_name), ''), 'default') IN ({string.Join(",", parameterNames)})");
+        const string normalizedPageExpression = "CASE " +
+            "WHEN TRIM(p.page_name) LIKE '裙楼/%' THEN SUBSTR(TRIM(p.page_name), 4) " +
+            "WHEN TRIM(p.page_name) LIKE '塔楼/%' THEN SUBSTR(TRIM(p.page_name), 4) " +
+            "ELSE IFNULL(NULLIF(TRIM(p.page_name), ''), 'default') END";
+        clauses.Add($"{normalizedPageExpression} IN ({string.Join(",", parameterNames)})");
     }
 
     private static IReadOnlyList<long> ParseGroupIds(string? value)
@@ -759,55 +788,111 @@ public sealed class SqliteDeviceReadRepository(
             .ToList();
     }
 
-    private static async Task<IReadOnlyList<AreaGroupItemRecord>> LoadEnabledAreaGroupItemsAsync(
+    private static async Task<IReadOnlyList<EnabledAreaGroupRuleGroup>> LoadEnabledAreaGroupRulesAsync(
         SqliteConnection connection,
-        IReadOnlyList<long> groupIds,
+        IReadOnlyList<long>? groupIds,
+        long? runId,
         CancellationToken cancellationToken)
     {
-        if (groupIds.Count == 0 ||
-            !await TableExistsAsync(connection, "monitor_groups", cancellationToken).ConfigureAwait(false) ||
-            !await TableExistsAsync(connection, "monitor_group_items", cancellationToken).ConfigureAwait(false))
+        if (groupIds is not null && groupIds.Count == 0)
+        {
+            return [];
+        }
+
+        var useSnapshot = runId is not null &&
+            await TableExistsAsync(connection, "run_area_group_rules", cancellationToken).ConfigureAwait(false);
+        if (runId is not null && !useSnapshot)
+        {
+            return [];
+        }
+
+        if (!useSnapshot &&
+            (!await TableExistsAsync(connection, "monitor_groups", cancellationToken).ConfigureAwait(false) ||
+             !await TableExistsAsync(connection, "area_group_rules", cancellationToken).ConfigureAwait(false)))
         {
             return [];
         }
 
         await using var command = connection.CreateCommand();
-        var parameterNames = new List<string>(groupIds.Count);
-        for (var i = 0; i < groupIds.Count; i++)
+        var selectedGroupIds = groupIds ?? [];
+        var parameterNames = new List<string>(selectedGroupIds.Count);
+        for (var i = 0; i < selectedGroupIds.Count; i++)
         {
             var parameterName = "$membership_group_id_" + i.ToString(CultureInfo.InvariantCulture);
             parameterNames.Add(parameterName);
-            command.Parameters.AddWithValue(parameterName, groupIds[i]);
+            command.Parameters.AddWithValue(parameterName, selectedGroupIds[i]);
         }
 
-        command.CommandText = $"""
-            SELECT i.id, i.group_id, g.name AS group_name, i.target_type, i.building,
-                   i.floor_label, i.floor_value, i.sub_area_text, i.card_name, i.note
-            FROM monitor_group_items i
-            JOIN monitor_groups g ON g.id = i.group_id
-            WHERE g.enabled = 1
-              AND i.group_id IN ({string.Join(",", parameterNames)})
-            ORDER BY i.group_id, i.id
-            """;
+        command.CommandText = useSnapshot
+            ? $"""
+                SELECT r.id, r.group_id, r.rule_order, r.building, r.zuo, r.floor_label,
+                  r.floor_value, r.match_mode, r.keywords, r.note, r.group_name
+                FROM run_area_group_rules r
+                WHERE r.run_id = $run_id AND r.enabled = 1
+                  {(parameterNames.Count == 0 ? string.Empty : $"AND r.group_id IN ({string.Join(",", parameterNames)})")}
+                ORDER BY r.group_id, r.rule_order, r.id
+                """
+            : $"""
+                SELECT r.id, r.group_id, r.rule_order, r.building, r.zuo, r.floor_label,
+                  r.floor_value, r.match_mode, r.keywords, r.note, g.name AS group_name
+                FROM area_group_rules r
+                JOIN monitor_groups g ON g.id = r.group_id
+                WHERE g.enabled = 1
+                  AND COALESCE(g.group_key, '') <> ''
+                  {(parameterNames.Count == 0 ? string.Empty : $"AND r.group_id IN ({string.Join(",", parameterNames)})")}
+                ORDER BY r.group_id, r.rule_order, r.id
+                """;
+        if (runId is not null)
+        {
+            command.Parameters.AddWithValue("$run_id", runId.Value);
+        }
 
-        var items = new List<AreaGroupItemRecord>();
+        var groups = new Dictionary<long, EnabledAreaGroupRuleGroup>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
-            items.Add(new AreaGroupItemRecord(
+            var rule = new AreaGroupRuleRecord(
                 Id: reader.GetInt64(reader.GetOrdinal("id")),
                 GroupId: reader.GetInt64(reader.GetOrdinal("group_id")),
-                GroupName: ReadString(reader, "group_name"),
-                TargetType: ReadString(reader, "target_type"),
+                RuleOrder: ReadInt32(reader, "rule_order"),
                 Building: ReadString(reader, "building"),
+                Zuo: ReadString(reader, "zuo"),
                 FloorLabel: ReadString(reader, "floor_label"),
                 FloorValue: ReadNullableDouble(reader, "floor_value"),
-                SubAreaText: ReadString(reader, "sub_area_text"),
-                CardName: ReadString(reader, "card_name"),
-                Note: ReadString(reader, "note")));
+                MatchMode: ReadString(reader, "match_mode"),
+                Keywords: AreaGroupRuleNormalizer.NormalizeKeywords(ReadString(reader, "keywords")),
+                Note: ReadString(reader, "note"));
+            if (!groups.TryGetValue(rule.GroupId, out var group))
+            {
+                group = new EnabledAreaGroupRuleGroup(rule.GroupId, ReadString(reader, "group_name"), []);
+                groups[rule.GroupId] = group;
+            }
+
+            groups[rule.GroupId] = group with { Rules = group.Rules.Append(rule).ToArray() };
         }
 
-        return items;
+        return groups.Values.ToArray();
+    }
+
+    private static List<DeviceRecord> AttachAreaGroups(
+        List<DeviceRecord> rows,
+        IReadOnlyList<EnabledAreaGroupRuleGroup> groups)
+    {
+        if (groups.Count == 0)
+        {
+            return rows.Select(row => row with { AreaGroups = [] }).ToList();
+        }
+
+        return rows
+            .Select(row => row with
+            {
+                AreaGroups = groups
+                    .Where(group => AreaGroupRuleMatcher.MatchesAny(row, group.Rules))
+                    .Select(group => group.Name)
+                    .Where(name => !string.IsNullOrWhiteSpace(name))
+                    .ToArray(),
+            })
+            .ToList();
     }
 
     private static IEnumerable<string> ValueList(string? value)
@@ -926,8 +1011,13 @@ public sealed class SqliteDeviceReadRepository(
 
     private static IReadOnlyList<DeviceFilterOption> PageOptions(IEnumerable<DeviceRecord> rows)
     {
-        return CountOptions(rows, row => string.IsNullOrWhiteSpace(row.PageName) ? "default" : row.PageName)
-            .Select(option => option with { Label = DevicePageNameFormatter.Format(option.Value) })
+        return rows
+            .Select(row => DevicePageNameFormatter.NormalizeValue(row.PageName))
+            .GroupBy(value => value, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new DeviceFilterOption(
+                group.Key,
+                DevicePageNameFormatter.Format(group.Key),
+                group.Count()))
             .OrderBy(option => DevicePageNameFormatter.SortValue(option.Value))
             .ThenBy(option => option.Label, StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -1223,16 +1313,16 @@ public sealed class SqliteDeviceReadRepository(
     private static IReadOnlyList<string> ResolveRealtimeBuildings(
         DeviceQuery query,
         IReadOnlyList<DeviceRecord> rows,
-        IReadOnlyList<AreaGroupItemRecord>? groupItems)
+        IReadOnlyList<AreaGroupRuleRecord>? groupRules)
     {
-        IEnumerable<string> buildings = groupItems is null
+        IEnumerable<string> buildings = groupRules is null
             ? rows.Select(row => row.Building)
-            : AreaGroupMembership.Buildings(groupItems);
+            : groupRules.Select(rule => rule.Building);
 
         if (!string.IsNullOrWhiteSpace(query.Building))
         {
             var requested = query.Building.Trim();
-            if (groupItems is null)
+            if (groupRules is null)
             {
                 return [requested];
             }
@@ -1505,6 +1595,14 @@ public sealed class SqliteDeviceReadRepository(
         return reader.IsDBNull(ordinal) ? string.Empty : reader.GetString(ordinal);
     }
 
+    private static int ReadInt32(SqliteDataReader reader, string name)
+    {
+        var ordinal = reader.GetOrdinal(name);
+        return reader.IsDBNull(ordinal)
+            ? 0
+            : Convert.ToInt32(reader.GetValue(ordinal), CultureInfo.InvariantCulture);
+    }
+
     private static DateTimeOffset? ReadDateTimeOffsetOrNull(SqliteDataReader reader, string column)
     {
         var value = ReadString(reader, column);
@@ -1532,7 +1630,7 @@ public sealed class SqliteDeviceReadRepository(
 
     private static string NormalizePageName(string value)
     {
-        return string.IsNullOrWhiteSpace(value) ? "default" : value.Trim();
+        return DevicePageNameFormatter.NormalizeValue(value);
     }
 
     private static string NormalizeOverrideAction(string value)
@@ -1560,29 +1658,7 @@ public sealed class SqliteDeviceReadRepository(
 
     private static double FloorSortValue(string floorLabel)
     {
-        var normalized = DeviceFloorLabelFormatter.Normalize(floorLabel);
-        if (normalized == "BM")
-        {
-            return -0.5;
-        }
-
-        if (normalized.StartsWith('B') &&
-            double.TryParse(
-                normalized[1..].TrimEnd('F'),
-                NumberStyles.Float,
-                CultureInfo.InvariantCulture,
-                out var basement))
-        {
-            return -basement;
-        }
-
-        return double.TryParse(
-            normalized.TrimEnd('F'),
-            NumberStyles.Float,
-            CultureInfo.InvariantCulture,
-            out var floor)
-            ? floor
-            : double.MaxValue;
+        return DeviceFloorLabelFormatter.SortValue(floorLabel);
     }
 
     private sealed record AnnotationMaps(
@@ -1600,6 +1676,11 @@ public sealed class SqliteDeviceReadRepository(
     private sealed record ManualRealtimeMatch(
         RealtimeDetailRecord Detail,
         RealtimeMatchOverride Override);
+
+    private sealed record EnabledAreaGroupRuleGroup(
+        long GroupId,
+        string Name,
+        IReadOnlyList<AreaGroupRuleRecord> Rules);
 
     private sealed record DeviceSqlSource(
         string FromSql,

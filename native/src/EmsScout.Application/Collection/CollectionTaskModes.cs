@@ -13,9 +13,7 @@ public static class CollectionTaskModeValues
     public const string EnumerateOnly = "enumerate_only";
     public const string ValidateOnly = "validate_only";
     public const string ImportOnly = "import_only";
-    public const string QualityOnly = "quality_only";
     public const string RealtimeDetailsOnly = "realtime_details_only";
-    public const string RealtimeAuditOnly = "realtime_audit_only";
     public const string Custom = "custom";
     public const string StableRealtimeStrategy = "stable-full";
     public const string FastRealtimeStrategy = "fast-batch";
@@ -69,9 +67,7 @@ public static class CollectionTaskModeCatalog
         new(CollectionTaskModeValues.EnumerateOnly, "仅枚举 JSON", "只运行卡片枚举，生成 enum_full_v5.json，不更新 SQLite。", "开始枚举"),
         new(CollectionTaskModeValues.ValidateOnly, "仅校验 JSON", "只校验现有 enum_full_v5.json，不修改 SQLite。", "开始校验"),
         new(CollectionTaskModeValues.ImportOnly, "仅导入 SQLite", "将现有 enum_full_v5.json 导入 SQLite；导入脚本会再次校验采集结果。", "开始导入"),
-        new(CollectionTaskModeValues.QualityOnly, "仅基础审计", "只运行基础质量审计，刷新 quality_report.json。", "开始基础审计"),
         new(CollectionTaskModeValues.RealtimeDetailsOnly, "仅实时详情", "只采集实时详情并刷新实时对账，不重新枚举卡片。", "开始实时详情"),
-        new(CollectionTaskModeValues.RealtimeAuditOnly, "仅实时审计", "只审计已有实时详情数据，不重新采集。", "开始实时审计"),
         new(CollectionTaskModeValues.Custom, "自定义流程", "按下方开关组合执行，适合排障或临时流程。", "开始自定义任务"),
     ];
 
@@ -135,16 +131,6 @@ public static class CollectionTaskModeCatalog
                 RunQuality: false,
                 RunRealtimeDetails: false,
                 RunRealtimeAudit: false),
-            CollectionTaskModeValues.QualityOnly => new(
-                value,
-                "仅基础审计",
-                RequiresBuildings: false,
-                RunEnumeration: false,
-                RunValidation: false,
-                RunImport: false,
-                RunQuality: true,
-                RunRealtimeDetails: false,
-                RunRealtimeAudit: false),
             CollectionTaskModeValues.RealtimeDetailsOnly => new(
                 value,
                 "仅实时详情",
@@ -154,16 +140,6 @@ public static class CollectionTaskModeCatalog
                 RunImport: false,
                 RunQuality: false,
                 RunRealtimeDetails: true,
-                RunRealtimeAudit: true),
-            CollectionTaskModeValues.RealtimeAuditOnly => new(
-                value,
-                "仅实时审计",
-                RequiresBuildings: false,
-                RunEnumeration: false,
-                RunValidation: false,
-                RunImport: false,
-                RunQuality: false,
-                RunRealtimeDetails: false,
                 RunRealtimeAudit: true),
             CollectionTaskModeValues.Custom => new(
                 value,

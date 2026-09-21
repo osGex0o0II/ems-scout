@@ -1,5 +1,7 @@
 using EmsScout.Application;
+using EmsScout.Application.Devices;
 using EmsScout.Application.Groups;
+using EmsScout.Domain;
 using Microsoft.Data.Sqlite;
 
 namespace EmsScout.Infrastructure.Sqlite;
@@ -13,10 +15,10 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         EnsureDatabaseExists();
         await using var connection = OpenConnection(readOnly: false);
         await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
-        await EnsureSystemGroupsAsync(connection, cancellationToken).ConfigureAwait(false);
         var groups = await LoadGroupsAsync(connection, cancellationToken).ConfigureAwait(false);
-        var items = await LoadItemsAsync(connection, null, cancellationToken).ConfigureAwait(false);
-        return new AreaGroupSet(groups, items);
+        IReadOnlyList<AreaGroupItemRecord> items = [];
+        var rules = await LoadRulesAsync(connection, null, cancellationToken).ConfigureAwait(false);
+        return new AreaGroupSet(groups, items, rules);
     }
 
     public async Task<IReadOnlyList<AreaGroupTargetOption>> LoadTargetOptionsAsync(
@@ -235,19 +237,13 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         {
             var current = await LoadGroupRawAsync(connection, edit.Id.Value, cancellationToken).ConfigureAwait(false)
                           ?? throw new InvalidOperationException($"Group not found: {edit.Id.Value}");
+            var groupKey = string.IsNullOrWhiteSpace(edit.GroupKey)
+                ? current.GroupKey
+                : NormalizeGroupKey(edit.GroupKey);
             await using var update = connection.CreateCommand();
-            if (current.Locked)
+            if (current.Locked || current.GroupKind.Equals("system", StringComparison.OrdinalIgnoreCase))
             {
-                update.CommandText = """
-                    UPDATE monitor_groups
-                    SET area_label = $area_label, description = $description, enabled = $enabled, updated_at = $updated_at
-                    WHERE id = $id
-                    """;
-                update.Parameters.AddWithValue("$area_label", NullIfEmpty(edit.AreaLabel));
-                update.Parameters.AddWithValue("$description", NullIfEmpty(edit.Description));
-                update.Parameters.AddWithValue("$enabled", edit.Enabled ? 1 : 0);
-                update.Parameters.AddWithValue("$updated_at", now);
-                update.Parameters.AddWithValue("$id", edit.Id.Value);
+                throw new InvalidOperationException("锁定或系统区域组不支持编辑。");
             }
             else
             {
@@ -260,14 +256,15 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
                 update.CommandText = """
                     UPDATE monitor_groups
                     SET name = $name, area_label = $area_label, description = $description,
-                        priority = $priority, enabled = $enabled, updated_at = $updated_at
+                        priority = $priority, enabled = $enabled, group_key = $group_key, updated_at = $updated_at
                     WHERE id = $id
                     """;
                 update.Parameters.AddWithValue("$name", name);
-                update.Parameters.AddWithValue("$area_label", NullIfEmpty(edit.AreaLabel));
-                update.Parameters.AddWithValue("$description", NullIfEmpty(edit.Description));
+                update.Parameters.AddWithValue("$area_label", (edit.AreaLabel ?? string.Empty).Trim());
+                update.Parameters.AddWithValue("$description", (edit.Description ?? string.Empty).Trim());
                 update.Parameters.AddWithValue("$priority", priority);
                 update.Parameters.AddWithValue("$enabled", edit.Enabled ? 1 : 0);
+                update.Parameters.AddWithValue("$group_key", groupKey);
                 update.Parameters.AddWithValue("$updated_at", now);
                 update.Parameters.AddWithValue("$id", edit.Id.Value);
             }
@@ -283,21 +280,428 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             throw new InvalidOperationException("已存在同名区域组，请选择已有分组编辑或更换名称。");
         }
 
+        var newGroupKey = string.IsNullOrWhiteSpace(edit.GroupKey)
+            ? $"area-{Guid.NewGuid():N}"
+            : NormalizeGroupKey(edit.GroupKey);
+
         await using var insert = connection.CreateCommand();
         insert.CommandText = """
-            INSERT INTO monitor_groups (name, area_label, description, priority, enabled, created_at, updated_at)
-            VALUES ($name, $area_label, $description, $priority, $enabled, $created_at, $updated_at)
+            INSERT INTO monitor_groups (name, area_label, description, priority, group_key, enabled, created_at, updated_at)
+            VALUES ($name, $area_label, $description, $priority, $group_key, $enabled, $created_at, $updated_at)
             RETURNING id
             """;
         insert.Parameters.AddWithValue("$name", name);
-        insert.Parameters.AddWithValue("$area_label", NullIfEmpty(edit.AreaLabel));
-        insert.Parameters.AddWithValue("$description", NullIfEmpty(edit.Description));
+        insert.Parameters.AddWithValue("$area_label", (edit.AreaLabel ?? string.Empty).Trim());
+        insert.Parameters.AddWithValue("$description", (edit.Description ?? string.Empty).Trim());
         insert.Parameters.AddWithValue("$priority", priority);
+        insert.Parameters.AddWithValue("$group_key", newGroupKey);
         insert.Parameters.AddWithValue("$enabled", edit.Enabled ? 1 : 0);
         insert.Parameters.AddWithValue("$created_at", now);
         insert.Parameters.AddWithValue("$updated_at", now);
         var id = Convert.ToInt64(await insert.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture);
         return (await LoadGroupsAsync(connection, cancellationToken).ConfigureAwait(false)).First(group => group.Id == id);
+    }
+
+    public async Task<AreaGroupRecord> SaveConfigurationAsync(
+        AreaGroupEdit edit,
+        IReadOnlyList<AreaGroupRuleEdit> rules,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureDatabaseExists();
+        var normalizedRules = rules
+            .Select((rule, index) => AreaGroupRuleNormalizer.Normalize(new AreaGroupRuleRecord(
+                Id: rule.Id ?? 0,
+                GroupId: 0,
+                RuleOrder: index + 1,
+                Building: rule.Building,
+                Zuo: rule.Zuo,
+                FloorLabel: rule.FloorLabel,
+                FloorValue: AreaGroupRuleNormalizer.TryParseFloorValue(rule.FloorLabel),
+                MatchMode: rule.MatchMode,
+                Keywords: AreaGroupRuleNormalizer.NormalizeKeywords(rule.Keywords),
+                Note: rule.Note)))
+            .ToArray();
+
+        await using var connection = OpenConnection(readOnly: false);
+        await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var name = Require(edit.Name, "group name");
+        var priority = NormalizePriority(edit.Priority);
+        var now = StoredTimestamp.FormatLocal(DateTimeOffset.Now);
+        long groupId;
+
+        if (edit.Id is not null)
+        {
+            var current = await LoadGroupRawAsync(connection, edit.Id.Value, cancellationToken, transaction).ConfigureAwait(false)
+                          ?? throw new InvalidOperationException($"Group not found: {edit.Id.Value}");
+            if (current.Locked || current.GroupKind.Equals("system", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("锁定或系统区域组不支持编辑。");
+            }
+
+            var duplicate = await FindGroupIdByNameAsync(connection, name, cancellationToken, transaction).ConfigureAwait(false);
+            if (duplicate is not null && duplicate.Value != edit.Id.Value)
+            {
+                throw new InvalidOperationException("已存在同名区域组，请选择已有分组编辑或更换名称。");
+            }
+
+            var groupKey = string.IsNullOrWhiteSpace(edit.GroupKey)
+                ? current.GroupKey
+                : NormalizeGroupKey(edit.GroupKey);
+            await using var update = connection.CreateCommand();
+            update.Transaction = transaction;
+            update.CommandText = """
+                UPDATE monitor_groups
+                SET name = $name, area_label = $area_label, description = $description,
+                    priority = $priority, enabled = $enabled, group_key = $group_key, updated_at = $updated_at
+                WHERE id = $id
+                """;
+            update.Parameters.AddWithValue("$name", name);
+            update.Parameters.AddWithValue("$area_label", (edit.AreaLabel ?? string.Empty).Trim());
+            update.Parameters.AddWithValue("$description", (edit.Description ?? string.Empty).Trim());
+            update.Parameters.AddWithValue("$priority", priority);
+            update.Parameters.AddWithValue("$enabled", edit.Enabled ? 1 : 0);
+            update.Parameters.AddWithValue("$group_key", groupKey);
+            update.Parameters.AddWithValue("$updated_at", now);
+            update.Parameters.AddWithValue("$id", edit.Id.Value);
+            await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            groupId = edit.Id.Value;
+        }
+        else
+        {
+            if (await FindGroupIdByNameAsync(connection, name, cancellationToken, transaction).ConfigureAwait(false) is not null)
+            {
+                throw new InvalidOperationException("已存在同名区域组，请选择已有分组编辑或更换名称。");
+            }
+
+            var groupKey = string.IsNullOrWhiteSpace(edit.GroupKey)
+                ? $"area-{Guid.NewGuid():N}"
+                : NormalizeGroupKey(edit.GroupKey);
+            await using var insert = connection.CreateCommand();
+            insert.Transaction = transaction;
+            insert.CommandText = """
+                INSERT INTO monitor_groups
+                    (name, area_label, description, priority, group_key, enabled, created_at, updated_at)
+                VALUES ($name, $area_label, $description, $priority, $group_key, $enabled, $created_at, $updated_at)
+                RETURNING id
+                """;
+            insert.Parameters.AddWithValue("$name", name);
+            insert.Parameters.AddWithValue("$area_label", (edit.AreaLabel ?? string.Empty).Trim());
+            insert.Parameters.AddWithValue("$description", (edit.Description ?? string.Empty).Trim());
+            insert.Parameters.AddWithValue("$priority", priority);
+            insert.Parameters.AddWithValue("$group_key", groupKey);
+            insert.Parameters.AddWithValue("$enabled", edit.Enabled ? 1 : 0);
+            insert.Parameters.AddWithValue("$created_at", now);
+            insert.Parameters.AddWithValue("$updated_at", now);
+            groupId = Convert.ToInt64(await insert.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        await using (var deleteRules = connection.CreateCommand())
+        {
+            deleteRules.Transaction = transaction;
+            deleteRules.CommandText = "DELETE FROM area_group_rules WHERE group_id = $group_id";
+            deleteRules.Parameters.AddWithValue("$group_id", groupId);
+            await deleteRules.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        foreach (var rule in normalizedRules)
+        {
+            await using var insertRule = connection.CreateCommand();
+            insertRule.Transaction = transaction;
+            insertRule.CommandText = """
+                INSERT INTO area_group_rules
+                    (group_id, rule_order, building, zuo, floor_label, floor_value,
+                     match_mode, keywords, note, created_at, updated_at)
+                VALUES ($group_id, $rule_order, $building, $zuo, $floor_label, $floor_value,
+                        $match_mode, $keywords, $note, $created_at, $updated_at)
+                """;
+            insertRule.Parameters.AddWithValue("$group_id", groupId);
+            insertRule.Parameters.AddWithValue("$rule_order", rule.RuleOrder);
+            insertRule.Parameters.AddWithValue("$building", rule.Building);
+            insertRule.Parameters.AddWithValue("$zuo", rule.Zuo);
+            insertRule.Parameters.AddWithValue("$floor_label", rule.FloorLabel);
+            insertRule.Parameters.AddWithValue("$floor_value", (object?)rule.FloorValue ?? DBNull.Value);
+            insertRule.Parameters.AddWithValue("$match_mode", rule.MatchMode);
+            insertRule.Parameters.AddWithValue("$keywords", rule.KeywordText);
+            insertRule.Parameters.AddWithValue("$note", rule.Note);
+            insertRule.Parameters.AddWithValue("$created_at", now);
+            insertRule.Parameters.AddWithValue("$updated_at", now);
+            await insertRule.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return (await LoadAsync(cancellationToken).ConfigureAwait(false)).Groups.First(group => group.Id == groupId);
+    }
+
+    public async Task<AreaGroupRuleRecord> SaveRuleAsync(
+        AreaGroupRuleEdit edit,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureDatabaseExists();
+        await using var connection = OpenConnection(readOnly: false);
+        await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+        var group = await LoadGroupRawAsync(connection, edit.GroupId, cancellationToken).ConfigureAwait(false)
+                    ?? throw new InvalidOperationException($"Group not found: {edit.GroupId}");
+        if (group.Locked || group.GroupKind.Equals("system", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("系统区域不支持规则编辑。");
+        }
+
+        var keywords = AreaGroupRuleNormalizer.NormalizeKeywords(edit.Keywords);
+        var candidate = new AreaGroupRuleRecord(
+            Id: edit.Id ?? 0,
+            GroupId: edit.GroupId,
+            RuleOrder: edit.RuleOrder ?? 0,
+            Building: edit.Building,
+            Zuo: edit.Zuo,
+            FloorLabel: edit.FloorLabel,
+            FloorValue: AreaGroupRuleNormalizer.TryParseFloorValue(edit.FloorLabel),
+            MatchMode: edit.MatchMode,
+            Keywords: keywords,
+            Note: edit.Note);
+        var normalized = AreaGroupRuleNormalizer.Normalize(candidate);
+        var now = StoredTimestamp.FormatLocal(DateTimeOffset.Now);
+
+        if (edit.Id is not null)
+        {
+            await using var update = connection.CreateCommand();
+            update.CommandText = """
+                UPDATE area_group_rules
+                SET rule_order = $rule_order, building = $building, zuo = $zuo,
+                    floor_label = $floor_label, floor_value = $floor_value,
+                    match_mode = $match_mode, keywords = $keywords, note = $note,
+                    updated_at = $updated_at
+                WHERE id = $id AND group_id = $group_id
+                """;
+            AddRuleParameters(update, normalized, edit.Id.Value, now);
+            if (await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 0)
+            {
+                throw new InvalidOperationException("规则不存在或不属于当前区域组。");
+            }
+
+            await AreaGroupRuleOrderMigration.RenumberGroupAsync(connection, null, edit.GroupId, cancellationToken).ConfigureAwait(false);
+            return await LoadRuleByIdAsync(connection, edit.Id.Value, cancellationToken)
+                   ?? throw new InvalidOperationException("规则保存后未找到。");
+        }
+
+        var nextOrder = edit.RuleOrder ?? await NextRuleOrderAsync(connection, edit.GroupId, cancellationToken).ConfigureAwait(false);
+        await using var insert = connection.CreateCommand();
+        insert.CommandText = """
+            INSERT INTO area_group_rules
+                (group_id, rule_order, building, zuo, floor_label, floor_value,
+                 match_mode, keywords, note, created_at, updated_at)
+            VALUES ($group_id, $rule_order, $building, $zuo, $floor_label, $floor_value,
+                    $match_mode, $keywords, $note, $created_at, $updated_at)
+            RETURNING id
+            """;
+        insert.Parameters.AddWithValue("$group_id", normalized.GroupId);
+        insert.Parameters.AddWithValue("$rule_order", nextOrder);
+        insert.Parameters.AddWithValue("$building", normalized.Building);
+        insert.Parameters.AddWithValue("$zuo", normalized.Zuo);
+        insert.Parameters.AddWithValue("$floor_label", normalized.FloorLabel);
+        insert.Parameters.AddWithValue("$floor_value", (object?)normalized.FloorValue ?? DBNull.Value);
+        insert.Parameters.AddWithValue("$match_mode", normalized.MatchMode);
+        insert.Parameters.AddWithValue("$keywords", normalized.KeywordText);
+        insert.Parameters.AddWithValue("$note", normalized.Note);
+        insert.Parameters.AddWithValue("$created_at", now);
+        insert.Parameters.AddWithValue("$updated_at", now);
+        var id = Convert.ToInt64(await insert.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture);
+        await AreaGroupRuleOrderMigration.RenumberGroupAsync(connection, null, edit.GroupId, cancellationToken).ConfigureAwait(false);
+        return await LoadRuleByIdAsync(connection, id, cancellationToken)
+               ?? throw new InvalidOperationException("规则保存后未找到。");
+    }
+
+    public async Task DeleteRuleAsync(long id, CancellationToken cancellationToken = default)
+    {
+        EnsureDatabaseExists();
+        await using var connection = OpenConnection(readOnly: false);
+        await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        long groupId;
+        await using (var find = connection.CreateCommand())
+        {
+            find.Transaction = transaction;
+            find.CommandText = """
+                SELECT r.group_id, g.locked, g.group_kind
+                FROM area_group_rules r
+                JOIN monitor_groups g ON g.id = r.group_id
+                WHERE r.id = $id
+                """;
+            find.Parameters.AddWithValue("$id", id);
+            await using var reader = await find.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                throw new InvalidOperationException("规则不存在或已删除。");
+            }
+
+            groupId = reader.GetInt64(reader.GetOrdinal("group_id"));
+            if (reader.GetInt32(reader.GetOrdinal("locked")) != 0 ||
+                string.Equals(reader.GetString(reader.GetOrdinal("group_kind")), "system", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("锁定或系统区域组不支持规则删除。");
+            }
+        }
+
+        await using (var delete = connection.CreateCommand())
+        {
+            delete.Transaction = transaction;
+            delete.CommandText = "DELETE FROM area_group_rules WHERE id = $id";
+            delete.Parameters.AddWithValue("$id", id);
+            await delete.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await AreaGroupRuleOrderMigration.RenumberGroupAsync(connection, transaction, groupId, cancellationToken).ConfigureAwait(false);
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<AreaGroupTransferDocument> ExportAsync(CancellationToken cancellationToken = default)
+    {
+        EnsureDatabaseExists();
+        await using var connection = OpenConnection(readOnly: false);
+        await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+        var groups = await LoadGroupsAsync(connection, cancellationToken).ConfigureAwait(false);
+        var rules = await LoadRulesAsync(connection, null, cancellationToken).ConfigureAwait(false);
+        var transferGroups = groups
+            .Where(group => !string.IsNullOrWhiteSpace(group.GroupKey))
+            .OrderBy(group => group.GroupKey, StringComparer.OrdinalIgnoreCase)
+            .Select(group => new AreaGroupTransferGroup(
+                GroupKey: group.GroupKey,
+                Name: group.Name,
+                Note: group.Description,
+                Enabled: group.Enabled,
+                AreaLabel: group.AreaLabel,
+                Priority: group.Priority,
+                Rules: rules
+                    .Where(rule => rule.GroupId == group.Id)
+                    .OrderBy(rule => rule.RuleOrder)
+                    .ThenBy(rule => rule.Id)
+                    .Select(rule => new AreaGroupTransferRule(
+                        rule.RuleOrder,
+                        rule.Building,
+                        rule.Zuo,
+                        rule.FloorLabel,
+                        rule.MatchMode,
+                        rule.Keywords,
+                        rule.Note))
+                    .ToArray()))
+            .ToArray();
+        return new AreaGroupTransferDocument(AreaGroupTransferCodec.CurrentSchemaVersion, transferGroups);
+    }
+
+    public async Task ImportAsync(
+        AreaGroupTransferDocument document,
+        CancellationToken cancellationToken = default)
+    {
+        AreaGroupTransferCodec.Validate(document);
+        EnsureDatabaseExists();
+        await using var connection = OpenConnection(readOnly: false);
+        await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+
+        foreach (var transferGroup in document.Groups)
+        {
+            var groupKey = NormalizeGroupKey(transferGroup.GroupKey);
+            var groupId = await FindGroupIdByKeyAsync(connection, transaction, groupKey, cancellationToken).ConfigureAwait(false);
+            if (groupId is null)
+            {
+                await using var insertGroup = connection.CreateCommand();
+                insertGroup.Transaction = transaction;
+                insertGroup.CommandText = """
+                    INSERT INTO monitor_groups
+                        (name, area_label, description, priority, group_kind, system_key, locked, enabled, group_key, created_at, updated_at)
+                    VALUES ($name, $area_label, $description, $priority, 'custom', NULL, 0, $enabled, $group_key, $created_at, $updated_at)
+                    RETURNING id
+                    """;
+                insertGroup.Parameters.AddWithValue("$name", Require(transferGroup.Name, "group name"));
+                insertGroup.Parameters.AddWithValue("$area_label", (transferGroup.AreaLabel ?? string.Empty).Trim());
+                insertGroup.Parameters.AddWithValue("$description", (transferGroup.Note ?? string.Empty).Trim());
+                insertGroup.Parameters.AddWithValue("$priority", NormalizePriority(transferGroup.Priority));
+                insertGroup.Parameters.AddWithValue("$enabled", transferGroup.Enabled ? 1 : 0);
+                insertGroup.Parameters.AddWithValue("$group_key", groupKey);
+                insertGroup.Parameters.AddWithValue("$created_at", StoredTimestamp.FormatLocal(DateTimeOffset.Now));
+                insertGroup.Parameters.AddWithValue("$updated_at", StoredTimestamp.FormatLocal(DateTimeOffset.Now));
+                groupId = Convert.ToInt64(await insertGroup.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture);
+            }
+            else
+            {
+                await using (var lockCheck = connection.CreateCommand())
+                {
+                    lockCheck.Transaction = transaction;
+                    lockCheck.CommandText = "SELECT locked FROM monitor_groups WHERE id = $id";
+                    lockCheck.Parameters.AddWithValue("$id", groupId.Value);
+                    if (Convert.ToInt32(await lockCheck.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture) != 0)
+                    {
+                        throw new InvalidOperationException($"区域组 {groupKey} 已锁定，不能通过导入覆盖。");
+                    }
+                }
+
+                await using var updateGroup = connection.CreateCommand();
+                updateGroup.Transaction = transaction;
+                updateGroup.CommandText = """
+                    UPDATE monitor_groups
+                    SET name = $name, area_label = $area_label, description = $description,
+                        priority = $priority, group_kind = 'custom',
+                        system_key = NULL, enabled = $enabled, updated_at = $updated_at
+                    WHERE id = $id
+                    """;
+                updateGroup.Parameters.AddWithValue("$name", Require(transferGroup.Name, "group name"));
+                updateGroup.Parameters.AddWithValue("$area_label", (transferGroup.AreaLabel ?? string.Empty).Trim());
+                updateGroup.Parameters.AddWithValue("$description", (transferGroup.Note ?? string.Empty).Trim());
+                updateGroup.Parameters.AddWithValue("$priority", NormalizePriority(transferGroup.Priority));
+                updateGroup.Parameters.AddWithValue("$enabled", transferGroup.Enabled ? 1 : 0);
+                updateGroup.Parameters.AddWithValue("$updated_at", StoredTimestamp.FormatLocal(DateTimeOffset.Now));
+                updateGroup.Parameters.AddWithValue("$id", groupId.Value);
+                await updateGroup.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            await using (var deleteRules = connection.CreateCommand())
+            {
+                deleteRules.Transaction = transaction;
+                deleteRules.CommandText = "DELETE FROM area_group_rules WHERE group_id = $group_id";
+                deleteRules.Parameters.AddWithValue("$group_id", groupId.Value);
+                await deleteRules.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            foreach (var transferRule in transferGroup.Rules.OrderBy(rule => rule.RuleOrder))
+            {
+                var keywords = AreaGroupRuleNormalizer.NormalizeKeywords(string.Join("|", transferRule.Keywords));
+                var rule = AreaGroupRuleNormalizer.Normalize(new AreaGroupRuleRecord(
+                    0,
+                    groupId.Value,
+                    transferRule.RuleOrder,
+                    transferRule.Building,
+                    transferRule.Zuo,
+                    transferRule.Floor,
+                    AreaGroupRuleNormalizer.TryParseFloorValue(transferRule.Floor),
+                    transferRule.Mode,
+                    keywords,
+                    transferRule.Note));
+                await using var insertRule = connection.CreateCommand();
+                insertRule.Transaction = transaction;
+                insertRule.CommandText = """
+                    INSERT INTO area_group_rules
+                        (group_id, rule_order, building, zuo, floor_label, floor_value, match_mode, keywords, note, created_at, updated_at)
+                    VALUES ($group_id, $rule_order, $building, $zuo, $floor_label, $floor_value, $match_mode, $keywords, $note, $created_at, $updated_at)
+                    """;
+                insertRule.Parameters.AddWithValue("$group_id", rule.GroupId);
+                insertRule.Parameters.AddWithValue("$rule_order", rule.RuleOrder);
+                insertRule.Parameters.AddWithValue("$building", rule.Building);
+                insertRule.Parameters.AddWithValue("$zuo", rule.Zuo);
+                insertRule.Parameters.AddWithValue("$floor_label", rule.FloorLabel);
+                insertRule.Parameters.AddWithValue("$floor_value", (object?)rule.FloorValue ?? DBNull.Value);
+                insertRule.Parameters.AddWithValue("$match_mode", rule.MatchMode);
+                insertRule.Parameters.AddWithValue("$keywords", rule.KeywordText);
+                insertRule.Parameters.AddWithValue("$note", rule.Note);
+                insertRule.Parameters.AddWithValue("$created_at", StoredTimestamp.FormatLocal(DateTimeOffset.Now));
+                insertRule.Parameters.AddWithValue("$updated_at", StoredTimestamp.FormatLocal(DateTimeOffset.Now));
+                await insertRule.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+
+            await AreaGroupRuleOrderMigration.RenumberGroupAsync(connection, transaction, groupId.Value, cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public async Task DeleteGroupAsync(long id, CancellationToken cancellationToken = default)
@@ -312,22 +716,23 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             throw new InvalidOperationException("系统区域不能删除");
         }
 
+        if (await TableExistsAsync(connection, "device_watch_rules", cancellationToken).ConfigureAwait(false))
+        {
+            await using var reference = connection.CreateCommand();
+            reference.CommandText = "SELECT COUNT(*) FROM device_watch_rules WHERE group_id = $id";
+            reference.Parameters.AddWithValue("$id", id);
+            var references = Convert.ToInt32(await reference.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture);
+            if (references > 0)
+            {
+                throw new InvalidOperationException("区域组仍被设备关注规则引用，请先解除引用后再删除。");
+            }
+        }
+
         await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         if (await TableExistsAsync(connection, "device_watch_rules", cancellationToken).ConfigureAwait(false))
         {
-            await using var deleteWatchRules = connection.CreateCommand();
-            deleteWatchRules.Transaction = (SqliteTransaction)transaction;
-            deleteWatchRules.CommandText = "DELETE FROM device_watch_rules WHERE group_id = $id";
-            deleteWatchRules.Parameters.AddWithValue("$id", id);
-            await deleteWatchRules.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        }
-
-        await using (var deleteItems = connection.CreateCommand())
-        {
-            deleteItems.Transaction = (SqliteTransaction)transaction;
-            deleteItems.CommandText = "DELETE FROM monitor_group_items WHERE group_id = $id";
-            deleteItems.Parameters.AddWithValue("$id", id);
-            await deleteItems.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            // The reference check above intentionally makes this branch a no-op for normal deletion.
+            // Keep the table check here for databases created before the watch-rule migration.
         }
 
         await using (var deleteGroup = connection.CreateCommand())
@@ -345,186 +750,12 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         AreaGroupItemEdit edit,
         CancellationToken cancellationToken = default)
     {
-        EnsureDatabaseExists();
-        await using var connection = OpenConnection(readOnly: false);
-        await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
-        var group = await LoadGroupRawAsync(connection, edit.GroupId, cancellationToken).ConfigureAwait(false)
-                    ?? throw new InvalidOperationException($"Group not found: {edit.GroupId}");
-        if (group.Locked || group.GroupKind.Equals("system", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException("系统区域不需要手动添加成员");
-        }
-
-        var targetType = NormalizeTargetType(edit.TargetType);
-        var building = Require(edit.Building, "building");
-        if (!Buildings.Contains(building, StringComparer.OrdinalIgnoreCase))
-        {
-            throw new ArgumentException("Invalid building: " + building);
-        }
-
-        var floorLabel = string.IsNullOrWhiteSpace(edit.FloorLabel) ? string.Empty : NormalizeFloorLabel(edit.FloorLabel);
-        var floorValue = string.IsNullOrWhiteSpace(floorLabel) ? null : ParseFloorValue(floorLabel);
-        var subArea = (edit.SubAreaText ?? string.Empty).Trim();
-        var cardName = (edit.CardName ?? string.Empty).Trim();
-        if (targetType == "floor" && floorValue is null)
-        {
-            throw new ArgumentException("floor target requires floor label.");
-        }
-
-        if (targetType == "sub_area" && (floorValue is null || string.IsNullOrWhiteSpace(subArea)))
-        {
-            throw new ArgumentException("sub_area target requires floor and sub area.");
-        }
-
-        if (targetType == "device" && (floorValue is null || string.IsNullOrWhiteSpace(subArea) || string.IsNullOrWhiteSpace(cardName)))
-        {
-            throw new ArgumentException("device target requires floor, sub area and card name.");
-        }
-
-        if (targetType is ("name_contains" or "name_excludes") && string.IsNullOrWhiteSpace(cardName))
-        {
-            throw new ArgumentException("name target requires a name pattern.");
-        }
-
-        var now = StoredTimestamp.FormatLocal(DateTimeOffset.Now);
-        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
-        var existingItem = edit.Id is null
-            ? null
-            : await LoadItemRawAsync(connection, edit.Id.Value, cancellationToken).ConfigureAwait(false)
-              ?? throw new InvalidOperationException($"Group item not found: {edit.Id.Value}");
-        if (existingItem is not null && existingItem.GroupId != edit.GroupId)
-        {
-            throw new InvalidOperationException("分组成员不属于当前区域组。");
-        }
-
-        var duplicateId = await FindItemIdAsync(
-            connection,
-            edit.GroupId,
-            targetType,
-            building,
-            floorValue,
-            subArea,
-            cardName,
-            edit.Id,
-            cancellationToken).ConfigureAwait(false);
-        if (duplicateId is not null)
-        {
-            await using var update = connection.CreateCommand();
-            update.Transaction = (SqliteTransaction)transaction;
-            update.CommandText = """
-                UPDATE monitor_group_items
-                SET target_type = $target_type,
-                    building = $building,
-                    floor_label = $floor_label,
-                    floor_value = $floor_value,
-                    sub_area_text = $sub_area_text,
-                    card_name = $card_name,
-                    note = $note,
-                    updated_at = $updated_at
-                WHERE id = $id
-                """;
-            update.Parameters.AddWithValue("$target_type", targetType);
-            update.Parameters.AddWithValue("$building", building);
-            update.Parameters.AddWithValue("$floor_label", NullIfEmpty(floorLabel));
-            update.Parameters.AddWithValue("$floor_value", floorValue is null ? DBNull.Value : floorValue);
-            update.Parameters.AddWithValue("$sub_area_text", NullIfEmpty(subArea));
-            update.Parameters.AddWithValue("$card_name", NullIfEmpty(cardName));
-            update.Parameters.AddWithValue("$note", edit.Note ?? string.Empty);
-            update.Parameters.AddWithValue("$updated_at", now);
-            update.Parameters.AddWithValue("$id", duplicateId.Value);
-            await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            if (edit.Id is not null)
-            {
-                await DeleteItemCoreAsync(connection, transaction, edit.Id.Value, cancellationToken).ConfigureAwait(false);
-            }
-
-            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            return (await LoadItemsAsync(connection, edit.GroupId, cancellationToken).ConfigureAwait(false))
-                .First(item => item.Id == duplicateId.Value);
-        }
-
-        if (edit.Id is not null)
-        {
-            await using var update = connection.CreateCommand();
-            update.Transaction = (SqliteTransaction)transaction;
-            update.CommandText = """
-                UPDATE monitor_group_items
-                SET target_type = $target_type,
-                    building = $building,
-                    floor_label = $floor_label,
-                    floor_value = $floor_value,
-                    sub_area_text = $sub_area_text,
-                    card_name = $card_name,
-                    note = $note,
-                    updated_at = $updated_at
-                WHERE id = $id
-                """;
-            update.Parameters.AddWithValue("$target_type", targetType);
-            update.Parameters.AddWithValue("$building", building);
-            update.Parameters.AddWithValue("$floor_label", NullIfEmpty(floorLabel));
-            update.Parameters.AddWithValue("$floor_value", floorValue is null ? DBNull.Value : floorValue);
-            update.Parameters.AddWithValue("$sub_area_text", NullIfEmpty(subArea));
-            update.Parameters.AddWithValue("$card_name", NullIfEmpty(cardName));
-            update.Parameters.AddWithValue("$note", edit.Note ?? string.Empty);
-            update.Parameters.AddWithValue("$updated_at", now);
-            update.Parameters.AddWithValue("$id", edit.Id.Value);
-            var changes = await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-            if (changes == 0)
-            {
-                throw new InvalidOperationException($"Group item not found: {edit.Id.Value}");
-            }
-
-            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-            return (await LoadItemsAsync(connection, edit.GroupId, cancellationToken).ConfigureAwait(false))
-                .First(item => item.Id == edit.Id.Value);
-        }
-
-        await using var insert = connection.CreateCommand();
-        insert.Transaction = (SqliteTransaction)transaction;
-        insert.CommandText = """
-            INSERT INTO monitor_group_items
-              (group_id, target_type, building, floor_label, floor_value, sub_area_text, card_name, note, created_at, updated_at)
-            VALUES ($group_id, $target_type, $building, $floor_label, $floor_value, $sub_area_text, $card_name, $note, $created_at, $updated_at)
-            RETURNING id
-            """;
-        insert.Parameters.AddWithValue("$group_id", edit.GroupId);
-        insert.Parameters.AddWithValue("$target_type", targetType);
-        insert.Parameters.AddWithValue("$building", building);
-        insert.Parameters.AddWithValue("$floor_label", NullIfEmpty(floorLabel));
-        insert.Parameters.AddWithValue("$floor_value", floorValue is null ? DBNull.Value : floorValue);
-        insert.Parameters.AddWithValue("$sub_area_text", NullIfEmpty(subArea));
-        insert.Parameters.AddWithValue("$card_name", NullIfEmpty(cardName));
-        insert.Parameters.AddWithValue("$note", edit.Note ?? string.Empty);
-        insert.Parameters.AddWithValue("$created_at", now);
-        insert.Parameters.AddWithValue("$updated_at", now);
-        var id = Convert.ToInt64(await insert.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture);
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return (await LoadItemsAsync(connection, edit.GroupId, cancellationToken).ConfigureAwait(false))
-            .First(item => item.Id == id);
+        throw new NotSupportedException("区域组成员已废弃，请使用区域组匹配规则。");
     }
 
     public async Task DeleteItemAsync(long id, CancellationToken cancellationToken = default)
     {
-        EnsureDatabaseExists();
-        await using var connection = OpenConnection(readOnly: false);
-        await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
-        await using var command = connection.CreateCommand();
-        command.CommandText = "DELETE FROM monitor_group_items WHERE id = $id";
-        command.Parameters.AddWithValue("$id", id);
-        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-    }
-
-    private static async Task DeleteItemCoreAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        long id,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = "DELETE FROM monitor_group_items WHERE id = $id";
-        command.Parameters.AddWithValue("$id", id);
-        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        throw new NotSupportedException("区域组成员已废弃，请使用区域组匹配规则。");
     }
 
     private SqliteConnection OpenConnection(bool readOnly)
@@ -561,21 +792,49 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
                 system_key TEXT,
                 locked INTEGER NOT NULL DEFAULT 0,
                 enabled INTEGER NOT NULL DEFAULT 1,
+                group_key TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
                 updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60))
             );
-            CREATE TABLE IF NOT EXISTS monitor_group_items (
+            CREATE TABLE IF NOT EXISTS area_group_rules (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 group_id INTEGER NOT NULL,
-                target_type TEXT NOT NULL DEFAULT 'floor',
+                rule_order INTEGER NOT NULL DEFAULT 0,
                 building TEXT NOT NULL,
-                floor_label TEXT,
+                zuo TEXT NOT NULL DEFAULT '-',
+                floor_label TEXT NOT NULL DEFAULT '',
                 floor_value REAL,
-                sub_area_text TEXT,
-                card_name TEXT,
+                match_mode TEXT NOT NULL,
+                keywords TEXT NOT NULL,
                 note TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
-                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60))
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
+                FOREIGN KEY(group_id) REFERENCES monitor_groups(id) ON DELETE CASCADE
+            );
+                CREATE INDEX IF NOT EXISTS idx_area_group_rules_group_order
+                    ON area_group_rules(group_id, rule_order, id);
+                CREATE TABLE IF NOT EXISTS run_area_group_rules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id INTEGER NOT NULL,
+                    group_id INTEGER NOT NULL,
+                    group_key TEXT NOT NULL DEFAULT '',
+                    group_name TEXT NOT NULL DEFAULT '',
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    rule_order INTEGER NOT NULL,
+                    building TEXT NOT NULL,
+                    zuo TEXT NOT NULL DEFAULT '-',
+                    floor_label TEXT NOT NULL DEFAULT '',
+                    floor_value REAL,
+                    match_mode TEXT NOT NULL,
+                    keywords TEXT NOT NULL DEFAULT '',
+                    note TEXT NOT NULL DEFAULT '',
+                    FOREIGN KEY(run_id) REFERENCES collection_runs(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_run_area_group_rules_run_group
+                    ON run_area_group_rules(run_id, group_id, rule_order, id);
+                CREATE TABLE IF NOT EXISTS ems_schema_migrations (
+                name TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS floor_catalog (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -589,30 +848,153 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
                 updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60))
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_floor_catalog_key
-                ON floor_catalog(building, floor_label);
+            ON floor_catalog(building, floor_label);
             """;
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(connection, "monitor_groups", "group_key", "TEXT NOT NULL DEFAULT ''", cancellationToken).ConfigureAwait(false);
+        await EnsureGroupKeyIndexAsync(connection, cancellationToken).ConfigureAwait(false);
+        await MigrateLegacyAreaGroupsAsync(connection, cancellationToken).ConfigureAwait(false);
+        await AreaGroupRuleOrderMigration.ApplyAsync(connection, null, cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task EnsureSystemGroupsAsync(
+    private static async Task AddColumnIfMissingAsync(
+        SqliteConnection connection,
+        string tableName,
+        string columnName,
+        string columnDefinition,
+        CancellationToken cancellationToken)
+    {
+        await using var check = connection.CreateCommand();
+        check.CommandText = $"PRAGMA table_info({tableName})";
+        await using var reader = await check.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            if (string.Equals(reader.GetString(reader.GetOrdinal("name")), columnName, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+        }
+
+        await using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE {tableName} ADD COLUMN {columnName} {columnDefinition}";
+        await alter.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task EnsureGroupKeyIndexAsync(
         SqliteConnection connection,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
-        command.CommandText = """
-            INSERT OR IGNORE INTO monitor_groups
-                (name, area_label, description, priority, group_kind, system_key, locked, enabled)
-            VALUES
-                ('公区', '公区', '公共区域设备', '重点', 'system', 'public', 1, 1),
-                ('非公区', '非公区', '非公共区域设备', '重点', 'system', 'non_public', 1, 1);
-            UPDATE monitor_groups
-            SET group_kind = 'system', locked = 1, enabled = 1, area_label = '公区', description = '公共区域设备'
-            WHERE system_key = 'public';
-            UPDATE monitor_groups
-            SET group_kind = 'system', locked = 1, enabled = 1, area_label = '非公区', description = '非公共区域设备'
-            WHERE system_key = 'non_public';
-            """;
+        command.CommandText = "CREATE UNIQUE INDEX IF NOT EXISTS ux_monitor_groups_group_key ON monitor_groups(group_key) WHERE group_key <> ''";
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task MigrateLegacyAreaGroupsAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        const string migrationName = "area-groups-rules-v1";
+        await using var exists = connection.CreateCommand();
+        exists.CommandText = "SELECT 1 FROM ems_schema_migrations WHERE name = $name";
+        exists.Parameters.AddWithValue("$name", migrationName);
+        if (await exists.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
+        {
+            await CleanupLegacyAreaStorageAsync(connection, cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        await using var transaction = (SqliteTransaction)await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        if (await TableExistsAsync(connection, "monitor_group_items", cancellationToken).ConfigureAwait(false))
+        {
+            // Legacy members reference monitor_groups without cascade delete.
+            // Clear them before removing groups that are not retained for Watch.
+            await using var deleteItems = connection.CreateCommand();
+            deleteItems.Transaction = transaction;
+            deleteItems.CommandText = "DELETE FROM monitor_group_items";
+            await deleteItems.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        if (await TableExistsAsync(connection, "device_watch_rules", cancellationToken).ConfigureAwait(false))
+        {
+            await using var preserveWatchGroups = connection.CreateCommand();
+            preserveWatchGroups.Transaction = transaction;
+            preserveWatchGroups.CommandText = """
+                UPDATE monitor_groups
+                SET enabled = 0, group_kind = 'custom', system_key = NULL, locked = 0, group_key = ''
+                WHERE EXISTS (
+                    SELECT 1 FROM device_watch_rules
+                    WHERE device_watch_rules.group_id = monitor_groups.id
+                );
+                DELETE FROM monitor_groups
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM device_watch_rules
+                    WHERE device_watch_rules.group_id = monitor_groups.id
+                );
+                DELETE FROM device_watch_rules
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM monitor_groups
+                    WHERE monitor_groups.id = device_watch_rules.group_id
+                );
+                """;
+            await preserveWatchGroups.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await using var deleteGroups = connection.CreateCommand();
+            deleteGroups.Transaction = transaction;
+            deleteGroups.CommandText = "DELETE FROM monitor_groups";
+            await deleteGroups.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using (var deleteRules = connection.CreateCommand())
+        {
+            deleteRules.Transaction = transaction;
+            deleteRules.CommandText = "DELETE FROM area_group_rules";
+            await deleteRules.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (await TableExistsAsync(connection, "monitor_group_items", cancellationToken).ConfigureAwait(false))
+        {
+            await using var dropItems = connection.CreateCommand();
+            dropItems.Transaction = transaction;
+            dropItems.CommandText = "DROP TABLE monitor_group_items";
+            await dropItems.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (await TableExistsAsync(connection, "legacy_area_api_state", cancellationToken).ConfigureAwait(false))
+        {
+            await using var deleteLegacyState = connection.CreateCommand();
+            deleteLegacyState.Transaction = transaction;
+            deleteLegacyState.CommandText = "DROP TABLE legacy_area_api_state";
+            await deleteLegacyState.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await using (var mark = connection.CreateCommand())
+        {
+            mark.Transaction = transaction;
+            mark.CommandText = "INSERT INTO ems_schema_migrations(name, applied_at) VALUES ($name, $applied_at)";
+            mark.Parameters.AddWithValue("$name", migrationName);
+            mark.Parameters.AddWithValue("$applied_at", StoredTimestamp.FormatLocal(DateTimeOffset.Now));
+            await mark.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task CleanupLegacyAreaStorageAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        var statements = new List<string>();
+        if (await TableExistsAsync(connection, "monitor_group_items", cancellationToken).ConfigureAwait(false))
+            statements.Add("DROP TABLE monitor_group_items");
+        if (await TableExistsAsync(connection, "legacy_area_api_state", cancellationToken).ConfigureAwait(false))
+            statements.Add("DROP TABLE legacy_area_api_state");
+        if (statements.Count == 0)
+            return;
+
+        await using var cleanup = connection.CreateCommand();
+        cleanup.CommandText = string.Join(';', statements);
+        await cleanup.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task SyncFloorCatalogFromCurrentAsync(
@@ -696,8 +1078,9 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         {
             command.CommandText = """
                 SELECT id, name, area_label, description, priority, group_kind, system_key, locked,
-                       enabled
+                       enabled, group_key
                 FROM monitor_groups
+                WHERE COALESCE(group_key, '') <> ''
                 ORDER BY enabled DESC, priority DESC, id
                 """;
             await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -733,7 +1116,8 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
                 stats.PublicOffCount,
                 stats.PublicOfflineCount,
                 stats.PublicUnknownCount,
-                stats.PublicCoveredAreas));
+                stats.PublicCoveredAreas,
+                group.GroupKey));
         }
 
         return rows;
@@ -778,98 +1162,201 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         return rows;
     }
 
+    private static async Task<IReadOnlyList<AreaGroupRuleRecord>> LoadRulesAsync(
+        SqliteConnection connection,
+        long? groupId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"""
+            SELECT id, group_id, rule_order, building, zuo, floor_label, floor_value,
+                   match_mode, keywords, note
+            FROM area_group_rules
+            {(groupId is null ? string.Empty : "WHERE group_id = $group_id")}
+            ORDER BY group_id, rule_order, id
+            """;
+        if (groupId is not null)
+        {
+            command.Parameters.AddWithValue("$group_id", groupId.Value);
+        }
+
+        var rows = new List<AreaGroupRuleRecord>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            rows.Add(ReadRule(reader));
+        }
+
+        return rows;
+    }
+
+    private static async Task<AreaGroupRuleRecord?> LoadRuleByIdAsync(
+        SqliteConnection connection,
+        long id,
+        CancellationToken cancellationToken)
+    {
+        var rows = await LoadRulesAsync(connection, null, cancellationToken).ConfigureAwait(false);
+        return rows.FirstOrDefault(rule => rule.Id == id);
+    }
+
+    private static async Task<int> NextRuleOrderAsync(
+        SqliteConnection connection,
+        long groupId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COALESCE(MAX(rule_order), 0) + 1 FROM area_group_rules WHERE group_id = $group_id";
+        command.Parameters.AddWithValue("$group_id", groupId);
+        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static void AddRuleParameters(
+        SqliteCommand command,
+        AreaGroupRuleRecord rule,
+        long id,
+        string updatedAt)
+    {
+        command.Parameters.AddWithValue("$id", id);
+        command.Parameters.AddWithValue("$group_id", rule.GroupId);
+        command.Parameters.AddWithValue("$rule_order", rule.RuleOrder);
+        command.Parameters.AddWithValue("$building", rule.Building);
+        command.Parameters.AddWithValue("$zuo", rule.Zuo);
+        command.Parameters.AddWithValue("$floor_label", rule.FloorLabel);
+        command.Parameters.AddWithValue("$floor_value", (object?)rule.FloorValue ?? DBNull.Value);
+        command.Parameters.AddWithValue("$match_mode", rule.MatchMode);
+        command.Parameters.AddWithValue("$keywords", rule.KeywordText);
+        command.Parameters.AddWithValue("$note", rule.Note);
+        command.Parameters.AddWithValue("$updated_at", updatedAt);
+    }
+
+    private static AreaGroupRuleRecord ReadRule(SqliteDataReader reader)
+    {
+        return new AreaGroupRuleRecord(
+            Id: reader.GetInt64(reader.GetOrdinal("id")),
+            GroupId: reader.GetInt64(reader.GetOrdinal("group_id")),
+            RuleOrder: ReadInt32(reader, "rule_order"),
+            Building: ReadString(reader, "building"),
+            Zuo: ReadString(reader, "zuo"),
+            FloorLabel: ReadString(reader, "floor_label"),
+            FloorValue: ReadNullableDouble(reader, "floor_value"),
+            MatchMode: ReadString(reader, "match_mode"),
+            Keywords: AreaGroupRuleNormalizer.NormalizeKeywords(ReadString(reader, "keywords")),
+            Note: ReadString(reader, "note"));
+    }
+
     private static async Task<GroupStats> ComputeGroupStatsAsync(
         SqliteConnection connection,
         long groupId,
         CancellationToken cancellationToken)
     {
         var group = await LoadGroupRawAsync(connection, groupId, cancellationToken).ConfigureAwait(false);
+        var rules = await LoadRulesAsync(connection, groupId, cancellationToken).ConfigureAwait(false);
         if (group is null)
         {
             return new GroupStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         }
 
-        var itemCount = await ScalarLongAsync(connection, "SELECT COUNT(*) FROM monitor_group_items WHERE group_id = $id", ("$id", groupId), cancellationToken).ConfigureAwait(false);
-        var publicSql = PublicSql();
-        var sql = $$"""
-            SELECT COUNT(*) AS total,
-                   SUM(c.comm = '开机') AS on_count,
-                   SUM(c.comm = '关机') AS off_count,
-                   SUM(c.comm = '离线') AS offline_count,
-                   SUM(COALESCE(c.comm, '') NOT IN ('开机', '关机', '离线')) AS unknown_count,
-                   COUNT(DISTINCT s.building || ':' || COALESCE(s.floor, '') || ':' || COALESCE(s.text, '')) AS covered_areas,
-                   SUM(CASE WHEN {{publicSql}} THEN 1 ELSE 0 END) AS public_total,
-                   SUM(CASE WHEN {{publicSql}} AND c.comm = '开机' THEN 1 ELSE 0 END) AS public_on_count,
-                   SUM(CASE WHEN {{publicSql}} AND c.comm = '关机' THEN 1 ELSE 0 END) AS public_off_count,
-                   SUM(CASE WHEN {{publicSql}} AND c.comm = '离线' THEN 1 ELSE 0 END) AS public_offline_count,
-                   SUM(CASE WHEN {{publicSql}} AND COALESCE(c.comm, '') NOT IN ('开机', '关机', '离线') THEN 1 ELSE 0 END) AS public_unknown_count,
-                   COUNT(DISTINCT CASE WHEN {{publicSql}}
-                       THEN s.building || ':' || COALESCE(s.floor, '') || ':' || COALESCE(s.text, '')
-                       ELSE NULL END) AS public_covered_areas
-            FROM sub_areas s
-            JOIN pages p ON p.sub_area_id = s.id
-            JOIN cards c ON c.page_id = p.id
-            WHERE
-            """;
-        if (group.GroupKind.Equals("system", StringComparison.OrdinalIgnoreCase) && group.SystemKey == "public")
+        if (!group.Enabled)
         {
-            return await ReadStatsAsync(connection, sql + PublicSql(), itemCount, cancellationToken).ConfigureAwait(false);
+            return new GroupStats(rules.Count, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         }
 
-        if (group.GroupKind.Equals("system", StringComparison.OrdinalIgnoreCase) && group.SystemKey == "non_public")
+        var hasCurrentDevices = await TableExistsAsync(connection, "sub_areas", cancellationToken).ConfigureAwait(false) &&
+                                await TableExistsAsync(connection, "cards", cancellationToken).ConfigureAwait(false);
+        if (rules.Count == 0 || !hasCurrentDevices)
         {
-            return await ReadStatsAsync(connection, sql + " NOT (" + PublicSql() + ")", itemCount, cancellationToken).ConfigureAwait(false);
+            return new GroupStats(rules.Count, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
         }
 
-        return await ReadStatsAsync(
-            connection,
-            sql + CustomGroupExistsSql(),
-            itemCount,
-            cancellationToken,
-            ("$group_id", groupId)).ConfigureAwait(false);
+        var devices = await LoadCurrentDevicesForStatsAsync(connection, cancellationToken).ConfigureAwait(false);
+        var matches = devices
+            .Where(device => AreaGroupRuleMatcher.MatchesAny(device, rules))
+            .ToArray();
+        IReadOnlyList<DeviceRecord> publicMatches = [];
+        return BuildGroupStats(rules.Count, matches, publicMatches);
     }
 
-    private static async Task<GroupStats> ReadStatsAsync(
-        SqliteConnection connection,
-        string sql,
-        long itemCount,
-        CancellationToken cancellationToken,
-        params (string Name, object Value)[] parameters)
+    private static GroupStats BuildGroupStats(
+        int itemCount,
+        IReadOnlyList<DeviceRecord> matches,
+        IReadOnlyList<DeviceRecord> publicMatches)
     {
-        await using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        foreach (var parameter in parameters)
-        {
-            command.Parameters.AddWithValue(parameter.Name, parameter.Value);
-        }
-
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-        {
-            return new GroupStats((int)itemCount, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-        }
-
         return new GroupStats(
-            ItemCount: (int)itemCount,
-            Total: ReadInt32(reader, "total"),
-            OnCount: ReadInt32(reader, "on_count"),
-            OffCount: ReadInt32(reader, "off_count"),
-            OfflineCount: ReadInt32(reader, "offline_count"),
-            UnknownCount: ReadInt32(reader, "unknown_count"),
-            CoveredAreas: ReadInt32(reader, "covered_areas"),
-            PublicTotal: ReadInt32(reader, "public_total"),
-            PublicOnCount: ReadInt32(reader, "public_on_count"),
-            PublicOffCount: ReadInt32(reader, "public_off_count"),
-            PublicOfflineCount: ReadInt32(reader, "public_offline_count"),
-            PublicUnknownCount: ReadInt32(reader, "public_unknown_count"),
-            PublicCoveredAreas: ReadInt32(reader, "public_covered_areas"));
+            ItemCount: itemCount,
+            Total: matches.Count,
+            OnCount: matches.Count(device => device.CommunicationState == DeviceCommunicationState.Running),
+            OffCount: matches.Count(device => device.CommunicationState == DeviceCommunicationState.Stopped),
+            OfflineCount: matches.Count(device => device.CommunicationState == DeviceCommunicationState.Offline),
+            UnknownCount: matches.Count(device => device.CommunicationState == DeviceCommunicationState.Unknown),
+            CoveredAreas: matches.Select(device => (device.Building, device.Floor, device.SubArea)).Distinct().Count(),
+            PublicTotal: publicMatches.Count,
+            PublicOnCount: publicMatches.Count(device => device.CommunicationState == DeviceCommunicationState.Running),
+            PublicOffCount: publicMatches.Count(device => device.CommunicationState == DeviceCommunicationState.Stopped),
+            PublicOfflineCount: publicMatches.Count(device => device.CommunicationState == DeviceCommunicationState.Offline),
+            PublicUnknownCount: publicMatches.Count(device => device.CommunicationState == DeviceCommunicationState.Unknown),
+            PublicCoveredAreas: publicMatches.Select(device => (device.Building, device.Floor, device.SubArea)).Distinct().Count());
     }
 
-    private static async Task<AreaGroupRaw?> LoadGroupRawAsync(SqliteConnection connection, long id, CancellationToken cancellationToken)
+    private static async Task<IReadOnlyList<DeviceRecord>> LoadCurrentDevicesForStatsAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT id, name, area_label, description, priority, group_kind, system_key, locked, enabled
+            SELECT c.id, s.building, s.floor, s.text AS sub_area, s.x, s.y,
+                   p.page_name, p.layout, c.name, c.switch, c.mode, c.indoor,
+                   c.set_temp, c.fan, c.indicator, c.comm
+            FROM sub_areas s
+            JOIN pages p ON p.sub_area_id = s.id
+            JOIN cards c ON c.page_id = p.id
+            ORDER BY s.building, s.floor, s.sub_idx, p.id, c.name
+            """;
+
+        var rows = new List<DeviceRecord>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var floor = ReadNullableDouble(reader, "floor");
+            var building = ReadString(reader, "building");
+            var subArea = ReadString(reader, "sub_area");
+            var x = ReadNullableDouble(reader, "x");
+            var communication = ReadString(reader, "comm");
+            rows.Add(new DeviceRecord(
+                Id: reader.GetInt64(reader.GetOrdinal("id")),
+                Building: building,
+                Floor: floor,
+                FloorLabel: DeviceFloorLabelFormatter.Format(floor, subArea),
+                SubArea: subArea,
+                X: x,
+                Y: ReadNullableDouble(reader, "y"),
+                PageName: ReadString(reader, "page_name"),
+                Name: ReadString(reader, "name"),
+                Layout: ReadString(reader, "layout"),
+                SwitchState: ReadString(reader, "switch"),
+                Mode: ReadString(reader, "mode"),
+                IndoorTemperature: ReadString(reader, "indoor"),
+                SetTemperature: ReadString(reader, "set_temp"),
+                Fan: ReadString(reader, "fan"),
+                Indicator: ReadString(reader, "indicator"),
+                CommunicationText: communication,
+                CommunicationState: DeviceCommunicationStateParser.Parse(communication),
+                Zuo: DeviceZuoClassifier.Classify(building, x),
+                ZuoSource: "db"));
+        }
+
+        return rows;
+    }
+
+    private static async Task<AreaGroupRaw?> LoadGroupRawAsync(
+        SqliteConnection connection,
+        long id,
+        CancellationToken cancellationToken,
+        SqliteTransaction? transaction = null)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT id, name, area_label, description, priority, group_kind, system_key, locked, enabled, group_key
             FROM monitor_groups
             WHERE id = $id
             """;
@@ -903,11 +1390,30 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null;
     }
 
-    private static async Task<long?> FindGroupIdByNameAsync(SqliteConnection connection, string name, CancellationToken cancellationToken)
+    private static async Task<long?> FindGroupIdByNameAsync(
+        SqliteConnection connection,
+        string name,
+        CancellationToken cancellationToken,
+        SqliteTransaction? transaction = null)
     {
         await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
         command.CommandText = "SELECT id FROM monitor_groups WHERE name = $name COLLATE NOCASE";
         command.Parameters.AddWithValue("$name", name);
+        var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return value is null ? null : Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static async Task<long?> FindGroupIdByKeyAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        string groupKey,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT id FROM monitor_groups WHERE group_key = $group_key COLLATE NOCASE";
+        command.Parameters.AddWithValue("$group_key", groupKey);
         var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return value is null ? null : Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
     }
@@ -1094,7 +1600,8 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             GroupKind: ReadString(reader, "group_kind"),
             SystemKey: ReadString(reader, "system_key"),
             Locked: ReadInt32(reader, "locked") != 0,
-            Enabled: ReadInt32(reader, "enabled") != 0);
+            Enabled: ReadInt32(reader, "enabled") != 0,
+            GroupKey: ReadString(reader, "group_key"));
     }
 
     private static string Require(string value, string label)
@@ -1112,6 +1619,17 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
     {
         var normalized = (value ?? string.Empty).Trim();
         return string.IsNullOrWhiteSpace(normalized) ? "重点" : normalized;
+    }
+
+    private static string NormalizeGroupKey(string value)
+    {
+        var normalized = Require(value, "group key");
+        if (normalized.Length > 128 || normalized.Any(char.IsWhiteSpace))
+        {
+            throw new ArgumentException("group key 必须为 1-128 个不含空格的字符。", nameof(value));
+        }
+
+        return normalized;
     }
 
     private static string NormalizeTargetType(string value)
@@ -1194,7 +1712,8 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         string GroupKind,
         string SystemKey,
         bool Locked,
-        bool Enabled);
+        bool Enabled,
+        string GroupKey);
 
     private sealed record AreaGroupItemRaw(
         long Id,
