@@ -39,4 +39,10 @@
 
 ## 发布
 
-待最终独立复核通过后，合入并推送 main，构建并安装 1.0.76.0；保留原活动工作区的数据与未提交原生代码，只更新运行所需且无本地冲突的 Node 脚本。实际版本、提交、签名、程序集哈希及备份结果在安装完成后补充。
+代码提交 `276bc76a09965ceef3c1605e6a33894bda2b10ed` 已快进合入并推送 `main`，安装版从 1.0.75.0 更新为 **1.0.76.0**。正式程序已打开，关于页确认版本，总览正常显示原有数据及区域统计。
+
+- Release MSIX 构建 0 警告、0 错误；签名及发布者/版本/架构验证通过，6 个分发文件哈希通过；安装后的 Desktop/Application/Infrastructure 三个程序集与 MSIX 内文件逐字节哈希一致。
+- 活动工作区仍为 `D:/Code/Git/ems-scout/.worktrees/area-rule-groups`，3 个工作区标记均已核对。只同步了 11 个事先确认无本地修改的脚本/架构文件；现有未提交原生代码逐文件哈希保持不变。
+- 关闭旧版后使用 SQLite Backup 备份数据库及设置、工作区标记；当前活动 out 目录没有独立实时 JSON 文件。更新和启动新版后，数据库全部内容的逻辑 SHA-256 不变，设置文件哈希不变；当前 6471 台、3 个历史批次、3 个区域组、230 条规则保持一致。这些数量仅为此次验证样本。
+- 安装依赖时 Windows 已存在更新的兼容运行库，按既有脚本策略跳过较旧依赖；应用本体安装成功。
+- 发布证据和备份：`D:/Code/Git/ems-scout/out/release-20260922-1.0.76.0/`，包括 `before-update/`、`audit-evidence/`、`runtime-deployment.json`、`installation-verification.json`、`data-verification.json`、构建/安装日志及正式界面截图。
