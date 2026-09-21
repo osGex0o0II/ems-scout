@@ -234,7 +234,9 @@ const importCurrent = db.transaction(() => {
   return createRunFromCurrent(db, {
     buildings: IMPORT_FILTER || buildings.map(b => b.building),
     startedAt: process.env.EMS_RUN_STARTED_AT || undefined,
-    completedAt: collectedAt,
+    // completed_at is the import completion event. Page/building timestamps
+    // retain the source collection time for device freshness checks.
+    completedAt: now,
     jsonPath: JSON_PATH,
     collectionMode: process.env.EMS_COLLECTION_STRATEGY || '',
     note: IMPORT_FILTER ? 'Native/脚本单栋或多栋导入' : 'Native/脚本全量导入',

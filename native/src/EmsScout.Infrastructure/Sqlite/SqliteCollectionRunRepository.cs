@@ -784,7 +784,8 @@ public sealed class SqliteCollectionRunRepository(
             BatchUid: ReadString(reader, "batch_uid"),
             LifecycleState: ReadString(reader, "lifecycle_state", "completed"),
             CurrentRevisionUid: ReadNullableString(reader, "current_revision_uid"),
-            RestoredFromBatchUid: ReadNullableString(reader, "restored_from_batch_uid"));
+            RestoredFromBatchUid: ReadNullableString(reader, "restored_from_batch_uid"),
+            DurationMs: ReadNullableInt64(reader, "duration_ms"));
     }
 
     private static async Task<Dictionary<string, int>> LoadBuildingCardCountsAsync(

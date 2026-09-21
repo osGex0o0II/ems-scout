@@ -59,6 +59,7 @@ public sealed partial class CollectionTaskViewModel(
     private bool _realtimeAuditScriptReady;
     private bool _databaseReady;
     private bool _jsonReady;
+    private readonly Stopwatch _taskStopwatch = new();
     private string _nextRealtimeCollectionStrategy = CollectionTaskModeValues.StableRealtimeStrategy;
     private bool _emsUrlReady;
     private bool _cdpReachable;
@@ -1090,6 +1091,7 @@ public sealed partial class CollectionTaskViewModel(
         _progressTimer!.Start();
         ResetStages(plan);
         _taskStartedAt = DateTimeOffset.Now;
+        _taskStopwatch.Restart();
         var settings = settingsService.Load();
         var runEnumeration = plan.RunEnumeration;
         var runValidation = plan.RunValidation;
@@ -1121,11 +1123,12 @@ public sealed partial class CollectionTaskViewModel(
                     : cdpStatus.LoginDetail;
                 ProgressText = "任务失败";
                 IsProgressIndeterminate = false;
-                SetTaskIssueSummary(failureLocation, failureReason, DateTimeOffset.Now - _taskStartedAt);
+                SetTaskIssueSummary(failureLocation, failureReason, _taskStopwatch.Elapsed);
                 StatusText = "采集启动已阻止：未发现可采集 EMS 页面";
                 AddLog(StatusText);
                 AddLog(cdpStatus.LoginDetail);
                 _progressTimer?.Stop();
+                _taskStopwatch.Stop();
                 _activeTask.Dispose();
                 _activeTask = null;
                 IsRunning = false;
@@ -1315,14 +1318,14 @@ public sealed partial class CollectionTaskViewModel(
             IsProgressIndeterminate = false;
             ProgressValue = 100;
             ProgressText = "采集完成";
-            ProgressElapsedText = FormatElapsed(DateTimeOffset.Now - _taskStartedAt);
+            ProgressElapsedText = FormatElapsed(_taskStopwatch.Elapsed);
             ProgressSpeedText = "读取速度：已完成";
             // Ensure progress text is consistent at 100%
             if (TryExtractTotalFromProgress(out var finalTotal) && finalTotal > 0)
             {
                 ProgressOverallText = $"总体进度：{finalTotal} / {finalTotal} 台 · 100%";
             }
-            var elapsed = DateTimeOffset.Now - _taskStartedAt;
+            var elapsed = _taskStopwatch.Elapsed;
             var elapsedText = elapsed.TotalMinutes >= 1
                 ? $"{(int)elapsed.TotalMinutes} 分 {elapsed.Seconds} 秒"
                 : $"{elapsed.Seconds} 秒";
@@ -1362,9 +1365,9 @@ public sealed partial class CollectionTaskViewModel(
             ShowCompletionCelebration = false;
             HasTaskIssue = true;
             ProgressText = "已停止";
-            ProgressElapsedText = FormatElapsed(DateTimeOffset.Now - _taskStartedAt);
+            ProgressElapsedText = FormatElapsed(_taskStopwatch.Elapsed);
             SetActiveStageTerminalState("已停止", "用户停止了任务");
-            var elapsed = DateTimeOffset.Now - _taskStartedAt;
+            var elapsed = _taskStopwatch.Elapsed;
             var elapsedText = elapsed.TotalMinutes >= 1
                 ? $"{(int)elapsed.TotalMinutes} 分 {elapsed.Seconds} 秒"
                 : $"{elapsed.Seconds} 秒";
@@ -1380,7 +1383,7 @@ public sealed partial class CollectionTaskViewModel(
             ShowCompletionCelebration = false;
             HasTaskIssue = true;
             ProgressText = "任务失败";
-            var elapsedText = FormatElapsed(DateTimeOffset.Now - _taskStartedAt);
+            var elapsedText = FormatElapsed(_taskStopwatch.Elapsed);
             ProgressElapsedText = elapsedText;
             SetActiveStageTerminalState("失败", ex.Message);
             var stage = Stages.FirstOrDefault(item => item.Key == _activeStageKey)?.Label ?? "当前步骤";
@@ -1388,7 +1391,7 @@ public sealed partial class CollectionTaskViewModel(
                 ? stage
                 : $"{stage} · {_lastProgressLocation}";
             var failureReason = string.IsNullOrWhiteSpace(ex.Message) ? ex.GetType().Name : ex.Message;
-            SetTaskIssueSummary(location, failureReason, DateTimeOffset.Now - _taskStartedAt);
+            SetTaskIssueSummary(location, failureReason, _taskStopwatch.Elapsed);
             StatusText = _currentDataUpdatedThisRun
                 ? "任务失败；当前数据已经更新，后续步骤未完成"
                 : "任务失败；当前数据未更改";
@@ -1404,6 +1407,7 @@ public sealed partial class CollectionTaskViewModel(
             _activeProgressSpan = 100;
             _activeProgressLabel = string.Empty;
             _progressTimer?.Stop();
+            _taskStopwatch.Stop();
             IsRunning = false;
             ReadinessTitle = IsEnvironmentReady ? "已就绪，可以开始采集" : "采集准备未完成";
             ReadinessDetail = string.Empty;
@@ -2052,7 +2056,7 @@ public sealed partial class CollectionTaskViewModel(
         {
             if (IsRunning)
             {
-                ProgressElapsedText = FormatElapsed(DateTimeOffset.Now - _taskStartedAt);
+                ProgressElapsedText = FormatElapsed(_taskStopwatch.Elapsed);
             }
         };
     }

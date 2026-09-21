@@ -67,7 +67,8 @@ function ensureHistorySchema(db) {
       restored_from_run_id INTEGER,
       lifecycle_state TEXT NOT NULL DEFAULT 'completed',
       current_revision_uid TEXT,
-      restored_from_batch_uid TEXT
+      restored_from_batch_uid TEXT,
+      duration_ms INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_collection_runs_completed
       ON collection_runs(completed_at DESC);
@@ -247,6 +248,8 @@ function ensureHistorySchema(db) {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_floor_catalog_key
       ON floor_catalog(building, floor_label);
   `);
+
+  try { db.exec('ALTER TABLE collection_runs ADD COLUMN duration_ms INTEGER'); } catch {}
 
   try { db.exec("ALTER TABLE collection_runs ADD COLUMN quality_summary TEXT NOT NULL DEFAULT '{}'"); } catch {}
   try { db.exec('ALTER TABLE collection_runs ADD COLUMN run_no INTEGER'); } catch {}
@@ -444,15 +447,16 @@ function listRuns(db, options = {}) {
   return db.prepare(`
     SELECT id, run_no, run_key, started_at, completed_at, imported_at, status, scope,
            buildings, json_path, db_snapshot_path, card_count, on_count,
-           off_count, offline_count, unknown_count, quality_summary, is_anomaly, note
+           off_count, offline_count, unknown_count, quality_summary, is_anomaly, note, duration_ms
     FROM collection_runs
-    ORDER BY datetime(COALESCE(imported_at, completed_at)) DESC, id DESC
+     ORDER BY datetime(COALESCE(completed_at, imported_at)) DESC, id DESC
     LIMIT ?
   `).all(limit).map(r => ({
     ...r,
     started_at: r.started_at ? normalizeStoredTimestamp(r.started_at, r.started_at) : r.started_at,
     completed_at: normalizeStoredTimestamp(r.completed_at, r.completed_at),
     imported_at: normalizeStoredTimestamp(r.imported_at, r.imported_at),
+    duration_ms: r.duration_ms === null || r.duration_ms === undefined ? null : Number(r.duration_ms),
     buildings: parseJsonArray(r.buildings),
     is_anomaly: Number(r.is_anomaly || 0),
     label: runLabel(r),
@@ -461,7 +465,7 @@ function listRuns(db, options = {}) {
 
 function runLabel(run) {
   const normalized = normalizeStoredTimestamp(
-    run.imported_at || run.completed_at,
+    run.completed_at || run.imported_at,
     run.completed_at);
   const dt = new Date(normalized);
   const pad = n => String(n).padStart(2, '0');
@@ -750,9 +754,18 @@ function createRunFromCurrent(db, options = {}) {
   if (!hasData) return null;
 
   const now = normalizeStoredTimestamp(options.completedAt);
-  const startedAt = options.startedAt
+  const requestedStartedAt = options.startedAt
     ? normalizeStoredTimestamp(options.startedAt, now)
     : null;
+  const nowMs = Date.parse(now);
+  const startedMs = requestedStartedAt ? Date.parse(requestedStartedAt) : NaN;
+  const startedAt = Number.isFinite(startedMs) && Number.isFinite(nowMs) && startedMs <= nowMs
+    ? requestedStartedAt
+    : null;
+  const requestedDurationMs = Number(options.durationMs);
+  const durationMs = Number.isFinite(requestedDurationMs) && requestedDurationMs >= 0
+    ? Math.round(requestedDurationMs)
+    : startedAt ? Math.max(0, nowMs - startedMs) : null;
   const requestedRunKey = options.runKey || localRunKey(new Date(now));
   const batchUid = options.batchUid || crypto.randomUUID();
   const revisionUid = options.currentRevisionUid || crypto.randomUUID();
@@ -764,8 +777,8 @@ function createRunFromCurrent(db, options = {}) {
 
   const insertRun = db.prepare(`
     INSERT INTO collection_runs
-      (id, run_no, run_key, batch_uid, started_at, completed_at, imported_at, status, scope, buildings, json_path, db_snapshot_path, note, lifecycle_state, current_revision_uid, collection_mode)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (id, run_no, run_key, batch_uid, started_at, completed_at, imported_at, status, scope, buildings, json_path, db_snapshot_path, note, lifecycle_state, current_revision_uid, collection_mode, duration_ms)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const insertRunBuilding = db.prepare(`
     INSERT INTO run_buildings (run_id, building, sub_area_count, menu_clicked, updated_at)
@@ -827,7 +840,8 @@ function createRunFromCurrent(db, options = {}) {
       options.note || '',
       options.lifecycleState || options.status || 'completed',
       revisionUid,
-      options.collectionMode || ''
+      options.collectionMode || '',
+      durationMs
     );
     const insertedRunId = Number(res.lastInsertRowid);
     if (insertedRunId !== runId) {

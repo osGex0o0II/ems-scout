@@ -348,7 +348,8 @@ function testTimestampNormalizationOnImport() {
   fs.rmSync(tmp, { recursive: true, force: true });
 
   assert(values.started_at === expectedLocalTimestamp('2026-08-30T18:59:00Z'), '采集开始时间必须使用本机时区保存');
-  assert(values.completed_at === expectedLocalTimestamp('2026-08-31T03:00:00Z'), '无时区批次时间必须按 UTC 兼容解析后使用本机时区保存');
+  assert(Date.parse(values.completed_at) >= Date.parse(values.updated_at), '批次完成时间必须不早于楼栋采集完成时间');
+  assert(Date.parse(values.imported_at) >= Date.parse(values.completed_at), '导入时间必须不早于批次完成时间');
   assert(/(?:Z|[+-][0-9]{2}:?[0-9]{2})$/i.test(values.imported_at), '导入时间必须包含明确时区');
   assert(values.updated_at === expectedLocalTimestamp('2026-08-30T19:01:00Z'), '+08:00 楼栋时间必须转换为本机时区');
   assert(values.collected_at === expectedLocalTimestamp('2026-08-31T03:02:00Z'), '无时区页面时间必须按 UTC 兼容解析后使用本机时区保存');

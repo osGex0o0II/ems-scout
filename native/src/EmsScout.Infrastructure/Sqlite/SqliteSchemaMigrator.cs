@@ -180,6 +180,7 @@ public sealed class SqliteSchemaMigrator(Func<string> databasePathResolver)
         await AddColumnIfMissingAsync(connection, transaction, "collection_runs", "lifecycle_state", "TEXT NOT NULL DEFAULT 'completed'", cancellationToken).ConfigureAwait(false);
         await AddColumnIfMissingAsync(connection, transaction, "collection_runs", "current_revision_uid", "TEXT", cancellationToken).ConfigureAwait(false);
         await AddColumnIfMissingAsync(connection, transaction, "collection_runs", "restored_from_batch_uid", "TEXT", cancellationToken).ConfigureAwait(false);
+        await AddColumnIfMissingAsync(connection, transaction, "collection_runs", "duration_ms", "INTEGER", cancellationToken).ConfigureAwait(false);
 
     }
 

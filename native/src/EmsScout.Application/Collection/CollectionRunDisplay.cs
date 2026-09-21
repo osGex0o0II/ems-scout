@@ -7,17 +7,18 @@ public static class CollectionRunDisplay
 
     public static string DurationLabel(CollectionRunRecord run)
     {
-        if (!StoredTimestamp.TryParse(run.StartedAt, out var started) ||
-            !StoredTimestamp.TryParse(run.CompletedAt, out var completed) ||
-            completed < started)
+        var elapsed = run.DurationMs is >= 0
+            ? TimeSpan.FromMilliseconds(run.DurationMs.Value)
+            : ParseTimestampDuration(run);
+
+        if (elapsed is null)
         {
             return "-";
         }
 
-        var elapsed = completed - started;
-        return elapsed.TotalHours >= 1
-            ? $"{(int)elapsed.TotalHours} 小时 {elapsed.Minutes} 分"
-            : $"{(int)elapsed.TotalMinutes} 分 {elapsed.Seconds} 秒";
+        return elapsed.Value.TotalHours >= 1
+            ? $"{(int)elapsed.Value.TotalHours} 小时 {elapsed.Value.Minutes} 分"
+            : $"{(int)elapsed.Value.TotalMinutes} 分 {elapsed.Value.Seconds} 秒";
     }
 
     public static string CollectionModeLabel(CollectionRunRecord run) => run.CollectionMode.Trim().ToLowerInvariant() switch
@@ -34,5 +35,17 @@ public static class CollectionRunDisplay
             : StoredTimestamp.TryParse(fallback, out parsed)
                 ? parsed.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
                 : primary;
+    }
+
+    private static TimeSpan? ParseTimestampDuration(CollectionRunRecord run)
+    {
+        if (!StoredTimestamp.TryParse(run.StartedAt, out var started) ||
+            !StoredTimestamp.TryParse(run.CompletedAt, out var completed) ||
+            completed < started)
+        {
+            return null;
+        }
+
+        return completed - started;
     }
 }

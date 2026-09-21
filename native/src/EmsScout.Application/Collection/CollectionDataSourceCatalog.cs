@@ -11,9 +11,9 @@ public static class CollectionDataSourceCatalog
         var ordered = runs
             .Where(run => run.Status.Equals("completed", StringComparison.OrdinalIgnoreCase) ||
                           run.Status.Equals("needs_review", StringComparison.OrdinalIgnoreCase))
-            // Import time is when the current SQLite data became available. The
-            // enumeration completion time can be older when import runs later.
-            .OrderByDescending(run => ParseTimestamp(run.ImportedAt, run.CompletedAt))
+            // Completion time is the batch timeline. Import time is separate
+            // metadata and must not make an older batch appear newer.
+            .OrderByDescending(run => ParseTimestamp(run.CompletedAt, run.ImportedAt))
             .ThenByDescending(run => run.Id)
             .ToArray();
         var current = ordered.FirstOrDefault();

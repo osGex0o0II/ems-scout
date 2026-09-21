@@ -137,7 +137,8 @@ CREATE TABLE IF NOT EXISTS collection_runs (
     batch_uid TEXT NOT NULL DEFAULT '',
     lifecycle_state TEXT NOT NULL DEFAULT 'completed',
     current_revision_uid TEXT,
-    restored_from_batch_uid TEXT
+    restored_from_batch_uid TEXT,
+    duration_ms INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_collection_runs_completed
     ON collection_runs(completed_at DESC);

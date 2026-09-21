@@ -32,6 +32,19 @@ public sealed class AuditIssueViewModelTests
         Assert.Equal("2026-09-21 10:01", CollectionRunDisplay.CompletedAtLabel(run));
     }
 
+    [Fact]
+    public void CollectionRunDurationUsesPersistedElapsedTime()
+    {
+        var run = CreateRun("stable-full") with
+        {
+            StartedAt = "2026-09-21T10:04:00+08:00",
+            CompletedAt = "2026-09-21T10:01:30+08:00",
+            DurationMs = 90_000,
+        };
+
+        Assert.Equal("1 分 30 秒", CollectionRunDisplay.DurationLabel(run));
+    }
+
     private static CollectionRunRecord CreateRun(string collectionMode) => new(
         Id: 24,
         RunKey: "run-24",

@@ -13,7 +13,7 @@ public sealed class DataSourceOption
     private DataSourceOption(CollectionRunRecord run, bool isCurrent)
     {
         Value = run.Id.ToString(System.Globalization.CultureInfo.InvariantCulture);
-        Label = FormatDateTime(run.ImportedAt, run.CompletedAt);
+        Label = FormatDateTime(run.CompletedAt, run.ImportedAt);
         Detail = $"{run.ScopeLabel} · {run.CountLabel}";
         RunId = run.Id;
         IsCurrent = isCurrent;
@@ -33,7 +33,7 @@ public sealed class DataSourceOption
         return latestRun is null
             ? new DataSourceOption("暂无采集时间", "暂无批次")
             : new DataSourceOption(
-                FormatDateTime(latestRun.ImportedAt, latestRun.CompletedAt),
+                FormatDateTime(latestRun.CompletedAt, latestRun.ImportedAt),
                 $"{latestRun.ScopeLabel} · {latestRun.CountLabel}");
     }
 
