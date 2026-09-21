@@ -34,12 +34,6 @@ public sealed record DashboardAreaGroupSummary(
     int Running,
     int Stopped,
     int CoveredAreas,
-    int PublicTotal,
-    int PublicRunning,
-    int PublicStopped,
-    int PublicOffline,
-    int PublicUnknown,
-    int PublicCoveredAreas,
     int ModeAbnormal,
     int TemperatureAbnormal,
     int LockOn,
@@ -49,20 +43,6 @@ public sealed record DashboardAreaGroupSummary(
     string RealtimeStatusText = "")
 {
     public int Attention => Offline + Unknown;
-
-    public int PublicAttention => PublicOffline + PublicUnknown;
-
-    public double PublicRunningRate => PublicTotal == 0 ? 0 : PublicRunning / (double)PublicTotal;
-
-    public int PrivateTotal => Math.Max(0, Total - PublicTotal);
-
-    public int PrivateRunning => Math.Max(0, Running - PublicRunning);
-
-    public int PrivateStopped => Math.Max(0, Stopped - PublicStopped);
-
-    public int PrivateOffline => Math.Max(0, Offline - PublicOffline);
-
-    public int PrivateUnknown => Math.Max(0, Unknown - PublicUnknown);
 }
 
 public enum DashboardRealtimeAvailability

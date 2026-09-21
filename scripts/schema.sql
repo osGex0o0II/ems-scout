@@ -79,37 +79,17 @@ CREATE TABLE IF NOT EXISTS run_area_group_rules (
 CREATE INDEX IF NOT EXISTS idx_run_area_group_rules_run_group
     ON run_area_group_rules(run_id, group_id, rule_order, id);
 
--- Native custom group tables. These store manual classification choices across imports.
+-- Native area groups. Membership is defined only by area_group_rules.
 CREATE TABLE IF NOT EXISTS monitor_groups (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
     area_label TEXT NOT NULL DEFAULT '',
     description TEXT NOT NULL DEFAULT '',
     priority TEXT NOT NULL DEFAULT '重点',
-    group_kind TEXT NOT NULL DEFAULT 'custom',
-    system_key TEXT,
-    locked INTEGER NOT NULL DEFAULT 0,
     enabled INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60))
 );
-
-CREATE TABLE IF NOT EXISTS monitor_group_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    group_id INTEGER NOT NULL,
-    target_type TEXT NOT NULL DEFAULT 'floor',
-    building TEXT NOT NULL,
-    floor_label TEXT,
-    floor_value REAL,
-    sub_area_text TEXT,
-    card_name TEXT,
-    note TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
-    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
-    FOREIGN KEY(group_id) REFERENCES monitor_groups(id)
-);
-CREATE INDEX IF NOT EXISTS idx_monitor_group_items_group ON monitor_group_items(group_id);
-CREATE INDEX IF NOT EXISTS idx_monitor_group_items_target ON monitor_group_items(building, floor_value, sub_area_text, card_name);
 
 CREATE TABLE IF NOT EXISTS collection_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

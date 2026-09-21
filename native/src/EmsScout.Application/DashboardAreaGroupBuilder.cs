@@ -12,13 +12,12 @@ public static class DashboardAreaGroupBuilder
         DashboardAnomalySettings? anomalySettings = null)
     {
         anomalySettings ??= DashboardAnomalySettings.Default;
-        var legacyItemsEnabled = groupSet.Rules is null;
-        var itemsByGroup = groupSet.Items
-            .GroupBy(item => item.GroupId)
-            .ToDictionary(group => group.Key, group => (IReadOnlyList<AreaGroupItemRecord>)group.ToArray());
         var rulesByGroup = groupSet.RuleRecords
             .GroupBy(rule => rule.GroupId)
             .ToDictionary(group => group.Key, group => (IReadOnlyList<AreaGroupRuleRecord>)group.ToArray());
+        var preparedRulesByGroup = rulesByGroup.ToDictionary(
+            pair => pair.Key,
+            pair => AreaGroupRuleMatcher.Prepare(pair.Value));
 
         return groupSet.Groups
             .Where(group => group.Enabled)
@@ -27,36 +26,20 @@ public static class DashboardAreaGroupBuilder
             .Select(group => BuildSummary(
                 group,
                 devices,
-                itemsByGroup.GetValueOrDefault(group.Id, []),
                 rulesByGroup.GetValueOrDefault(group.Id, []),
-                legacyItemsEnabled,
+                preparedRulesByGroup.GetValueOrDefault(group.Id, AreaGroupRuleMatcher.Prepare([])),
                 anomalySettings))
             .ToArray();
-    }
-
-    public static bool Matches(DeviceRecord device, AreaGroupItemRecord item)
-    {
-        return AreaGroupMembership.Matches(device, item);
     }
 
     private static DashboardAreaGroupSummary BuildSummary(
         AreaGroupRecord group,
         IReadOnlyList<DeviceRecord> devices,
-        IReadOnlyList<AreaGroupItemRecord> items,
         IReadOnlyList<AreaGroupRuleRecord> rules,
-        bool legacyItemsEnabled,
+        PreparedAreaGroupRules preparedRules,
         DashboardAnomalySettings anomalySettings)
     {
-        var matches = rules.Count > 0
-            ? devices.Where(device => AreaGroupRuleMatcher.MatchesAny(device, rules)).ToArray()
-            : legacyItemsEnabled
-                ? IsLegacySystemGroup(group)
-                    ? devices.Where(device => MatchesLegacySystemGroup(device, group.SystemKey)).ToArray()
-                    : devices.Where(device => AreaGroupMembership.MatchesAny(device, items)).ToArray()
-            : [];
-        IReadOnlyList<DeviceRecord> publicMatches = legacyItemsEnabled
-            ? matches.Where(device => string.Equals(device.AreaType, DeviceAreaClassifier.PublicArea, StringComparison.OrdinalIgnoreCase)).ToArray()
-            : [];
+        var matches = devices.Where(device => AreaGroupRuleMatcher.MatchesAny(device, preparedRules)).ToArray();
         var onlineMatches = matches
             .Where(device => device.CommunicationState is DeviceCommunicationState.Running or DeviceCommunicationState.Stopped)
             .ToArray();
@@ -78,7 +61,7 @@ public static class DashboardAreaGroupBuilder
             AreaLabel: group.AreaLabel,
             Description: group.Description,
             Priority: group.Priority,
-            MemberCount: rules.Count > 0 ? rules.Count : group.ItemCount,
+            MemberCount: rules.Count,
             Total: matches.Length,
             Online: matches.Count(device => device.CommunicationState is DeviceCommunicationState.Running or DeviceCommunicationState.Stopped),
             Offline: matches.Count(device => device.CommunicationState == DeviceCommunicationState.Offline),
@@ -86,15 +69,6 @@ public static class DashboardAreaGroupBuilder
             Running: matches.Count(device => device.CommunicationState == DeviceCommunicationState.Running),
             Stopped: matches.Count(device => device.CommunicationState == DeviceCommunicationState.Stopped),
             CoveredAreas: matches
-                .Select(device => (device.Building, device.Floor, device.SubArea))
-                .Distinct()
-                .Count(),
-            PublicTotal: publicMatches.Count,
-            PublicRunning: publicMatches.Count(device => device.CommunicationState == DeviceCommunicationState.Running),
-            PublicStopped: publicMatches.Count(device => device.CommunicationState == DeviceCommunicationState.Stopped),
-            PublicOffline: publicMatches.Count(device => device.CommunicationState == DeviceCommunicationState.Offline),
-            PublicUnknown: publicMatches.Count(device => device.CommunicationState == DeviceCommunicationState.Unknown),
-            PublicCoveredAreas: publicMatches
                 .Select(device => (device.Building, device.Floor, device.SubArea))
                 .Distinct()
                 .Count(),
@@ -106,32 +80,9 @@ public static class DashboardAreaGroupBuilder
                 (temperature < anomalySettings.TemperatureMin || temperature > anomalySettings.TemperatureMax)),
             LockOn: realtimeDevices.Count(device => device.Realtime?.LockStateValid == true && device.Realtime.LockState == "开启"),
             LockOff: realtimeDevices.Count(device => device.Realtime?.LockStateValid == true && device.Realtime.LockState == "关闭"),
-            AreaType: legacyItemsEnabled
-                ? group.SystemKey switch
-                {
-                    "public" => DeviceAreaClassifier.PublicArea,
-                    "non_public" => DeviceAreaClassifier.PrivateArea,
-                    _ => string.Empty,
-                }
-                : string.Empty,
+            AreaType: string.Empty,
             RealtimeAvailability: realtimeStatus.Availability,
             RealtimeStatusText: realtimeStatus.StatusText);
-    }
-
-    private static bool IsLegacySystemGroup(AreaGroupRecord group)
-    {
-        return group.GroupKind.Equals("system", StringComparison.OrdinalIgnoreCase) &&
-            group.SystemKey is "public" or "non_public";
-    }
-
-    private static bool MatchesLegacySystemGroup(DeviceRecord device, string systemKey)
-    {
-        return systemKey switch
-        {
-            "public" => string.Equals(device.AreaType, DeviceAreaClassifier.PublicArea, StringComparison.OrdinalIgnoreCase),
-            "non_public" => string.Equals(device.AreaType, DeviceAreaClassifier.PrivateArea, StringComparison.OrdinalIgnoreCase),
-            _ => false,
-        };
     }
 
     private static int PriorityRank(string priority)

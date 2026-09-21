@@ -252,23 +252,11 @@ public sealed class SqliteDeviceWatchRepository(Func<string> databasePathResolve
         }
 
         await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT group_kind, locked
-            FROM monitor_groups
-            WHERE id = $group_id
-            """;
+        command.CommandText = "SELECT 1 FROM monitor_groups WHERE id = $group_id";
         command.Parameters.AddWithValue("$group_id", groupId);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is null)
         {
             throw new ArgumentException("关注规则必须绑定已存在的自定义区域组。");
-        }
-
-        var groupKind = ReadString(reader, "group_kind");
-        var locked = ReadInt32(reader, "locked") != 0;
-        if (locked || !groupKind.Equals("custom", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new ArgumentException("关注规则只能绑定自定义区域组。");
         }
     }
 

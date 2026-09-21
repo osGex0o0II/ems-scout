@@ -151,6 +151,20 @@ public sealed class AreaGroupRuleMatcherTests
         Assert.Null(Record.Exception(() => AreaGroupRuleNormalizer.Validate(rule)));
     }
 
+    [Fact]
+    public void PreparedRulesPreserveIncludeAndExcludeSemantics()
+    {
+        var prepared = AreaGroupRuleMatcher.Prepare([
+            RawRule("1号", "-", "-", "包含", [" gq "]),
+            RawRule("1号", "-", "1F", "不含", ["TEMP"]),
+        ]);
+
+        Assert.True(AreaGroupRuleMatcher.MatchesAny(
+            Device("1号", "2F", "GQ-0101-KT", "-"), prepared));
+        Assert.False(AreaGroupRuleMatcher.MatchesAny(
+            Device("1号", "1F", "GQ-0101-TEMP", "-"), prepared));
+    }
+
     private static AreaGroupRuleRecord Rule(
         string building,
         string zuo,
@@ -168,6 +182,26 @@ public sealed class AreaGroupRuleMatcherTests
             FloorValue: null,
             MatchMode: mode,
             Keywords: AreaGroupRuleNormalizer.NormalizeKeywords(keywords),
+            Note: string.Empty);
+    }
+
+    private static AreaGroupRuleRecord RawRule(
+        string building,
+        string zuo,
+        string floor,
+        string mode,
+        IReadOnlyList<string> keywords)
+    {
+        return new AreaGroupRuleRecord(
+            Id: 1,
+            GroupId: 10,
+            RuleOrder: 1,
+            Building: building,
+            Zuo: zuo,
+            FloorLabel: floor,
+            FloorValue: null,
+            MatchMode: mode,
+            Keywords: keywords,
             Note: string.Empty);
     }
 

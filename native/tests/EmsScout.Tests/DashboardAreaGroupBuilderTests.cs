@@ -8,14 +8,34 @@ namespace EmsScout.Tests;
 public sealed class DashboardAreaGroupBuilderTests
 {
     [Fact]
-    public void AggregatesAllDevicesAndPublicStatesForEnabledCustomGroups()
+    public void BuildsAreaGroupsFromPreparedRules()
+    {
+        var source = File.ReadAllText(Path.Combine(LocateRepositoryRoot(), "native", "src", "EmsScout.Application", "DashboardAreaGroupBuilder.cs"));
+
+        Assert.Contains("AreaGroupRuleMatcher.Prepare", source);
+    }
+
+    private static string LocateRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            if (File.Exists(Path.Combine(directory.FullName, "package.json")))
+                return directory.FullName;
+            directory = directory.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Cannot locate repository root.");
+    }
+    [Fact]
+    public void AggregatesRuleMatchedDevicesForEnabledCustomGroups()
     {
         var enabled = Group(10, "未开放", enabled: true);
         var disabled = Group(11, "已停用", enabled: false);
-        var system = Group(1, "公区", enabled: true, groupKind: "system", systemKey: "public");
         var set = new AreaGroupSet(
-            [enabled, disabled, system],
-            [FloorItem(enabled.Id, 1), FloorItem(disabled.Id, 1)]);
+            [enabled, disabled],
+            [Rule(enabled.Id, "1号", "-", "-", "include", "GQ"),
+             Rule(disabled.Id, "1号", "-", "-", "include", "GQ")]);
         var devices = new[]
         {
             Device(1, "1-0101-KT", 1, "1F A", DeviceCommunicationState.Running, layout: "group"),
@@ -32,32 +52,21 @@ public sealed class DashboardAreaGroupBuilderTests
             summary => summary.Id == enabled.Id);
 
         Assert.Equal(enabled.Id, summary.Id);
-        Assert.Equal(6, summary.Total);
-        Assert.Equal(4, summary.Online);
+        Assert.Equal(4, summary.Total);
+        Assert.Equal(2, summary.Online);
         Assert.Equal(1, summary.Offline);
         Assert.Equal(1, summary.Unknown);
-        Assert.Equal(3, summary.Running);
+        Assert.Equal(1, summary.Running);
         Assert.Equal(1, summary.Stopped);
         Assert.Equal(2, summary.CoveredAreas);
-        Assert.Equal(5, summary.PublicTotal);
-        Assert.Equal(2, summary.PublicRunning);
-        Assert.Equal(1, summary.PublicStopped);
-        Assert.Equal(1, summary.PublicOffline);
-        Assert.Equal(1, summary.PublicUnknown);
-        Assert.Equal(2, summary.PublicCoveredAreas);
-        Assert.Equal(
-            summary.PublicTotal,
-            summary.PublicRunning + summary.PublicStopped + summary.PublicOffline + summary.PublicUnknown);
-        Assert.Equal(1, summary.PrivateTotal);
-        Assert.Equal(1, summary.PrivateRunning);
-        Assert.Equal(0, summary.PrivateStopped);
+        Assert.Equal(string.Empty, summary.AreaType);
     }
 
     [Fact]
-    public void IncludesPublicAndPrivateSystemGroupsAsStandaloneRows()
+    public void EmptyRuleGroupsRemainVisibleWithoutImplicitMembers()
     {
-        var publicGroup = Group(1, "公区", enabled: true, groupKind: "system", systemKey: "public");
-        var privateGroup = Group(2, "非公区", enabled: true, groupKind: "system", systemKey: "non_public");
+        var publicGroup = Group(1, "公区", enabled: true);
+        var privateGroup = Group(2, "非公区", enabled: true);
         var set = new AreaGroupSet([publicGroup, privateGroup], []);
         var devices = new[]
         {
@@ -68,26 +77,18 @@ public sealed class DashboardAreaGroupBuilderTests
 
         var summaries = DashboardAreaGroupBuilder.Build(devices, set);
 
-        var publicSummary = Assert.Single(summaries, summary => summary.Id == publicGroup.Id);
-        Assert.Equal(2, publicSummary.Total);
-        Assert.Equal(DeviceAreaClassifier.PublicArea, publicSummary.AreaType);
-        Assert.Equal(2, publicSummary.PublicTotal);
-        Assert.Equal(1, publicSummary.Running);
-        Assert.Equal(1, publicSummary.Offline);
-
-        var privateSummary = Assert.Single(summaries, summary => summary.Id == privateGroup.Id);
-        Assert.Equal(1, privateSummary.Total);
-        Assert.Equal(DeviceAreaClassifier.PrivateArea, privateSummary.AreaType);
-        Assert.Equal(0, privateSummary.PublicTotal);
-        Assert.Equal(1, privateSummary.Stopped);
-        Assert.Equal(1, privateSummary.PrivateTotal);
+        Assert.Equal(2, summaries.Count);
+        Assert.All(summaries, summary =>
+        {
+            Assert.Equal(0, summary.MemberCount);
+            Assert.Equal(0, summary.Total);
+        });
     }
 
     [Fact]
     public void CountsConfiguredOverviewAnomaliesWithoutTreatingOfflineDevicesAsRealtimeAnomalies()
     {
-        var publicGroup = Group(1, "公区", enabled: true, groupKind: "system", systemKey: "public");
-        var set = new AreaGroupSet([publicGroup], []);
+        var publicGroup = Group(1, "公区", enabled: true);
         var devices = new[]
         {
             DeviceWithValues(1, "GQ-MODE-KT", DeviceCommunicationState.Running, "制热", "25", "开启"),
@@ -101,7 +102,7 @@ public sealed class DashboardAreaGroupBuilderTests
         var summary = Assert.Single(
             DashboardAreaGroupBuilder.Build(
                 devices,
-                set,
+                new AreaGroupSet([publicGroup], [Rule(publicGroup.Id, "1号", "-", "-", "include", "GQ")]),
                 new DashboardAnomalySettings("制冷", 22, 26)));
 
         Assert.Equal(2, summary.ModeAbnormal);
@@ -113,7 +114,7 @@ public sealed class DashboardAreaGroupBuilderTests
     [Fact]
     public void CountsBaseAnomaliesWhenRealtimeSnapshotIsUnavailable()
     {
-        var publicGroup = Group(1, "公区", enabled: true, groupKind: "system", systemKey: "public");
+        var publicGroup = Group(1, "公区", enabled: true);
         var devices = new[]
         {
             DeviceWithValues(1, "GQ-MODE-KT", DeviceCommunicationState.Running, "制热", "25", string.Empty),
@@ -126,7 +127,7 @@ public sealed class DashboardAreaGroupBuilderTests
         var summary = Assert.Single(
             DashboardAreaGroupBuilder.Build(
                 devices,
-                new AreaGroupSet([publicGroup], []),
+                new AreaGroupSet([publicGroup], [Rule(publicGroup.Id, "1号", "-", "-", "include", "GQ")]),
                 new DashboardAnomalySettings("制冷", 22, 26)));
 
         Assert.Equal(1, summary.ModeAbnormal);
@@ -139,7 +140,7 @@ public sealed class DashboardAreaGroupBuilderTests
     [Fact]
     public void MarksRealtimeAggregatesUnavailableWhenOnlineDevicesHaveNoDetails()
     {
-        var publicGroup = Group(1, "公区", enabled: true, groupKind: "system", systemKey: "public");
+        var publicGroup = Group(1, "公区", enabled: true);
         var devices = new[]
         {
             Device(1, "GQ-0101-KT", 1, "1F A", DeviceCommunicationState.Running),
@@ -147,7 +148,11 @@ public sealed class DashboardAreaGroupBuilderTests
         };
 
         var summary = Assert.Single(
-            DashboardAreaGroupBuilder.Build(devices, new AreaGroupSet([publicGroup], [])));
+            DashboardAreaGroupBuilder.Build(
+                devices,
+                new AreaGroupSet(
+                    [publicGroup],
+                    [Rule(publicGroup.Id, "1号", "-", "-", "include", "GQ")] )));
 
         Assert.Equal(DashboardRealtimeAvailability.Unavailable, summary.RealtimeAvailability);
         Assert.Contains("不可用", summary.RealtimeStatusText);
@@ -156,7 +161,7 @@ public sealed class DashboardAreaGroupBuilderTests
     [Fact]
     public void KeepsValidLockCountsVisibleWhenRealtimeDetailsArePartial()
     {
-        var publicGroup = Group(1, "公区", enabled: true, groupKind: "system", systemKey: "public");
+        var publicGroup = Group(1, "公区", enabled: true);
         var devices = new[]
         {
             DeviceWithValues(1, "GQ-0101-KT", DeviceCommunicationState.Running, "制冷", "25", "开启"),
@@ -165,38 +170,16 @@ public sealed class DashboardAreaGroupBuilderTests
         };
 
         var summary = Assert.Single(
-            DashboardAreaGroupBuilder.Build(devices, new AreaGroupSet([publicGroup], [])));
+            DashboardAreaGroupBuilder.Build(
+                devices,
+                new AreaGroupSet(
+                    [publicGroup],
+                    [Rule(publicGroup.Id, "1号", "-", "-", "include", "GQ")] )));
 
         Assert.Equal(DashboardRealtimeAvailability.Partial, summary.RealtimeAvailability);
         Assert.Equal(1, summary.LockOn);
         Assert.Equal(1, summary.LockOff);
         Assert.Contains("部分可用", summary.RealtimeStatusText);
-    }
-
-    [Fact]
-    public void MatchesDuplicateDeviceSuffixWithinTheConfiguredLocation()
-    {
-        var item = new AreaGroupItemRecord(
-            Id: 1,
-            GroupId: 10,
-            GroupName: "复核区",
-            TargetType: "device",
-            Building: "1号",
-            FloorLabel: "1F",
-            FloorValue: 1,
-            SubAreaText: "1F A",
-            CardName: "GQ-DUP-KT",
-            Note: string.Empty);
-
-        Assert.True(DashboardAreaGroupBuilder.Matches(
-            Device(1, "GQ-DUP-KT#1", 1, "1F A", DeviceCommunicationState.Running),
-            item));
-        Assert.False(DashboardAreaGroupBuilder.Matches(
-            Device(2, "GQ-DUP-KT#1", 1, "1F B", DeviceCommunicationState.Running),
-            item));
-        Assert.False(DashboardAreaGroupBuilder.Matches(
-            Device(3, "GQ-DUP-KT#1", 2, "2F A", DeviceCommunicationState.Running),
-            item));
     }
 
     [Fact]
@@ -217,7 +200,7 @@ public sealed class DashboardAreaGroupBuilderTests
 
         var summaries = DashboardAreaGroupBuilder.Build(
             devices,
-            new AreaGroupSet([enabled, disabled], [], rules));
+            new AreaGroupSet([enabled, disabled], rules));
 
         var summary = Assert.Single(summaries);
         Assert.Equal(enabled.Id, summary.Id);
@@ -225,30 +208,10 @@ public sealed class DashboardAreaGroupBuilderTests
         Assert.Equal(string.Empty, summary.AreaType);
     }
 
-    [Fact]
-    public void NameRulesIncludeMatchingDevicesAndExcludeExplicitNames()
-    {
-        var include = new AreaGroupItemRecord(
-            1, 10, "名称筛选", "name_contains", "1号", string.Empty, null, string.Empty, "KT-", string.Empty);
-        var exclude = new AreaGroupItemRecord(
-            2, 10, "名称筛选", "name_excludes", "1号", string.Empty, null, string.Empty, "TEST", string.Empty);
-
-        Assert.True(AreaGroupMembership.MatchesAny(
-            Device(1, "ROOM-KT-01", 1, "1F A", DeviceCommunicationState.Running), [include]));
-        Assert.False(AreaGroupMembership.MatchesAny(
-            Device(2, "ROOM-01", 1, "1F A", DeviceCommunicationState.Running), [include]));
-        Assert.True(AreaGroupMembership.MatchesAny(
-            Device(3, "ROOM-01", 1, "1F A", DeviceCommunicationState.Running), [exclude]));
-        Assert.False(AreaGroupMembership.MatchesAny(
-            Device(4, "ROOM-TEST-01", 1, "1F A", DeviceCommunicationState.Running), [exclude]));
-    }
-
     private static AreaGroupRecord Group(
         long id,
         string name,
-        bool enabled,
-        string groupKind = "custom",
-        string systemKey = "")
+        bool enabled)
     {
         return new AreaGroupRecord(
             Id: id,
@@ -256,38 +219,15 @@ public sealed class DashboardAreaGroupBuilderTests
             AreaLabel: string.Empty,
             Description: string.Empty,
             Priority: "重点",
-            GroupKind: groupKind,
-            SystemKey: systemKey,
-            Locked: groupKind == "system",
             Enabled: enabled,
-            ItemCount: groupKind == "custom" ? 1 : 0,
+            ItemCount: 0,
             Total: 0,
             OnCount: 0,
             OffCount: 0,
             OfflineCount: 0,
             UnknownCount: 0,
             CoveredAreas: 0,
-            PublicTotal: 0,
-            PublicOnCount: 0,
-            PublicOffCount: 0,
-            PublicOfflineCount: 0,
-            PublicUnknownCount: 0,
-            PublicCoveredAreas: 0);
-    }
-
-    private static AreaGroupItemRecord FloorItem(long groupId, double floor)
-    {
-        return new AreaGroupItemRecord(
-            Id: groupId,
-            GroupId: groupId,
-            GroupName: string.Empty,
-            TargetType: "floor",
-            Building: "1号",
-            FloorLabel: $"{floor:0.#}F",
-            FloorValue: floor,
-            SubAreaText: string.Empty,
-            CardName: string.Empty,
-            Note: string.Empty);
+            GroupKey: string.Empty);
     }
 
     private static AreaGroupRuleRecord Rule(

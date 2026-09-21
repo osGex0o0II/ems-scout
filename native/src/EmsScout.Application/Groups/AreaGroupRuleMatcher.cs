@@ -2,8 +2,25 @@ using EmsScout.Application.Devices;
 
 namespace EmsScout.Application.Groups;
 
+public sealed record PreparedAreaGroupRules(
+    IReadOnlyList<AreaGroupRuleRecord> Includes,
+    IReadOnlyList<AreaGroupRuleRecord> Excludes)
+{
+    public bool IsEmpty => Includes.Count == 0 && Excludes.Count == 0;
+}
+
 public static class AreaGroupRuleMatcher
 {
+    public static PreparedAreaGroupRules Prepare(IEnumerable<AreaGroupRuleRecord> rules)
+    {
+        var materialized = rules
+            .Select(AreaGroupRuleNormalizer.Normalize)
+            .ToArray();
+        return new(
+            materialized.Where(rule => rule.IsInclude).ToArray(),
+            materialized.Where(rule => rule.IsExclude).ToArray());
+    }
+
     public static int CountMatches(
         IEnumerable<DeviceRecord> devices,
         AreaGroupRuleRecord rule)
@@ -16,21 +33,23 @@ public static class AreaGroupRuleMatcher
         DeviceRecord device,
         IEnumerable<AreaGroupRuleRecord> rules)
     {
-        var materialized = rules
-            .Select(AreaGroupRuleNormalizer.Normalize)
-            .ToArray();
-        if (materialized.Length == 0)
+        return MatchesAny(device, Prepare(rules));
+    }
+
+    public static bool MatchesAny(
+        DeviceRecord device,
+        PreparedAreaGroupRules rules)
+    {
+        if (rules.IsEmpty)
         {
             return false;
         }
 
-        var includes = materialized.Where(rule => rule.IsInclude).ToArray();
-        var excludes = materialized.Where(rule => rule.IsExclude).ToArray();
-        var candidate = includes.Length > 0
-            ? includes.Any(rule => MatchesRule(device, rule, includeKeywords: true))
-            : excludes.Any(rule => MatchesScope(device, rule));
+        var candidate = rules.Includes.Count > 0
+            ? rules.Includes.Any(rule => MatchesRule(device, rule, includeKeywords: true))
+            : rules.Excludes.Any(rule => MatchesScope(device, rule));
 
-        return candidate && !excludes.Any(rule => MatchesRule(device, rule, includeKeywords: true));
+        return candidate && !rules.Excludes.Any(rule => MatchesRule(device, rule, includeKeywords: true));
     }
 
     public static bool MatchesRule(

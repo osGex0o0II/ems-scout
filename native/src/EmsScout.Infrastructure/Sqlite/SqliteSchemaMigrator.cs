@@ -115,7 +115,7 @@ public sealed class SqliteSchemaMigrator(Func<string> databasePathResolver)
         }
         if (await TableExistsAsync(connection, transaction, "device_watch_rules", cancellationToken).ConfigureAwait(false))
         {
-            clearStatements.Add("UPDATE monitor_groups SET enabled = 0, group_kind = 'custom', system_key = NULL, locked = 0, group_key = '' WHERE EXISTS (SELECT 1 FROM device_watch_rules WHERE device_watch_rules.group_id = monitor_groups.id)");
+            clearStatements.Add("UPDATE monitor_groups SET enabled = 0, group_key = '' WHERE EXISTS (SELECT 1 FROM device_watch_rules WHERE device_watch_rules.group_id = monitor_groups.id)");
             clearStatements.Add("DELETE FROM monitor_groups WHERE NOT EXISTS (SELECT 1 FROM device_watch_rules WHERE device_watch_rules.group_id = monitor_groups.id)");
             clearStatements.Add("DELETE FROM device_watch_rules WHERE NOT EXISTS (SELECT 1 FROM monitor_groups WHERE monitor_groups.id = device_watch_rules.group_id)");
         }

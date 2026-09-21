@@ -107,6 +107,18 @@ public sealed class GroupSettingsUiContractTests
     }
 
     [Fact]
+    public void AreaPageCancelsLoadsWhenNavigationChanges()
+    {
+        var root = LocateRepositoryRoot();
+        var codeBehind = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "AreasPage.xaml.cs"));
+
+        Assert.Contains("_loadCts", codeBehind);
+        Assert.Contains("ViewModel.LoadAsync(cancellationToken)", codeBehind);
+        Assert.Contains("OnNavigatedFrom", codeBehind);
+        Assert.Contains("_loadCts?.Cancel()", codeBehind);
+    }
+
+    [Fact]
     public void AreaPageKeepsRuleOptionsInStableOrderAndDisablesFileActionsWhileBusy()
     {
         var root = LocateRepositoryRoot();
@@ -131,7 +143,7 @@ public sealed class GroupSettingsUiContractTests
     }
 
     [Fact]
-    public void AreaPageKeepsFloorCatalogAndDeviceFloorLoadsInsideOneTryBlock()
+    public void AreaPageLoadsRuleFloorsWithoutRunningDeviceFacetQueries()
     {
         var root = LocateRepositoryRoot();
         var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "GroupsViewModel.cs"))
@@ -141,8 +153,8 @@ public sealed class GroupSettingsUiContractTests
 
         Assert.True(start >= 0 && end > start);
         var method = viewModel[start..end];
-        Assert.DoesNotContain("        }\n\n        var discoveredFloors =", method);
-        Assert.Contains("discoveredFloors = await deviceReadRepository.LoadFilterOptionsAsync", method);
+        Assert.DoesNotContain("LoadFilterOptionsAsync", method);
+        Assert.Contains("LoadFloorsAsync", method);
         Assert.Contains("catch (Exception ex)", method);
     }
 
@@ -155,6 +167,34 @@ public sealed class GroupSettingsUiContractTests
         Assert.Contains("private int _busyDepth;", viewModel);
         Assert.Contains("if (Interlocked.Increment(ref _busyDepth) == 1)", viewModel);
         Assert.Contains("if (Interlocked.Decrement(ref _busyDepth) == 0)", viewModel);
+    }
+
+    [Fact]
+    public void AreaPageLoadsRuleMatchCountsFromOneDeviceSnapshot()
+    {
+        var root = LocateRepositoryRoot();
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "GroupsViewModel.cs"));
+        var start = viewModel.IndexOf("private async Task RefreshRuleMatchCountsAsync", StringComparison.Ordinal);
+        var end = viewModel.IndexOf("    private static double FloorSortValue", start, StringComparison.Ordinal);
+
+        Assert.True(start >= 0 && end > start);
+        var method = viewModel[start..end];
+        Assert.Contains("new DeviceQuery(Limit: 50000)", method);
+        Assert.DoesNotContain("foreach (var building in rows", method);
+    }
+
+    [Fact]
+    public void AreaPageDoesNotStartRuleMatchRefreshBeforeGroupOptionsFinish()
+    {
+        var root = LocateRepositoryRoot();
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "GroupsViewModel.cs"));
+        var start = viewModel.IndexOf("public async Task SelectGroupAsync", StringComparison.Ordinal);
+        var end = viewModel.IndexOf("    [RelayCommand", start, StringComparison.Ordinal);
+
+        Assert.True(start >= 0 && end > start);
+        var method = viewModel[start..end];
+        Assert.Contains("_suppressRuleMatchRefresh = true", method);
+        Assert.Contains("_suppressRuleMatchRefresh = previousSuppressRuleMatchRefresh", method);
     }
 
     [Fact]
@@ -337,12 +377,12 @@ public sealed class GroupSettingsUiContractTests
     }
 
     [Fact]
-    public void LockedGroupsCannotEditRulesAndSaveUsesOneTransaction()
+    public void AreaGroupsUseOneTransactionalSavePath()
     {
         var root = LocateRepositoryRoot();
         var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "GroupsViewModel.cs"));
 
-        Assert.Contains("SelectedGroup is { IsLocked: false }", viewModel);
+        Assert.Contains("CanEditSelectedGroup", viewModel);
         Assert.Contains("SaveConfigurationAsync", viewModel);
         Assert.Contains("IsEnabled=\"{x:Bind ViewModel.CanEditSelectedGroup, Mode=OneWay}\"", File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "AreasPage.xaml")));
         Assert.Contains("Rules.Clear()", viewModel[viewModel.IndexOf("private void CancelNewGroup", StringComparison.Ordinal)..]);

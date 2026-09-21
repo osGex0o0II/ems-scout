@@ -16,102 +16,8 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         await using var connection = OpenConnection(readOnly: false);
         await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
         var groups = await LoadGroupsAsync(connection, cancellationToken).ConfigureAwait(false);
-        IReadOnlyList<AreaGroupItemRecord> items = [];
         var rules = await LoadRulesAsync(connection, null, cancellationToken).ConfigureAwait(false);
-        return new AreaGroupSet(groups, items, rules);
-    }
-
-    public async Task<IReadOnlyList<AreaGroupTargetOption>> LoadTargetOptionsAsync(
-        string building,
-        string floorLabel,
-        CancellationToken cancellationToken = default)
-    {
-        EnsureDatabaseExists();
-        await using var connection = OpenConnection(readOnly: true);
-        var floorValue = string.IsNullOrWhiteSpace(floorLabel) ? null : ParseFloorValue(floorLabel);
-        var subAreas = new List<AreaGroupTargetOption>();
-        var devices = new List<AreaGroupTargetOption>();
-
-        await using (var command = connection.CreateCommand())
-        {
-            var clauses = new List<string>();
-            if (!string.IsNullOrWhiteSpace(building))
-            {
-                clauses.Add("s.building = $building");
-                command.Parameters.AddWithValue("$building", building.Trim());
-            }
-
-            if (floorValue is not null)
-            {
-                clauses.Add("ABS(COALESCE(s.floor, -999999) - $floor_value) < 0.001");
-                command.Parameters.AddWithValue("$floor_value", floorValue.Value);
-            }
-
-            command.CommandText = $"""
-                SELECT s.building, s.floor, s.text AS sub_area_text, COUNT(c.id) AS count
-                FROM sub_areas s
-                JOIN pages p ON p.sub_area_id = s.id
-                JOIN cards c ON c.page_id = p.id
-                {(clauses.Count == 0 ? string.Empty : "WHERE " + string.Join(" AND ", clauses))}
-                GROUP BY s.building, s.floor, s.text
-                ORDER BY s.building, s.floor, s.text
-                """;
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-            {
-                var optionFloor = ReadNullableDouble(reader, "floor");
-                subAreas.Add(new AreaGroupTargetOption(
-                    Type: "sub_area",
-                    Building: ReadString(reader, "building"),
-                    FloorLabel: FloorLabelFromValue(optionFloor),
-                    FloorValue: optionFloor,
-                    SubAreaText: ReadString(reader, "sub_area_text"),
-                    CardName: string.Empty,
-                    Count: ReadInt32(reader, "count")));
-            }
-        }
-
-        await using (var command = connection.CreateCommand())
-        {
-            var clauses = new List<string>();
-            if (!string.IsNullOrWhiteSpace(building))
-            {
-                clauses.Add("s.building = $building");
-                command.Parameters.AddWithValue("$building", building.Trim());
-            }
-
-            if (floorValue is not null)
-            {
-                clauses.Add("ABS(COALESCE(s.floor, -999999) - $floor_value) < 0.001");
-                command.Parameters.AddWithValue("$floor_value", floorValue.Value);
-            }
-
-            command.CommandText = $"""
-                SELECT s.building, s.floor, s.text AS sub_area_text, c.name AS card_name, COUNT(*) AS count
-                FROM sub_areas s
-                JOIN pages p ON p.sub_area_id = s.id
-                JOIN cards c ON c.page_id = p.id
-                {(clauses.Count == 0 ? string.Empty : "WHERE " + string.Join(" AND ", clauses))}
-                GROUP BY s.building, s.floor, s.text, c.name
-                ORDER BY s.building, s.floor, s.text, c.name
-                LIMIT 2000
-                """;
-            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-            {
-                var optionFloor = ReadNullableDouble(reader, "floor");
-                devices.Add(new AreaGroupTargetOption(
-                    Type: "device",
-                    Building: ReadString(reader, "building"),
-                    FloorLabel: FloorLabelFromValue(optionFloor),
-                    FloorValue: optionFloor,
-                    SubAreaText: ReadString(reader, "sub_area_text"),
-                    CardName: ReadString(reader, "card_name"),
-                    Count: ReadInt32(reader, "count")));
-            }
-        }
-
-        return subAreas.Concat(devices).ToList();
+        return new AreaGroupSet(groups, rules);
     }
 
     public async Task<IReadOnlyList<FloorCatalogRecord>> LoadFloorsAsync(
@@ -241,33 +147,26 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
                 ? current.GroupKey
                 : NormalizeGroupKey(edit.GroupKey);
             await using var update = connection.CreateCommand();
-            if (current.Locked || current.GroupKind.Equals("system", StringComparison.OrdinalIgnoreCase))
+            var duplicate = await FindGroupIdByNameAsync(connection, name, cancellationToken).ConfigureAwait(false);
+            if (duplicate is not null && duplicate.Value != edit.Id.Value)
             {
-                throw new InvalidOperationException("锁定或系统区域组不支持编辑。");
+                throw new InvalidOperationException("已存在同名区域组，请选择已有分组编辑或更换名称。");
             }
-            else
-            {
-                var duplicate = await FindGroupIdByNameAsync(connection, name, cancellationToken).ConfigureAwait(false);
-                if (duplicate is not null && duplicate.Value != edit.Id.Value)
-                {
-                    throw new InvalidOperationException("已存在同名区域组，请选择已有分组编辑或更换名称。");
-                }
 
-                update.CommandText = """
-                    UPDATE monitor_groups
-                    SET name = $name, area_label = $area_label, description = $description,
-                        priority = $priority, enabled = $enabled, group_key = $group_key, updated_at = $updated_at
-                    WHERE id = $id
-                    """;
-                update.Parameters.AddWithValue("$name", name);
-                update.Parameters.AddWithValue("$area_label", (edit.AreaLabel ?? string.Empty).Trim());
-                update.Parameters.AddWithValue("$description", (edit.Description ?? string.Empty).Trim());
-                update.Parameters.AddWithValue("$priority", priority);
-                update.Parameters.AddWithValue("$enabled", edit.Enabled ? 1 : 0);
-                update.Parameters.AddWithValue("$group_key", groupKey);
-                update.Parameters.AddWithValue("$updated_at", now);
-                update.Parameters.AddWithValue("$id", edit.Id.Value);
-            }
+            update.CommandText = """
+                UPDATE monitor_groups
+                SET name = $name, area_label = $area_label, description = $description,
+                    priority = $priority, enabled = $enabled, group_key = $group_key, updated_at = $updated_at
+                WHERE id = $id
+                """;
+            update.Parameters.AddWithValue("$name", name);
+            update.Parameters.AddWithValue("$area_label", (edit.AreaLabel ?? string.Empty).Trim());
+            update.Parameters.AddWithValue("$description", (edit.Description ?? string.Empty).Trim());
+            update.Parameters.AddWithValue("$priority", priority);
+            update.Parameters.AddWithValue("$enabled", edit.Enabled ? 1 : 0);
+            update.Parameters.AddWithValue("$group_key", groupKey);
+            update.Parameters.AddWithValue("$updated_at", now);
+            update.Parameters.AddWithValue("$id", edit.Id.Value);
 
             await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
             return (await LoadGroupsAsync(connection, cancellationToken).ConfigureAwait(false))
@@ -334,10 +233,6 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         {
             var current = await LoadGroupRawAsync(connection, edit.Id.Value, cancellationToken, transaction).ConfigureAwait(false)
                           ?? throw new InvalidOperationException($"Group not found: {edit.Id.Value}");
-            if (current.Locked || current.GroupKind.Equals("system", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidOperationException("锁定或系统区域组不支持编辑。");
-            }
 
             var duplicate = await FindGroupIdByNameAsync(connection, name, cancellationToken, transaction).ConfigureAwait(false);
             if (duplicate is not null && duplicate.Value != edit.Id.Value)
@@ -442,10 +337,6 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
         var group = await LoadGroupRawAsync(connection, edit.GroupId, cancellationToken).ConfigureAwait(false)
                     ?? throw new InvalidOperationException($"Group not found: {edit.GroupId}");
-        if (group.Locked || group.GroupKind.Equals("system", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException("系统区域不支持规则编辑。");
-        }
 
         var keywords = AreaGroupRuleNormalizer.NormalizeKeywords(edit.Keywords);
         var candidate = new AreaGroupRuleRecord(
@@ -522,7 +413,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         {
             find.Transaction = transaction;
             find.CommandText = """
-                SELECT r.group_id, g.locked, g.group_kind
+                SELECT r.group_id
                 FROM area_group_rules r
                 JOIN monitor_groups g ON g.id = r.group_id
                 WHERE r.id = $id
@@ -535,11 +426,6 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             }
 
             groupId = reader.GetInt64(reader.GetOrdinal("group_id"));
-            if (reader.GetInt32(reader.GetOrdinal("locked")) != 0 ||
-                string.Equals(reader.GetString(reader.GetOrdinal("group_kind")), "system", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidOperationException("锁定或系统区域组不支持规则删除。");
-            }
         }
 
         await using (var delete = connection.CreateCommand())
@@ -609,8 +495,8 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
                 insertGroup.Transaction = transaction;
                 insertGroup.CommandText = """
                     INSERT INTO monitor_groups
-                        (name, area_label, description, priority, group_kind, system_key, locked, enabled, group_key, created_at, updated_at)
-                    VALUES ($name, $area_label, $description, $priority, 'custom', NULL, 0, $enabled, $group_key, $created_at, $updated_at)
+                        (name, area_label, description, priority, enabled, group_key, created_at, updated_at)
+                    VALUES ($name, $area_label, $description, $priority, $enabled, $group_key, $created_at, $updated_at)
                     RETURNING id
                     """;
                 insertGroup.Parameters.AddWithValue("$name", Require(transferGroup.Name, "group name"));
@@ -625,24 +511,12 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             }
             else
             {
-                await using (var lockCheck = connection.CreateCommand())
-                {
-                    lockCheck.Transaction = transaction;
-                    lockCheck.CommandText = "SELECT locked FROM monitor_groups WHERE id = $id";
-                    lockCheck.Parameters.AddWithValue("$id", groupId.Value);
-                    if (Convert.ToInt32(await lockCheck.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture) != 0)
-                    {
-                        throw new InvalidOperationException($"区域组 {groupKey} 已锁定，不能通过导入覆盖。");
-                    }
-                }
-
                 await using var updateGroup = connection.CreateCommand();
                 updateGroup.Transaction = transaction;
                 updateGroup.CommandText = """
                     UPDATE monitor_groups
                     SET name = $name, area_label = $area_label, description = $description,
-                        priority = $priority, group_kind = 'custom',
-                        system_key = NULL, enabled = $enabled, updated_at = $updated_at
+                        priority = $priority, enabled = $enabled, updated_at = $updated_at
                     WHERE id = $id
                     """;
                 updateGroup.Parameters.AddWithValue("$name", Require(transferGroup.Name, "group name"));
@@ -711,10 +585,6 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
         var current = await LoadGroupRawAsync(connection, id, cancellationToken).ConfigureAwait(false)
                       ?? throw new InvalidOperationException($"Group not found: {id}");
-        if (current.Locked || current.GroupKind.Equals("system", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException("系统区域不能删除");
-        }
 
         if (await TableExistsAsync(connection, "device_watch_rules", cancellationToken).ConfigureAwait(false))
         {
@@ -744,18 +614,6 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         }
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-    }
-
-    public async Task<AreaGroupItemRecord> SaveItemAsync(
-        AreaGroupItemEdit edit,
-        CancellationToken cancellationToken = default)
-    {
-        throw new NotSupportedException("区域组成员已废弃，请使用区域组匹配规则。");
-    }
-
-    public async Task DeleteItemAsync(long id, CancellationToken cancellationToken = default)
-    {
-        throw new NotSupportedException("区域组成员已废弃，请使用区域组匹配规则。");
     }
 
     private SqliteConnection OpenConnection(bool readOnly)
@@ -788,9 +646,6 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
                 area_label TEXT NOT NULL DEFAULT '',
                 description TEXT NOT NULL DEFAULT '',
                 priority TEXT NOT NULL DEFAULT '重点',
-                group_kind TEXT NOT NULL DEFAULT 'custom',
-                system_key TEXT,
-                locked INTEGER NOT NULL DEFAULT 0,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 group_key TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
@@ -919,7 +774,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             preserveWatchGroups.Transaction = transaction;
             preserveWatchGroups.CommandText = """
                 UPDATE monitor_groups
-                SET enabled = 0, group_kind = 'custom', system_key = NULL, locked = 0, group_key = ''
+                SET enabled = 0, group_key = ''
                 WHERE EXISTS (
                     SELECT 1 FROM device_watch_rules
                     WHERE device_watch_rules.group_id = monitor_groups.id
@@ -1077,8 +932,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         await using (var command = connection.CreateCommand())
         {
             command.CommandText = """
-                SELECT id, name, area_label, description, priority, group_kind, system_key, locked,
-                       enabled, group_key
+                SELECT id, name, area_label, description, priority, enabled, group_key
                 FROM monitor_groups
                 WHERE COALESCE(group_key, '') <> ''
                 ORDER BY enabled DESC, priority DESC, id
@@ -1090,19 +944,37 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             }
         }
 
+        var rules = await LoadRulesAsync(connection, null, cancellationToken).ConfigureAwait(false);
+        var rulesByGroup = rules
+            .GroupBy(rule => rule.GroupId)
+            .ToDictionary(group => group.Key, group => (IReadOnlyList<AreaGroupRuleRecord>)group.ToArray());
+        var preparedRulesByGroup = rulesByGroup.ToDictionary(
+            pair => pair.Key,
+            pair => AreaGroupRuleMatcher.Prepare(pair.Value));
+        var hasCurrentDevices = groups.Any(group => group.Enabled && rulesByGroup.ContainsKey(group.Id)) &&
+                                await TableExistsAsync(connection, "sub_areas", cancellationToken).ConfigureAwait(false) &&
+                                await TableExistsAsync(connection, "cards", cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<DeviceRecord> devices = [];
+        if (hasCurrentDevices)
+        {
+            devices = await LoadCurrentDevicesForStatsAsync(connection, cancellationToken).ConfigureAwait(false);
+        }
+
         var rows = new List<AreaGroupRecord>();
         foreach (var group in groups)
         {
-            var stats = await ComputeGroupStatsAsync(connection, group.Id, cancellationToken).ConfigureAwait(false);
+            var groupRules = rulesByGroup.GetValueOrDefault(group.Id, []);
+            var stats = !group.Enabled || groupRules.Count == 0 || !preparedRulesByGroup.TryGetValue(group.Id, out var prepared)
+                ? new GroupStats(groupRules.Count, 0, 0, 0, 0, 0, 0)
+                : BuildGroupStats(
+                    groupRules.Count,
+                    devices.Where(device => AreaGroupRuleMatcher.MatchesAny(device, prepared)).ToArray());
             rows.Add(new AreaGroupRecord(
                 group.Id,
                 group.Name,
                 group.AreaLabel,
                 group.Description,
                 group.Priority,
-                group.GroupKind,
-                group.SystemKey,
-                group.Locked,
                 group.Enabled,
                 stats.ItemCount,
                 stats.Total,
@@ -1111,52 +983,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
                 stats.OfflineCount,
                 stats.UnknownCount,
                 stats.CoveredAreas,
-                stats.PublicTotal,
-                stats.PublicOnCount,
-                stats.PublicOffCount,
-                stats.PublicOfflineCount,
-                stats.PublicUnknownCount,
-                stats.PublicCoveredAreas,
                 group.GroupKey));
-        }
-
-        return rows;
-    }
-
-    private static async Task<IReadOnlyList<AreaGroupItemRecord>> LoadItemsAsync(
-        SqliteConnection connection,
-        long? groupId,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = $"""
-            SELECT i.id, i.group_id, g.name AS group_name, i.target_type, i.building,
-                   i.floor_label, i.floor_value, i.sub_area_text, i.card_name, i.note
-            FROM monitor_group_items i
-            JOIN monitor_groups g ON g.id = i.group_id
-            {(groupId is null ? string.Empty : "WHERE i.group_id = $group_id")}
-            ORDER BY g.id, i.building, i.floor_value, i.sub_area_text, i.card_name
-            """;
-        if (groupId is not null)
-        {
-            command.Parameters.AddWithValue("$group_id", groupId.Value);
-        }
-
-        var rows = new List<AreaGroupItemRecord>();
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-        {
-            rows.Add(new AreaGroupItemRecord(
-                Id: reader.GetInt64(reader.GetOrdinal("id")),
-                GroupId: reader.GetInt64(reader.GetOrdinal("group_id")),
-                GroupName: ReadString(reader, "group_name"),
-                TargetType: ReadString(reader, "target_type"),
-                Building: ReadString(reader, "building"),
-                FloorLabel: ReadString(reader, "floor_label"),
-                FloorValue: ReadNullableDouble(reader, "floor_value"),
-                SubAreaText: ReadString(reader, "sub_area_text"),
-                CardName: ReadString(reader, "card_name"),
-                Note: ReadString(reader, "note")));
         }
 
         return rows;
@@ -1244,42 +1071,9 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             Note: ReadString(reader, "note"));
     }
 
-    private static async Task<GroupStats> ComputeGroupStatsAsync(
-        SqliteConnection connection,
-        long groupId,
-        CancellationToken cancellationToken)
-    {
-        var group = await LoadGroupRawAsync(connection, groupId, cancellationToken).ConfigureAwait(false);
-        var rules = await LoadRulesAsync(connection, groupId, cancellationToken).ConfigureAwait(false);
-        if (group is null)
-        {
-            return new GroupStats(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-        }
-
-        if (!group.Enabled)
-        {
-            return new GroupStats(rules.Count, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-        }
-
-        var hasCurrentDevices = await TableExistsAsync(connection, "sub_areas", cancellationToken).ConfigureAwait(false) &&
-                                await TableExistsAsync(connection, "cards", cancellationToken).ConfigureAwait(false);
-        if (rules.Count == 0 || !hasCurrentDevices)
-        {
-            return new GroupStats(rules.Count, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-        }
-
-        var devices = await LoadCurrentDevicesForStatsAsync(connection, cancellationToken).ConfigureAwait(false);
-        var matches = devices
-            .Where(device => AreaGroupRuleMatcher.MatchesAny(device, rules))
-            .ToArray();
-        IReadOnlyList<DeviceRecord> publicMatches = [];
-        return BuildGroupStats(rules.Count, matches, publicMatches);
-    }
-
     private static GroupStats BuildGroupStats(
         int itemCount,
-        IReadOnlyList<DeviceRecord> matches,
-        IReadOnlyList<DeviceRecord> publicMatches)
+        IReadOnlyList<DeviceRecord> matches)
     {
         return new GroupStats(
             ItemCount: itemCount,
@@ -1288,13 +1082,7 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             OffCount: matches.Count(device => device.CommunicationState == DeviceCommunicationState.Stopped),
             OfflineCount: matches.Count(device => device.CommunicationState == DeviceCommunicationState.Offline),
             UnknownCount: matches.Count(device => device.CommunicationState == DeviceCommunicationState.Unknown),
-            CoveredAreas: matches.Select(device => (device.Building, device.Floor, device.SubArea)).Distinct().Count(),
-            PublicTotal: publicMatches.Count,
-            PublicOnCount: publicMatches.Count(device => device.CommunicationState == DeviceCommunicationState.Running),
-            PublicOffCount: publicMatches.Count(device => device.CommunicationState == DeviceCommunicationState.Stopped),
-            PublicOfflineCount: publicMatches.Count(device => device.CommunicationState == DeviceCommunicationState.Offline),
-            PublicUnknownCount: publicMatches.Count(device => device.CommunicationState == DeviceCommunicationState.Unknown),
-            PublicCoveredAreas: publicMatches.Select(device => (device.Building, device.Floor, device.SubArea)).Distinct().Count());
+            CoveredAreas: matches.Select(device => (device.Building, device.Floor, device.SubArea)).Distinct().Count());
     }
 
     private static async Task<IReadOnlyList<DeviceRecord>> LoadCurrentDevicesForStatsAsync(
@@ -1355,31 +1143,14 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
     {
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = """
-            SELECT id, name, area_label, description, priority, group_kind, system_key, locked, enabled, group_key
+            command.CommandText = """
+                SELECT id, name, area_label, description, priority, enabled, group_key
             FROM monitor_groups
             WHERE id = $id
             """;
         command.Parameters.AddWithValue("$id", id);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadRawGroup(reader) : null;
-    }
-
-    private static async Task<AreaGroupItemRaw?> LoadItemRawAsync(SqliteConnection connection, long id, CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = """
-            SELECT id, group_id
-            FROM monitor_group_items
-            WHERE id = $id
-            """;
-        command.Parameters.AddWithValue("$id", id);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
-            ? new AreaGroupItemRaw(
-                Id: reader.GetInt64(reader.GetOrdinal("id")),
-                GroupId: reader.GetInt64(reader.GetOrdinal("group_id")))
-            : null;
     }
 
     private static async Task<bool> TableExistsAsync(SqliteConnection connection, string tableName, CancellationToken cancellationToken)
@@ -1418,176 +1189,6 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         return value is null ? null : Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    private static async Task<long?> FindItemIdAsync(
-        SqliteConnection connection,
-        long groupId,
-        string targetType,
-        string building,
-        double? floorValue,
-        string subArea,
-        string cardName,
-        long? excludeId,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = targetType switch
-        {
-            "name_contains" or "name_excludes" => """
-                SELECT id FROM monitor_group_items
-                WHERE group_id = $group_id
-                  AND target_type = $target_type
-                  AND building = $building
-                  AND IFNULL(card_name, '') = IFNULL($card_name, '')
-                  AND ABS(COALESCE(floor_value, -999999) - COALESCE($floor_value, -999998)) < 0.001
-                  AND IFNULL(sub_area_text, '') = IFNULL($sub_area_text, '')
-                  AND ($exclude_id IS NULL OR id <> $exclude_id)
-                """,
-            "device" => """
-                SELECT id FROM monitor_group_items
-                WHERE group_id = $group_id
-                  AND target_type = 'device'
-                  AND building = $building
-                  AND IFNULL(card_name, '') = IFNULL($card_name, '')
-                  AND ABS(COALESCE(floor_value, -999999) - COALESCE($floor_value, -999998)) < 0.001
-                  AND IFNULL(sub_area_text, '') = IFNULL($sub_area_text, '')
-                  AND ($exclude_id IS NULL OR id <> $exclude_id)
-                """,
-            "sub_area" => """
-                SELECT id FROM monitor_group_items
-                WHERE group_id = $group_id
-                  AND target_type = 'sub_area'
-                  AND building = $building
-                  AND ABS(COALESCE(floor_value, -999999) - COALESCE($floor_value, -999998)) < 0.001
-                  AND IFNULL(sub_area_text, '') = IFNULL($sub_area_text, '')
-                  AND ($exclude_id IS NULL OR id <> $exclude_id)
-                """,
-            _ => """
-                SELECT id FROM monitor_group_items
-                WHERE group_id = $group_id
-                  AND target_type = 'floor'
-                  AND building = $building
-                  AND ABS(COALESCE(floor_value, -999999) - COALESCE($floor_value, -999998)) < 0.001
-                  AND ($exclude_id IS NULL OR id <> $exclude_id)
-                """
-        };
-        command.Parameters.AddWithValue("$group_id", groupId);
-        command.Parameters.AddWithValue("$target_type", targetType);
-        command.Parameters.AddWithValue("$building", building);
-        command.Parameters.AddWithValue("$floor_value", floorValue is null ? DBNull.Value : floorValue);
-        command.Parameters.AddWithValue("$sub_area_text", NullIfEmpty(subArea));
-        command.Parameters.AddWithValue("$card_name", NullIfEmpty(cardName));
-        command.Parameters.AddWithValue("$exclude_id", excludeId is null ? DBNull.Value : excludeId.Value);
-        var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-        return value is null ? null : Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
-    }
-
-    private static async Task<long> ScalarLongAsync(
-        SqliteConnection connection,
-        string sql,
-        (string Name, object Value) parameter,
-        CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        command.Parameters.AddWithValue(parameter.Name, parameter.Value);
-        var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
-        return Convert.ToInt64(value, System.Globalization.CultureInfo.InvariantCulture);
-    }
-
-    public static string CustomGroupExistsSql()
-    {
-        return """
-            (
-              EXISTS (
-                SELECT 1
-                FROM monitor_groups active_group
-                WHERE active_group.id = $group_id
-                  AND active_group.enabled = 1
-              )
-              AND (
-                NOT EXISTS (
-                  SELECT 1
-                  FROM monitor_group_items positive
-                  JOIN monitor_groups positive_group ON positive_group.id = positive.group_id
-                  WHERE positive.group_id = $group_id
-                    AND positive_group.enabled = 1
-                    AND positive.target_type <> 'name_excludes'
-                )
-                OR EXISTS (
-                  SELECT 1
-                  FROM monitor_group_items mgi
-                  JOIN monitor_groups mg ON mg.id = mgi.group_id
-                  WHERE mgi.group_id = $group_id
-                    AND mg.enabled = 1
-                    AND mgi.building = s.building
-                    AND (
-                      (
-                        mgi.target_type = 'device'
-                        AND (mgi.card_name = c.name OR c.name LIKE mgi.card_name || '#%')
-                        AND (
-                          (mgi.floor_value IS NULL AND IFNULL(mgi.sub_area_text, '') = '')
-                          OR (
-                            (mgi.floor_value IS NULL OR ABS(COALESCE(s.floor, -999999) - COALESCE(mgi.floor_value, -999998)) < 0.001)
-                            AND (IFNULL(mgi.sub_area_text, '') = '' OR IFNULL(mgi.sub_area_text, '') = IFNULL(s.text, ''))
-                          )
-                        )
-                      )
-                      OR (
-                        mgi.target_type = 'sub_area'
-                        AND ABS(COALESCE(s.floor, -999999) - COALESCE(mgi.floor_value, -999998)) < 0.001
-                        AND IFNULL(mgi.sub_area_text, '') = IFNULL(s.text, '')
-                      )
-                      OR (
-                        mgi.target_type = 'floor'
-                        AND ABS(COALESCE(s.floor, -999999) - COALESCE(mgi.floor_value, -999998)) < 0.001
-                      )
-                      OR (
-                        mgi.target_type = 'name_contains'
-                        AND INSTR(LOWER(COALESCE(c.name, '')), LOWER(mgi.card_name)) > 0
-                      )
-                    )
-                )
-              )
-              AND NOT EXISTS (
-                SELECT 1
-                FROM monitor_group_items negative
-                JOIN monitor_groups negative_group ON negative_group.id = negative.group_id
-                WHERE negative.group_id = $group_id
-                  AND negative_group.enabled = 1
-                  AND negative.target_type = 'name_excludes'
-                  AND negative.building = s.building
-                  AND INSTR(LOWER(COALESCE(c.name, '')), LOWER(negative.card_name)) > 0
-                  AND (negative.floor_value IS NULL OR ABS(COALESCE(s.floor, -999999) - COALESCE(negative.floor_value, -999998)) < 0.001)
-                  AND (IFNULL(negative.sub_area_text, '') = '' OR IFNULL(negative.sub_area_text, '') = IFNULL(s.text, ''))
-              )
-            )
-            """;
-    }
-
-    public static string PublicSql()
-    {
-        return """
-            (
-              p.layout = 'group'
-              OR (
-                c.name NOT GLOB 'QL-[0-9]*'
-                AND (
-                  c.name LIKE '%GQ%'
-                  OR c.name LIKE '%WSJ%'
-                  OR c.name LIKE '%DTT%'
-                  OR c.name LIKE '%FDT%'
-                  OR c.name LIKE '%XFDT%'
-                  OR c.name LIKE '%CSJ%'
-                  OR c.name LIKE '%FWJ%'
-                  OR c.name LIKE '%ZBS%'
-                  OR c.name LIKE '%ZSG%'
-                  OR c.name LIKE '%MD%'
-                  OR c.name LIKE '%RDJHJF%'
-                )
-              )
-            )
-            """;
-    }
 
     private static AreaGroupRaw ReadRawGroup(SqliteDataReader reader)
     {
@@ -1597,9 +1198,6 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
             AreaLabel: ReadString(reader, "area_label"),
             Description: ReadString(reader, "description"),
             Priority: ReadString(reader, "priority"),
-            GroupKind: ReadString(reader, "group_kind"),
-            SystemKey: ReadString(reader, "system_key"),
-            Locked: ReadInt32(reader, "locked") != 0,
             Enabled: ReadInt32(reader, "enabled") != 0,
             GroupKey: ReadString(reader, "group_key"));
     }
@@ -1630,14 +1228,6 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         }
 
         return normalized;
-    }
-
-    private static string NormalizeTargetType(string value)
-    {
-        var normalized = (value ?? string.Empty).Trim();
-        return normalized is "floor" or "sub_area" or "device" or "name_contains" or "name_excludes"
-            ? normalized
-            : "floor";
     }
 
     private static string NormalizeFloorLabel(string value)
@@ -1709,15 +1299,8 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         string AreaLabel,
         string Description,
         string Priority,
-        string GroupKind,
-        string SystemKey,
-        bool Locked,
         bool Enabled,
         string GroupKey);
-
-    private sealed record AreaGroupItemRaw(
-        long Id,
-        long GroupId);
 
     private sealed record GroupStats(
         int ItemCount,
@@ -1726,11 +1309,5 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         int OffCount,
         int OfflineCount,
         int UnknownCount,
-        int CoveredAreas,
-        int PublicTotal,
-        int PublicOnCount,
-        int PublicOffCount,
-        int PublicOfflineCount,
-        int PublicUnknownCount,
-        int PublicCoveredAreas);
+        int CoveredAreas);
 }

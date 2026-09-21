@@ -58,6 +58,8 @@ public sealed class SqliteDeviceReadRepository(
             groupIds: null,
             query.RunId,
             cancellationToken).ConfigureAwait(false);
+        var preparedSelectedRuleGroups = PrepareRuleGroups(enabledRuleGroups);
+        var preparedAllEnabledRuleGroups = PrepareRuleGroups(allEnabledRuleGroups);
         var (whereSql, parameters) = BuildWhereClause(query, source);
         var annotations = source.IsHistory
             ? EmptyAnnotations()
@@ -78,16 +80,16 @@ public sealed class SqliteDeviceReadRepository(
             realtimeBuildings,
             cancellationToken).ConfigureAwait(false);
         rows = AttachRealtimeRows(rows, realtimeSet, overrides);
-        rows = AttachAreaGroups(rows, allEnabledRuleGroups);
+        rows = AttachAreaGroups(rows, allEnabledRuleGroups, preparedAllEnabledRuleGroups);
         rows = rows
             .Where(row => DeviceQueryVisibility.ShouldInclude(row, query))
             .ToList();
         if (groupIds.Count > 0)
         {
             rows = rows
-                .Where(row => groupIds.Any(groupId => AreaGroupRuleMatcher.MatchesAny(
-                    row,
-                    groupRules.Where(rule => rule.GroupId == groupId))))
+                .Where(row => groupIds.Any(groupId =>
+                    preparedSelectedRuleGroups.TryGetValue(groupId, out var prepared) &&
+                    AreaGroupRuleMatcher.MatchesAny(row, prepared)))
                 .ToList();
         }
         if (!source.IsHistory)
@@ -169,6 +171,8 @@ public sealed class SqliteDeviceReadRepository(
             groupIds: null,
             query.RunId,
             cancellationToken).ConfigureAwait(false);
+        var preparedSelectedRuleGroups = PrepareRuleGroups(enabledRuleGroups);
+        var preparedAllEnabledRuleGroups = PrepareRuleGroups(allEnabledRuleGroups);
         var candidateQuery = query.WithoutFacets();
         var (runWhereSql, runParameters) = BuildWhereClause(candidateQuery, source);
 
@@ -196,16 +200,16 @@ public sealed class SqliteDeviceReadRepository(
             realtimeBuildings,
             cancellationToken).ConfigureAwait(false);
         rows = AttachRealtimeRows(rows, realtimeSet, overrides);
-        rows = AttachAreaGroups(rows, allEnabledRuleGroups);
+        rows = AttachAreaGroups(rows, allEnabledRuleGroups, preparedAllEnabledRuleGroups);
         rows = rows
             .Where(row => DeviceQueryVisibility.ShouldInclude(row, query))
             .ToList();
         if (groupIds.Count > 0)
         {
             rows = rows
-                .Where(row => groupIds.Any(groupId => AreaGroupRuleMatcher.MatchesAny(
-                    row,
-                    groupRules.Where(rule => rule.GroupId == groupId))))
+                .Where(row => groupIds.Any(groupId =>
+                    preparedSelectedRuleGroups.TryGetValue(groupId, out var prepared) &&
+                    AreaGroupRuleMatcher.MatchesAny(row, prepared)))
                 .ToList();
         }
         if (!source.IsHistory)
@@ -876,7 +880,8 @@ public sealed class SqliteDeviceReadRepository(
 
     private static List<DeviceRecord> AttachAreaGroups(
         List<DeviceRecord> rows,
-        IReadOnlyList<EnabledAreaGroupRuleGroup> groups)
+        IReadOnlyList<EnabledAreaGroupRuleGroup> groups,
+        IReadOnlyDictionary<long, PreparedAreaGroupRules> preparedGroups)
     {
         if (groups.Count == 0)
         {
@@ -887,12 +892,21 @@ public sealed class SqliteDeviceReadRepository(
             .Select(row => row with
             {
                 AreaGroups = groups
-                    .Where(group => AreaGroupRuleMatcher.MatchesAny(row, group.Rules))
+                    .Where(group => preparedGroups.TryGetValue(group.GroupId, out var prepared) &&
+                                    AreaGroupRuleMatcher.MatchesAny(row, prepared))
                     .Select(group => group.Name)
                     .Where(name => !string.IsNullOrWhiteSpace(name))
                     .ToArray(),
             })
             .ToList();
+    }
+
+    private static Dictionary<long, PreparedAreaGroupRules> PrepareRuleGroups(
+        IReadOnlyList<EnabledAreaGroupRuleGroup> groups)
+    {
+        return groups.ToDictionary(
+            group => group.GroupId,
+            group => AreaGroupRuleMatcher.Prepare(group.Rules));
     }
 
     private static IEnumerable<string> ValueList(string? value)

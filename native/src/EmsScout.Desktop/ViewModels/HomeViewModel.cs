@@ -450,10 +450,6 @@ public sealed class DashboardAreaGroupRow(DashboardAreaGroupSummary summary, lon
 
     public string Total { get; } = summary.Total.ToString("N0");
 
-    public string PublicTotal { get; } = summary.PublicTotal.ToString("N0");
-
-    public string PrivateTotal { get; } = summary.PrivateTotal.ToString("N0");
-
     public string Online { get; } = summary.Online.ToString("N0");
 
     public string Offline { get; } = summary.Offline.ToString("N0");
@@ -463,14 +459,6 @@ public sealed class DashboardAreaGroupRow(DashboardAreaGroupSummary summary, lon
     public string Stopped { get; } = summary.Stopped.ToString("N0");
 
     public string Unknown { get; } = summary.Unknown.ToString("N0");
-
-    public string PublicRunning { get; } = summary.PublicRunning.ToString("N0");
-
-    public string PublicStopped { get; } = summary.PublicStopped.ToString("N0");
-
-    public string PublicOffline { get; } = summary.PublicOffline.ToString("N0");
-
-    public string PublicUnknown { get; } = summary.PublicUnknown.ToString("N0");
 
     public string RealtimeStatusText { get; } = string.IsNullOrWhiteSpace(summary.RealtimeStatusText)
         ? "实时详情不可用"
@@ -487,10 +475,6 @@ public sealed class DashboardAreaGroupRow(DashboardAreaGroupSummary summary, lon
     public string LockOff { get; } = IsRealtimeMetricsAvailable(summary)
         ? summary.LockOff.ToString("N0")
         : "--";
-
-    public string RunningRate { get; } = summary.PublicRunningRate.ToString("P1");
-
-    public double RunningPercent { get; } = summary.PublicRunningRate * 100;
 
     public string StateText { get; } = summary.Total == 0
         ? "暂无设备"

@@ -17,6 +17,7 @@ public sealed partial class AreasPage : Page
     private readonly SemaphoreSlim _dialogGate = new(1, 1);
     private bool _suppressGroupSelectionChanged;
     private long? _requestedGroupId;
+    private CancellationTokenSource? _loadCts;
 
     public GroupsViewModel ViewModel { get; }
 
@@ -29,19 +30,34 @@ public sealed partial class AreasPage : Page
 
     private async void Page_Loaded(object sender, RoutedEventArgs e)
     {
+        _loadCts?.Cancel();
+        _loadCts?.Dispose();
+        _loadCts = new CancellationTokenSource();
+        var cancellationToken = _loadCts.Token;
         try
         {
-            await ViewModel.LoadAsync();
+            await ViewModel.LoadAsync(cancellationToken);
             if (_requestedGroupId is long groupId)
             {
-                await ViewModel.SelectGroupAsync(groupId);
+                await ViewModel.SelectGroupAsync(groupId, cancellationToken);
                 _requestedGroupId = null;
             }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
         }
         catch (Exception ex)
         {
             await ShowErrorAsync("区域组页面加载失败", ex.Message);
         }
+    }
+
+    protected override void OnNavigatedFrom(NavigationEventArgs e)
+    {
+        _loadCts?.Cancel();
+        _loadCts?.Dispose();
+        _loadCts = null;
+        base.OnNavigatedFrom(e);
     }
 
     private async void GroupList_SelectionChanged(object sender, SelectionChangedEventArgs e)

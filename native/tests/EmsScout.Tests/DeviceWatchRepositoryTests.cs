@@ -82,39 +82,16 @@ public sealed class DeviceWatchRepositoryTests
     }
 
     [Fact]
-    public async Task SaveRuleRejectsMissingAndSystemGroups()
+    public async Task SaveRuleRejectsMissingGroups()
     {
         var databasePath = CreateDatabase();
         var groups = new SqliteAreaGroupRepository(() => databasePath);
         var watch = new SqliteDeviceWatchRepository(() => databasePath);
         await groups.SaveGroupAsync(new AreaGroupEdit(null, "自定义组", "自定义", "测试", "重点", true));
-        long systemGroupId;
-        using (var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadWrite"))
-        {
-            connection.Open();
-            using var command = connection.CreateCommand();
-            command.CommandText = """
-                INSERT INTO monitor_groups
-                    (name, area_label, description, priority, group_kind, system_key, locked, enabled)
-                VALUES
-                    ('系统公区', '公区', '系统规则', '重点', 'system', 'public', 1, 1)
-                RETURNING id
-                """;
-            systemGroupId = Convert.ToInt64(command.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
-        }
-
         await Assert.ThrowsAsync<ArgumentException>(() => watch.SaveRuleAsync(new DeviceWatchEdit(
             Id: null,
             GroupId: 9999,
             Name: "不存在分组",
-            StartAt: DateTimeOffset.Parse("2026-07-03T00:00:00Z"),
-            EndAt: DateTimeOffset.Parse("2026-07-03T12:00:00Z"),
-            Enabled: true,
-            Note: string.Empty)));
-        await Assert.ThrowsAsync<ArgumentException>(() => watch.SaveRuleAsync(new DeviceWatchEdit(
-            Id: null,
-            GroupId: systemGroupId,
-            Name: "系统分组",
             StartAt: DateTimeOffset.Parse("2026-07-03T00:00:00Z"),
             EndAt: DateTimeOffset.Parse("2026-07-03T12:00:00Z"),
             Enabled: true,

@@ -13,7 +13,6 @@ public sealed class GroupSummaryRow(
     string quickFilter = "",
     long? groupId = null,
     bool isCustom = false,
-    bool isLocked = true,
     bool isEnabled = true,
     int itemCount = 0)
 {
@@ -26,7 +25,6 @@ public sealed class GroupSummaryRow(
             string.Empty,
             groupId: record.Id,
             isCustom: !string.IsNullOrWhiteSpace(record.GroupKey),
-            isLocked: record.Locked,
             isEnabled: record.Enabled,
             itemCount: record.ItemCount)
     {
@@ -38,10 +36,6 @@ public sealed class GroupSummaryRow(
         OffCount = record.OffCount;
         OfflineCount = record.OfflineCount;
         UnknownCount = record.UnknownCount;
-        PublicCount = record.PublicTotal;
-        PublicRunningCount = record.PublicOnCount;
-        PublicStoppedCount = record.PublicOffCount;
-        PublicOfflineCount = record.PublicOfflineCount;
         CoveredAreas = record.CoveredAreas;
     }
 
@@ -71,8 +65,6 @@ public sealed class GroupSummaryRow(
 
     public bool IsCustom { get; } = isCustom;
 
-    public bool IsLocked { get; } = isLocked;
-
     public bool IsEnabled { get; } = isEnabled;
 
     public int ItemCount { get; } = itemCount;
@@ -94,20 +86,6 @@ public sealed class GroupSummaryRow(
     public int OfflineCount { get; } = 0;
 
     public int UnknownCount { get; } = 0;
-
-    public int PublicCount { get; } = 0;
-
-    public int PrivateCount => Math.Max(0, Count - PublicCount);
-
-    public int PublicRunningCount { get; } = 0;
-
-    public int PublicStoppedCount { get; } = 0;
-
-    public int PublicOfflineCount { get; } = 0;
-
-    public int PrivateRunningCount => Math.Max(0, RunningCount - PublicRunningCount);
-
-    public int PrivateStoppedCount => Math.Max(0, StoppedCount - PublicStoppedCount);
 
     public string AreaBreakdownText => string.Empty;
 

@@ -160,15 +160,12 @@ public sealed class AreaGroupRuleIntegrationTests
     }
 
     [Fact]
-    public async Task LegacyMemberApiCannotCreateLegacyStorage()
+    public async Task NewAreaGroupStorageDoesNotCreateLegacyMemberTable()
     {
         var databasePath = CreateDatabase();
         var groups = new SqliteAreaGroupRepository(() => databasePath);
         var group = await groups.SaveGroupAsync(new AreaGroupEdit(
             null, "规则唯一来源", string.Empty, string.Empty, "重点", true, "rules-only"));
-
-        await Assert.ThrowsAsync<NotSupportedException>(() => groups.SaveItemAsync(new AreaGroupItemEdit(
-            group.Id, "floor", "1号", "1F", string.Empty, string.Empty, "旧成员")));
 
         using var connection = new SqliteConnection($"Data Source={databasePath};Mode=ReadOnly");
         connection.Open();

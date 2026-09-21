@@ -222,9 +222,6 @@ public sealed class DashboardOverviewServiceTests
         public Task<AreaGroupSet> LoadAsync(CancellationToken cancellationToken = default) =>
             Task.FromException<AreaGroupSet>(new InvalidOperationException("not used"));
 
-        public Task<IReadOnlyList<AreaGroupTargetOption>> LoadTargetOptionsAsync(string building, string floorLabel, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
         public Task<AreaGroupRecord> SaveGroupAsync(AreaGroupEdit edit, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
@@ -232,12 +229,6 @@ public sealed class DashboardOverviewServiceTests
             throw new NotSupportedException();
 
         public Task DeleteGroupAsync(long id, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<AreaGroupItemRecord> SaveItemAsync(AreaGroupItemEdit edit, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task DeleteItemAsync(long id, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
         public Task<IReadOnlyList<FloorCatalogRecord>> LoadFloorsAsync(string building, bool includeDisabled = false, CancellationToken cancellationToken = default) =>

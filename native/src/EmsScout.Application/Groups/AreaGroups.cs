@@ -4,11 +4,6 @@ public interface IAreaGroupRepository
 {
     Task<AreaGroupSet> LoadAsync(CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<AreaGroupTargetOption>> LoadTargetOptionsAsync(
-        string building,
-        string floorLabel,
-        CancellationToken cancellationToken = default);
-
     Task<AreaGroupRecord> SaveGroupAsync(
         AreaGroupEdit edit,
         CancellationToken cancellationToken = default);
@@ -46,11 +41,7 @@ public interface IAreaGroupRepository
 
 public sealed record AreaGroupSet(
     IReadOnlyList<AreaGroupRecord> Groups,
-    IReadOnlyList<AreaGroupItemRecord> Items,
-    IReadOnlyList<AreaGroupRuleRecord>? Rules = null)
-{
-    public IReadOnlyList<AreaGroupRuleRecord> RuleRecords { get; } = Rules ?? [];
-}
+    IReadOnlyList<AreaGroupRuleRecord> RuleRecords);
 
 public sealed record AreaGroupRecord(
     long Id,
@@ -58,9 +49,6 @@ public sealed record AreaGroupRecord(
     string AreaLabel,
     string Description,
     string Priority,
-    string GroupKind,
-    string SystemKey,
-    bool Locked,
     bool Enabled,
     int ItemCount,
     int Total,
@@ -69,25 +57,7 @@ public sealed record AreaGroupRecord(
     int OfflineCount,
     int UnknownCount,
     int CoveredAreas,
-    int PublicTotal,
-    int PublicOnCount,
-    int PublicOffCount,
-    int PublicOfflineCount,
-    int PublicUnknownCount,
-    int PublicCoveredAreas,
     string GroupKey = "");
-
-public sealed record AreaGroupItemRecord(
-    long Id,
-    long GroupId,
-    string GroupName,
-    string TargetType,
-    string Building,
-    string FloorLabel,
-    double? FloorValue,
-    string SubAreaText,
-    string CardName,
-    string Note);
 
 public sealed record AreaGroupEdit(
     long? Id,
@@ -97,25 +67,6 @@ public sealed record AreaGroupEdit(
     string Priority,
     bool Enabled,
     string GroupKey = "");
-
-public sealed record AreaGroupItemEdit(
-    long GroupId,
-    string TargetType,
-    string Building,
-    string FloorLabel,
-    string SubAreaText,
-    string CardName,
-    string Note,
-    long? Id = null);
-
-public sealed record AreaGroupTargetOption(
-    string Type,
-    string Building,
-    string FloorLabel,
-    double? FloorValue,
-    string SubAreaText,
-    string CardName,
-    int Count);
 
 public sealed record FloorCatalogRecord(
     long Id,

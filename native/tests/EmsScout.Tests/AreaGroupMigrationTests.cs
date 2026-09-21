@@ -15,7 +15,6 @@ public sealed class AreaGroupMigrationTests
         var first = await repository.LoadAsync();
 
         Assert.Empty(first.Groups);
-        Assert.Empty(first.Items);
         Assert.Empty(first.RuleRecords);
         Assert.Equal(1, Scalar(databasePath, "SELECT COUNT(*) FROM cards"));
 
@@ -154,22 +153,6 @@ public sealed class AreaGroupMigrationTests
     }
 
     [Fact]
-    public async Task LockedGroupRejectsRuleDeletion()
-    {
-        var databasePath = CreateLegacyDatabase();
-        var repository = new SqliteAreaGroupRepository(() => databasePath);
-        var group = await repository.SaveGroupAsync(new AreaGroupEdit(
-            null, "锁定组", "", "", "重点", true, "locked-rules"));
-        var rule = await repository.SaveRuleAsync(new AreaGroupRuleEdit(
-            group.Id, "1号", "-", "1F", "include", "GQ", ""));
-        await ExecuteAsync(databasePath, "UPDATE monitor_groups SET locked = 1 WHERE id = " + group.Id);
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() => repository.DeleteRuleAsync(rule.Id));
-
-        Assert.Equal(1, Scalar(databasePath, "SELECT COUNT(*) FROM area_group_rules WHERE id = " + rule.Id));
-    }
-
-    [Fact]
     public async Task DeletingAreaGroupDoesNotSilentlyDeleteWatchRule()
     {
         var databasePath = CreateLegacyDatabase();
@@ -194,29 +177,6 @@ public sealed class AreaGroupMigrationTests
 
         Assert.Equal(1, Scalar(databasePath, "SELECT COUNT(*) FROM device_watch_rules WHERE group_id = " + group.Id));
         Assert.Equal(1, Scalar(databasePath, "SELECT COUNT(*) FROM monitor_groups WHERE id = " + group.Id));
-    }
-
-    [Fact]
-    public async Task ImportDoesNotOverrideLockedGroup()
-    {
-        var databasePath = CreateLegacyDatabase();
-        var repository = new SqliteAreaGroupRepository(() => databasePath);
-        var group = await repository.SaveGroupAsync(new AreaGroupEdit(
-            null, "原锁定组", "原标签", "原备注", "重点", true, "locked-import"));
-        await repository.SaveRuleAsync(new AreaGroupRuleEdit(
-            group.Id, "1号", "-", "1F", "include", "OLD", ""));
-        await ExecuteAsync(databasePath, "UPDATE monitor_groups SET locked = 1 WHERE id = " + group.Id);
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() => repository.ImportAsync(new AreaGroupTransferDocument(1,
-        [new AreaGroupTransferGroup(
-            "locked-import", "覆盖名称", "覆盖备注", false,
-            [new AreaGroupTransferRule(1, "1号", "-", "2F", "include", ["NEW"], "")])])));
-
-        var set = await repository.LoadAsync();
-        var loaded = Assert.Single(set.Groups, item => item.Id == group.Id);
-        Assert.True(loaded.Locked);
-        Assert.Equal("原锁定组", loaded.Name);
-        Assert.Contains(set.RuleRecords, rule => rule.GroupId == group.Id && rule.Keywords.SequenceEqual(["OLD"]));
     }
 
     [Fact]

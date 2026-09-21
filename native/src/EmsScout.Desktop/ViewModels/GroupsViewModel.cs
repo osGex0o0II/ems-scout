@@ -32,6 +32,7 @@ public sealed partial class GroupsViewModel(
     private long _ruleMatchCountVersion;
     private int _busyDepth;
     private bool _suppressDraftDirty;
+    private bool _suppressRuleMatchRefresh;
     private AreaGroupDraftSnapshot? _savedDraft;
     private bool _hasUnsavedChanges;
     private GroupSummaryRow? _selectedGroupBeforeNew;
@@ -107,9 +108,9 @@ public sealed partial class GroupsViewModel(
     public bool CanSaveGroup => CanEditSelectedGroup && !string.IsNullOrWhiteSpace(EditName);
     public bool CanRefresh => !IsLoading;
     public bool CanRunFileOperation => !IsLoading;
-    public bool CanDeleteSelectedGroup => !IsLoading && SelectedGroup is { IsLocked: false };
+    public bool CanDeleteSelectedGroup => !IsLoading && SelectedGroup is not null;
     public bool CanOpenSelectedInData => !IsLoading && SelectedGroup?.GroupId is not null;
-    public bool CanEditSelectedGroup => !IsLoading && (IsCreatingGroup || SelectedGroup is { IsLocked: false });
+    public bool CanEditSelectedGroup => !IsLoading && (IsCreatingGroup || SelectedGroup is not null);
     public bool CanBeginAddRule => CanEditSelectedGroup;
     public bool CanNewGroup => !IsLoading && !IsCreatingGroup;
     public bool HasUnsavedChanges
@@ -167,6 +168,8 @@ public sealed partial class GroupsViewModel(
         LoadError = string.Empty;
         RuleOptionsError = string.Empty;
         BeginBusy();
+        var previousSuppressRuleMatchRefresh = _suppressRuleMatchRefresh;
+        _suppressRuleMatchRefresh = true;
         try
         {
             var set = await areaGroupRepository.LoadAsync(cancellationToken).ConfigureAwait(true);
@@ -177,8 +180,13 @@ public sealed partial class GroupsViewModel(
             IsCreatingGroup = false;
             SelectedGroup = Groups.FirstOrDefault(group => group.IsEnabled) ?? Groups.FirstOrDefault();
             await RefreshRuleOptionsForRowsAsync(cancellationToken).ConfigureAwait(true);
+            cancellationToken.ThrowIfCancellationRequested();
             CaptureSavedDraft();
             StatusText = $"已读取 {Groups.Count:N0} 个区域组";
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            StatusText = "已取消读取区域组";
         }
         catch (Exception ex)
         {
@@ -188,7 +196,14 @@ public sealed partial class GroupsViewModel(
             LoadError = ex.Message;
             StatusText = "读取区域组失败：" + ex.Message;
         }
-        finally { EndBusy(); }
+        finally
+        {
+            _suppressRuleMatchRefresh = previousSuppressRuleMatchRefresh;
+            EndBusy();
+        }
+
+        if (!cancellationToken.IsCancellationRequested && !_suppressRuleMatchRefresh && SelectedGroup is not null)
+            _ = RefreshRuleMatchCountsAsync(cancellationToken);
     }
 
     public async Task SelectGroupAsync(long groupId, CancellationToken cancellationToken = default)
@@ -198,6 +213,8 @@ public sealed partial class GroupsViewModel(
             return;
 
         BeginBusy();
+        var previousSuppressRuleMatchRefresh = _suppressRuleMatchRefresh;
+        _suppressRuleMatchRefresh = true;
         try
         {
             SelectedGroup = group;
@@ -206,8 +223,12 @@ public sealed partial class GroupsViewModel(
         }
         finally
         {
+            _suppressRuleMatchRefresh = previousSuppressRuleMatchRefresh;
             EndBusy();
         }
+
+        if (!cancellationToken.IsCancellationRequested && !_suppressRuleMatchRefresh)
+            _ = RefreshRuleMatchCountsAsync(cancellationToken);
     }
 
     [RelayCommand(CanExecute = nameof(CanRefresh))]
@@ -337,25 +358,17 @@ public sealed partial class GroupsViewModel(
     }
     public async Task RefreshRuleOptionsAsync(AreaGroupRuleRow row, CancellationToken cancellationToken = default)
     {
-        var requestVersion = _ruleOptionsVersions.TryGetValue(row, out var previousVersion)
-            ? previousVersion + 1
-            : 1;
-        _ruleOptionsVersions[row] = requestVersion;
-        Interlocked.Increment(ref _ruleOptionsVersion);
+        var requestVersion = BeginRuleOptionsRequest(row);
         var requestedBuilding = row.Building;
         if (string.IsNullOrWhiteSpace(requestedBuilding))
             return;
 
         IReadOnlyList<FloorCatalogRecord> floors;
-        DeviceFilterOptions discoveredFloors;
         try
         {
             floors = await areaGroupRepository.LoadFloorsAsync(
                 requestedBuilding,
                 includeDisabled: false,
-                cancellationToken).ConfigureAwait(true);
-            discoveredFloors = await deviceReadRepository.LoadFilterOptionsAsync(
-                new DeviceQuery(Building: requestedBuilding, Limit: 1),
                 cancellationToken).ConfigureAwait(true);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -371,6 +384,65 @@ public sealed partial class GroupsViewModel(
             return;
         }
 
+        ApplyRuleFloorOptions(row, requestedBuilding, requestVersion, floors);
+    }
+
+    private async Task RefreshRuleOptionsForRowsAsync(CancellationToken cancellationToken)
+    {
+        var rows = Rules.ToArray();
+        var floorsByBuilding = new Dictionary<string, IReadOnlyList<FloorCatalogRecord>>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var building in rows
+                .Select(row => row.Building)
+                .Where(building => !string.IsNullOrWhiteSpace(building))
+                .Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                floorsByBuilding[building] = await areaGroupRepository.LoadFloorsAsync(
+                    building,
+                    includeDisabled: false,
+                    cancellationToken).ConfigureAwait(true);
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+        catch (Exception ex)
+        {
+            RuleOptionsError = $"楼层加载失败：{ex.Message}";
+            return;
+        }
+
+        foreach (var row in rows)
+        {
+            var requestedBuilding = row.Building;
+            if (string.IsNullOrWhiteSpace(requestedBuilding) ||
+                !floorsByBuilding.TryGetValue(requestedBuilding, out var floors))
+            {
+                continue;
+            }
+
+            ApplyRuleFloorOptions(row, requestedBuilding, BeginRuleOptionsRequest(row), floors);
+        }
+    }
+
+    private long BeginRuleOptionsRequest(AreaGroupRuleRow row)
+    {
+        var requestVersion = _ruleOptionsVersions.TryGetValue(row, out var previousVersion)
+            ? previousVersion + 1
+            : 1;
+        _ruleOptionsVersions[row] = requestVersion;
+        Interlocked.Increment(ref _ruleOptionsVersion);
+        return requestVersion;
+    }
+
+    private void ApplyRuleFloorOptions(
+        AreaGroupRuleRow row,
+        string requestedBuilding,
+        long requestVersion,
+        IReadOnlyList<FloorCatalogRecord> floors)
+    {
         if (!IsCurrentRuleOptionsRequest(row, requestVersion) ||
             !string.Equals(requestedBuilding, row.Building, StringComparison.OrdinalIgnoreCase))
         {
@@ -384,7 +456,6 @@ public sealed partial class GroupsViewModel(
             .Where(item => !string.IsNullOrWhiteSpace(item))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-        floorLabels.AddRange(discoveredFloors.Floors.Select(item => AreaGroupRuleNormalizer.NormalizeFloorLabel(item.Value)));
         if (string.Equals(row.Building, "6号", StringComparison.OrdinalIgnoreCase) &&
             !floorLabels.Contains("BM", StringComparer.OrdinalIgnoreCase))
         {
@@ -507,13 +578,8 @@ public sealed partial class GroupsViewModel(
         }
         RenumberRules();
         OnPropertyChanged(nameof(RulesEmptyVisibility));
-        _ = RefreshRuleMatchCountsAsync();
-    }
-
-    private async Task RefreshRuleOptionsForRowsAsync(CancellationToken cancellationToken)
-    {
-        foreach (var row in Rules.ToArray())
-            await RefreshRuleOptionsAsync(row, cancellationToken).ConfigureAwait(true);
+        if (!_suppressRuleMatchRefresh)
+            _ = RefreshRuleMatchCountsAsync();
     }
 
     private void LoadGroupEdit(GroupSummaryRow? group)
@@ -529,7 +595,7 @@ public sealed partial class GroupsViewModel(
         _suppressDraftDirty = false;
     }
 
-    private async Task RefreshRuleMatchCountsAsync()
+    private async Task RefreshRuleMatchCountsAsync(CancellationToken cancellationToken = default)
     {
         var requestVersion = Interlocked.Increment(ref _ruleMatchCountVersion);
         var rows = Rules.ToArray();
@@ -538,17 +604,12 @@ public sealed partial class GroupsViewModel(
 
         try
         {
-            var devicesByBuilding = new Dictionary<string, IReadOnlyList<DeviceRecord>>(StringComparer.OrdinalIgnoreCase);
-            foreach (var building in rows
-                .Select(row => row.Building)
-                .Where(building => !string.IsNullOrWhiteSpace(building))
-                .Distinct(StringComparer.OrdinalIgnoreCase))
-            {
-                var result = await deviceReadRepository.SearchAsync(
-                    new DeviceQuery(Building: building, Limit: 50000),
-                    CancellationToken.None).ConfigureAwait(true);
-                devicesByBuilding[building] = result.Rows;
-            }
+            var result = await deviceReadRepository.SearchAsync(
+                new DeviceQuery(Limit: 50000),
+                cancellationToken).ConfigureAwait(true);
+            var devicesByBuilding = result.Rows
+                .GroupBy(device => device.Building, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => (IReadOnlyList<DeviceRecord>)group.ToArray(), StringComparer.OrdinalIgnoreCase);
 
             if (requestVersion != Volatile.Read(ref _ruleMatchCountVersion))
                 return;
@@ -566,6 +627,10 @@ public sealed partial class GroupsViewModel(
                     : [];
                 row.SetMatchCount(AreaGroupRuleMatcher.CountMatches(devices, row.Record));
             }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return;
         }
         catch (Exception ex)
         {
@@ -659,7 +724,8 @@ public sealed partial class GroupsViewModel(
             return;
 
         MarkDraftDirty();
-        _ = RefreshRuleMatchCountsAsync();
+        if (!_suppressRuleMatchRefresh)
+            _ = RefreshRuleMatchCountsAsync();
     }
 
     private void RenumberRules()
