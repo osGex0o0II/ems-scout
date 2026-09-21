@@ -27,7 +27,8 @@ public sealed class GroupSettingsUiContractTests
         Assert.Contains("GroupKey", row);
         Assert.Contains("DeleteGroup_Click", xaml);
         Assert.Contains("EditEnabled", xaml);
-        Assert.Contains("RuleRowBuilding_SelectionChanged", xaml);
+        Assert.DoesNotContain("RuleRowBuilding_SelectionChanged", xaml);
+        Assert.Contains("nameof(AreaGroupRuleRow.Building)", viewModel);
         Assert.Contains("DeleteRuleRow_Click", xaml);
         Assert.DoesNotContain("添加楼层或设备", xaml);
         Assert.DoesNotContain("更多组设置", xaml);
@@ -116,6 +117,7 @@ public sealed class GroupSettingsUiContractTests
         Assert.Contains("ViewModel.LoadAsync(cancellationToken)", codeBehind);
         Assert.Contains("OnNavigatedFrom", codeBehind);
         Assert.Contains("_loadCts?.Cancel()", codeBehind);
+        Assert.Contains("CancelRuleMatchRefresh", codeBehind);
     }
 
     [Fact]
@@ -181,6 +183,48 @@ public sealed class GroupSettingsUiContractTests
         var method = viewModel[start..end];
         Assert.Contains("new DeviceQuery(Limit: 50000)", method);
         Assert.DoesNotContain("foreach (var building in rows", method);
+    }
+
+    [Fact]
+    public void AreaPageDebouncesAndCancelsRuleMatchRefreshes()
+    {
+        var root = LocateRepositoryRoot();
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "GroupsViewModel.cs"));
+        var coordinator = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Application", "Groups", "AreaRuleRefreshCoordinator.cs"));
+
+        Assert.Contains("AreaRuleRefreshCoordinator", viewModel);
+        Assert.Contains("TimeSpan.FromMilliseconds(200)", coordinator);
+        Assert.Contains("CancelPending", viewModel);
+        Assert.Contains("_activeCancellation?.Cancel()", coordinator);
+        Assert.Contains("CountAreaGroupRuleMatchesAsync", viewModel);
+    }
+
+    [Fact]
+    public void AreaRuleListOwnsItsScrollViewport()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "AreasPage.xaml"));
+        var normalized = xaml.Replace("\r\n", "\n", StringComparison.Ordinal);
+
+        Assert.DoesNotContain("<ScrollViewer\n                Grid.Column=\"1\"", normalized);
+        Assert.DoesNotContain("MaxHeight=\"480\"", xaml);
+        Assert.Contains("<RowDefinition Height=\"*\" MinHeight=\"0\" />", xaml);
+        Assert.Contains("Grid.Row=\"5\"", xaml);
+        Assert.Contains("ScrollViewer.VerticalScrollBarVisibility=\"Auto\"", xaml);
+    }
+
+    [Fact]
+    public void RuleMatchRefreshFiltersBindingNoiseAndCleansUpOldRows()
+    {
+        var root = LocateRepositoryRoot();
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "GroupsViewModel.cs"));
+
+        Assert.Contains("e.PropertyName is not (nameof(AreaGroupRuleRow.Building)", viewModel);
+        Assert.Contains("or nameof(AreaGroupRuleRow.Keywords)", viewModel);
+        Assert.Contains("e.PropertyName is not", viewModel);
+        Assert.Contains("oldRow.PropertyChanged -= RuleRow_PropertyChanged", viewModel);
+        Assert.Contains("_ruleOptionsVersions.Clear()", viewModel);
+        Assert.Contains("QueueRuleMatchRefreshAsync(row)", viewModel);
     }
 
     [Fact]
@@ -555,6 +599,24 @@ public sealed class GroupSettingsUiContractTests
         Assert.Contains("_suppressDraftDirty", viewModel);
         Assert.Contains("if (value is null)", row);
         Assert.Contains("_savedDraft is null ||", viewModel);
+    }
+
+    [Fact]
+    public void RefreshingFloorOptionsPreservesTheSelectedObjectWithoutRaisingABusinessChange()
+    {
+        var root = LocateRepositoryRoot();
+        var row = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "AreaGroupRuleRow.cs"));
+        var start = row.IndexOf("public void ConfigureFloorOptions", StringComparison.Ordinal);
+        var end = row.IndexOf("public void SetMatchCount", start, StringComparison.Ordinal);
+
+        Assert.True(start >= 0 && end > start);
+        var method = row[start..end];
+        Assert.Contains("var selectedFloor = Floor", method);
+        Assert.Contains("Reconcile(FloorOptions, normalized)", method);
+        Assert.Contains("if (!FloorOptions.Contains(selectedFloor", method);
+        Assert.DoesNotContain("OnPropertyChanged(nameof(Floor))", method);
+        Assert.Contains("Floor = \"-\"", method);
+        Assert.Contains("target.Move(existingIndex, targetIndex)", row);
     }
 
     [Fact]

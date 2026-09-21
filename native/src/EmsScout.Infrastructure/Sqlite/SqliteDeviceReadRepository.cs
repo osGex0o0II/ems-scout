@@ -1,3 +1,4 @@
+﻿using System.Collections.Immutable;
 using System.Globalization;
 using EmsScout.Application;
 using EmsScout.Application.Collection;
@@ -9,11 +10,11 @@ using Microsoft.Data.Sqlite;
 
 namespace EmsScout.Infrastructure.Sqlite;
 
-public sealed class SqliteDeviceReadRepository(
+public sealed partial class SqliteDeviceReadRepository(
     string databasePath,
     IRealtimeDetailSource? realtimeDetailSource = null,
     IDeviceWatchRepository? watchRepository = null,
-    IRealtimeSnapshotStore? realtimeSnapshotStore = null) : IDeviceReadRepository
+    IRealtimeSnapshotStore? realtimeSnapshotStore = null) : IDeviceReadRepository, IDeviceReadRepositoryWithFilterOptions, IAreaGroupRuleMatchRepository, IDeviceReadRevisionSource, IDisposable
 {
     public SqliteDeviceReadRepository(
         Func<string> databasePathResolver,
@@ -27,93 +28,11 @@ public sealed class SqliteDeviceReadRepository(
 
     private Func<string> DatabasePathResolver { get; } = () => databasePath;
 
-    public async Task<DeviceListResult> SearchAsync(DeviceQuery query, CancellationToken cancellationToken = default)
-    {
-        EnsureDatabaseExists();
-
-        var limit = Math.Clamp(query.Limit, 1, 50000);
-        var offset = Math.Max(0, query.Offset);
-
-        await using var connection = OpenConnection();
-        var source = DeviceSqlSource.For(
-            query.RunId,
-            await TableExistsAsync(
-                connection,
-                query.RunId is null ? "buildings" : "run_buildings",
-                cancellationToken).ConfigureAwait(false),
-            await ColumnExistsAsync(
-                connection,
-                query.RunId is null ? "pages" : "run_pages",
-                "collected_at",
-                cancellationToken).ConfigureAwait(false));
-        var groupIds = ParseGroupIds(query.MonitorGroupIds);
-        var enabledRuleGroups = await LoadEnabledAreaGroupRulesAsync(
-            connection,
-            groupIds,
-            query.RunId,
-            cancellationToken).ConfigureAwait(false);
-        var groupRules = enabledRuleGroups.SelectMany(group => group.Rules).ToArray();
-        var allEnabledRuleGroups = await LoadEnabledAreaGroupRulesAsync(
-            connection,
-            groupIds: null,
-            query.RunId,
-            cancellationToken).ConfigureAwait(false);
-        var preparedSelectedRuleGroups = PrepareRuleGroups(enabledRuleGroups);
-        var preparedAllEnabledRuleGroups = PrepareRuleGroups(allEnabledRuleGroups);
-        var (whereSql, parameters) = BuildWhereClause(query, source);
-        var annotations = source.IsHistory
-            ? EmptyAnnotations()
-            : await LoadAnnotationMapsAsync(connection, cancellationToken).ConfigureAwait(false);
-        var overrides = source.IsHistory
-            ? RealtimeMatchOverrideSet.Empty
-            : await LoadRealtimeMatchOverridesAsync(connection, cancellationToken).ConfigureAwait(false);
-        var rows = await LoadDeviceRowsAsync(connection, source, whereSql, parameters, annotations, cancellationToken).ConfigureAwait(false);
-
-        var realtimeBuildings = ResolveRealtimeBuildings(
-            query,
-            rows,
-            groupIds.Count > 0 ? groupRules : null);
-        var realtimeSet = await LoadRealtimeDetailsAsync(
-            connection,
-            source,
-            query.RunId,
-            realtimeBuildings,
-            cancellationToken).ConfigureAwait(false);
-        rows = AttachRealtimeRows(rows, realtimeSet, overrides);
-        rows = AttachAreaGroups(rows, allEnabledRuleGroups, preparedAllEnabledRuleGroups);
-        rows = rows
-            .Where(row => DeviceQueryVisibility.ShouldInclude(row, query))
-            .ToList();
-        if (groupIds.Count > 0)
+    public Task<DeviceListResult> SearchAsync(DeviceQuery query, CancellationToken cancellationToken = default) =>
+        Task.Run(async () =>
         {
-            rows = rows
-                .Where(row => groupIds.Any(groupId =>
-                    preparedSelectedRuleGroups.TryGetValue(groupId, out var prepared) &&
-                    AreaGroupRuleMatcher.MatchesAny(row, prepared)))
-                .ToList();
-        }
-        if (!source.IsHistory)
-        {
-            rows = await AttachWatchRowsAsync(rows, cancellationToken).ConfigureAwait(false);
-        }
-
-        var baseFiltered = rows
-            .Where(row => DeviceQuerySpecification.MatchesScope(row, query))
-            .ToList();
-        var facets = DeviceFacets.From(
-            baseFiltered,
-            realtimeRows: realtimeSet.Rows.Count,
-            realtimeUnmatched: realtimeSet.UnmatchedRealtimeRows);
-        var filtered = baseFiltered
-            .Where(row => DeviceQuerySpecification.MatchesResult(row, query))
-            .ToList();
-        filtered = SortRows(filtered, query).ToList();
-        return new DeviceListResult(
-            Total: filtered.Count,
-            Rows: filtered.Skip(offset).Take(limit).ToList(),
-            Facets: facets,
-            DataStatusText: realtimeSet.StatusText);
-    }
+            return await ReadConsistentAsync(query, snapshot => Task.FromResult(BuildPage(snapshot, query, cancellationToken)), cancellationToken).ConfigureAwait(false);
+        }, cancellationToken);
 
     private async Task<List<DeviceRecord>> AttachWatchRowsAsync(
         List<DeviceRecord> rows,
@@ -142,66 +61,106 @@ public sealed class SqliteDeviceReadRepository(
         return LoadFilterOptionsAsync(new DeviceQuery(), cancellationToken);
     }
 
-    public async Task<DeviceFilterOptions> LoadFilterOptionsAsync(
+    public Task<DeviceFilterOptions> LoadFilterOptionsAsync(
+        DeviceQuery query, CancellationToken cancellationToken = default) =>
+        Task.Run(async () =>
+        {
+            return await ReadConsistentAsync(query.WithoutFacets(), snapshot => Task.FromResult(GetFilterOptions(snapshot, query)), cancellationToken).ConfigureAwait(false);
+        }, cancellationToken);
+
+    public Task<DevicePageAndFilterResult> SearchWithFilterOptionsAsync(
+        DeviceQuery query, CancellationToken cancellationToken = default) =>
+        Task.Run(async () =>
+        {
+            return await ReadConsistentAsync(query, async snapshot =>
+            {
+                var page = BuildPage(snapshot, query, cancellationToken);
+                var facetSnapshot = await GetSnapshotAsync(query.WithoutFacets(), cancellationToken).ConfigureAwait(false);
+                return new DevicePageAndFilterResult(page, GetFilterOptions(facetSnapshot, query));
+            }, cancellationToken).ConfigureAwait(false);
+        }, cancellationToken);
+
+    public Task<IReadOnlyList<int>> CountAreaGroupRuleMatchesAsync(
+        IReadOnlyList<AreaGroupRuleRecord> rules, CancellationToken cancellationToken = default) =>
+        Task.Run<IReadOnlyList<int>>(async () =>
+        {
+            if (rules.Count == 0) return [];
+            await _ruleGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                for (var attempt = 0; attempt < 3; attempt++)
+                {
+                    var revision = await GetRevisionAsync(cancellationToken).ConfigureAwait(false);
+                    if (_ruleRows is null || _ruleRevision != revision)
+                    {
+                        await using var connection = OpenConnection();
+                        var source = DeviceSqlSource.For(null, false, false);
+                        var overrides = await LoadRealtimeMatchOverridesAsync(connection, cancellationToken).ConfigureAwait(false);
+                        List<DeviceRecord> rows;
+                        var cacheable = true;
+                        if (overrides.Rows.Count == 0)
+                        {
+                            rows = await LoadRuleMatchRowsAsync(connection, source, cancellationToken).ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            // Corrections depend on the authoritative realtime identity match. Keep
+                            // that behavior without loading group membership or watch history.
+                            rows = await LoadDeviceRowsAsync(connection, source, string.Empty,
+                                new Dictionary<string, object>(), EmptyAnnotations(), cancellationToken).ConfigureAwait(false);
+                            var buildings = rows.Select(row => row.Building).Distinct().ToArray();
+                            var details = await LoadRealtimeDetailsAsync(connection, source, null, buildings, cancellationToken).ConfigureAwait(false);
+                            cacheable = !details.IsTransientFailure;
+                            rows = AttachRealtimeRows(rows, details, overrides).Where(row => !row.IsVirtual).ToList();
+                        }
+                        _ruleRows = rows.Select(FreezeRow).ToImmutableArray();
+                        _ruleRevision = cacheable ? revision : null;
+                    }
+                    var byBuilding = _ruleRows.Value.GroupBy(row => row.Building, StringComparer.OrdinalIgnoreCase)
+                        .ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.OrdinalIgnoreCase);
+                    var counts = rules.Select(rule =>
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        return byBuilding.TryGetValue(rule.Building, out var devices)
+                            ? AreaGroupRuleMatcher.CountMatches(devices, rule) : 0;
+                    }).ToArray();
+                    if (realtimeDetailSource is not null and not IDeviceReadRevisionSource ||
+                        revision == await GetRevisionAsync(cancellationToken).ConfigureAwait(false)) return counts;
+                }
+                throw new InvalidOperationException("数据正在更新，请稍后重试。");
+            }
+            finally { _ruleGate.Release(); }
+        }, cancellationToken);
+
+    private async Task<FilterDeviceSnapshot> LoadFilterRowsAsync(
         DeviceQuery query,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken)
     {
         EnsureDatabaseExists();
         await using var connection = OpenConnection();
         var source = DeviceSqlSource.For(
             query.RunId,
-            await TableExistsAsync(
-                connection,
-                query.RunId is null ? "buildings" : "run_buildings",
-                cancellationToken).ConfigureAwait(false),
-            await ColumnExistsAsync(
-                connection,
-                query.RunId is null ? "pages" : "run_pages",
-                "collected_at",
-                cancellationToken).ConfigureAwait(false));
+            await TableExistsAsync(connection, query.RunId is null ? "buildings" : "run_buildings", cancellationToken).ConfigureAwait(false),
+            await ColumnExistsAsync(connection, query.RunId is null ? "pages" : "run_pages", "collected_at", cancellationToken).ConfigureAwait(false));
         var groupIds = ParseGroupIds(query.MonitorGroupIds);
-        var enabledRuleGroups = await LoadEnabledAreaGroupRulesAsync(
-            connection,
-            groupIds,
-            query.RunId,
-            cancellationToken).ConfigureAwait(false);
+        var allEnabledRuleGroups = await LoadEnabledAreaGroupRulesAsync(connection, groupIds: null, query.RunId, cancellationToken).ConfigureAwait(false);
+        var enabledRuleGroups = groupIds.Count == 0 ? allEnabledRuleGroups : allEnabledRuleGroups.Where(group => groupIds.Contains(group.GroupId)).ToArray();
         var groupRules = enabledRuleGroups.SelectMany(group => group.Rules).ToArray();
-        var allEnabledRuleGroups = await LoadEnabledAreaGroupRulesAsync(
-            connection,
-            groupIds: null,
-            query.RunId,
-            cancellationToken).ConfigureAwait(false);
         var preparedSelectedRuleGroups = PrepareRuleGroups(enabledRuleGroups);
         var preparedAllEnabledRuleGroups = PrepareRuleGroups(allEnabledRuleGroups);
-        var candidateQuery = query.WithoutFacets();
+        var candidateQuery = query;
         var (runWhereSql, runParameters) = BuildWhereClause(candidateQuery, source);
-
         var annotations = source.IsHistory
             ? EmptyAnnotations()
             : await LoadAnnotationMapsAsync(connection, cancellationToken).ConfigureAwait(false);
         var overrides = source.IsHistory
             ? RealtimeMatchOverrideSet.Empty
             : await LoadRealtimeMatchOverridesAsync(connection, cancellationToken).ConfigureAwait(false);
-        var rows = await LoadDeviceRowsAsync(
-            connection,
-            source,
-            runWhereSql,
-            runParameters,
-            annotations,
-            cancellationToken).ConfigureAwait(false);
-        var realtimeBuildings = ResolveRealtimeBuildings(
-            candidateQuery,
-            rows,
-            groupIds.Count > 0 ? groupRules : null);
-        var realtimeSet = await LoadRealtimeDetailsAsync(
-            connection,
-            source,
-            query.RunId,
-            realtimeBuildings,
-            cancellationToken).ConfigureAwait(false);
+        var rows = await LoadDeviceRowsAsync(connection, source, runWhereSql, runParameters, annotations, cancellationToken).ConfigureAwait(false);
+        var realtimeBuildings = ResolveRealtimeBuildings(candidateQuery, rows, groupIds.Count > 0 ? groupRules : null);
+        var realtimeSet = await LoadRealtimeDetailsAsync(connection, source, query.RunId, realtimeBuildings, cancellationToken).ConfigureAwait(false);
         rows = AttachRealtimeRows(rows, realtimeSet, overrides);
-        rows = AttachAreaGroups(rows, allEnabledRuleGroups, preparedAllEnabledRuleGroups);
-        rows = rows
+        rows = AttachAreaGroups(rows, allEnabledRuleGroups, preparedAllEnabledRuleGroups)
             .Where(row => DeviceQueryVisibility.ShouldInclude(row, query))
             .ToList();
         if (groupIds.Count > 0)
@@ -213,10 +172,18 @@ public sealed class SqliteDeviceReadRepository(
                 .ToList();
         }
         if (!source.IsHistory)
-        {
             rows = await AttachWatchRowsAsync(rows, cancellationToken).ConfigureAwait(false);
-        }
 
+        return new FilterDeviceSnapshot(rows.Select(FreezeRow).ToImmutableArray(), realtimeSet.Rows.Count, realtimeSet.UnmatchedRealtimeRows, realtimeSet.StatusText)
+        {
+            IsCacheable = !realtimeSet.IsTransientFailure
+        };
+    }
+
+    private static DeviceFilterOptions BuildFilterOptions(
+        IReadOnlyList<DeviceRecord> rows,
+        DeviceQuery query)
+    {
         var buildingRows = FilterFacetRows(rows, query, DeviceFilterFacet.Building);
         var communicationRows = FilterFacetRows(rows, query, DeviceFilterFacet.CommunicationState);
         var floorRows = FilterFacetRows(rows, query, DeviceFilterFacet.Floor);
@@ -251,9 +218,7 @@ public sealed class SqliteDeviceReadRepository(
             RealtimePowers: CountOptions(realtimePowerRows, row => row.Realtime?.PowerState ?? string.Empty),
             RealtimeModes: CountOptions(realtimeModeRows, row => row.Realtime?.Mode ?? string.Empty),
             RealtimeFans: CountOptions(realtimeFanRows, row => row.Realtime?.Fan ?? string.Empty),
-            RealtimeLocks: CountOptions(
-                realtimeLockRows,
-                row => row.RealtimeLockText),
+            RealtimeLocks: CountOptions(realtimeLockRows, row => row.RealtimeLockText),
             RealtimeSystemTypes: CountOptions(realtimeSystemTypeRows, row => row.Realtime?.Field("系统类型") ?? string.Empty),
             UnmatchedCount: rows.Count(row => row.AreaGroupList.Count == 0),
             AreaGroupCounts: rows
@@ -406,6 +371,7 @@ public sealed class SqliteDeviceReadRepository(
 
         var rows = new List<RealtimeDetailRecord>();
         var failures = new List<string>();
+        var transientFailure = false;
         var groups = sourceRows.Values
             .GroupBy(row => (RunId: row.RunId!.Value, row.BatchUid, row.RunKey));
         foreach (var group in groups)
@@ -449,6 +415,7 @@ public sealed class SqliteDeviceReadRepository(
             }
             else
             {
+                transientFailure |= loaded.IsTransientFailure;
                 failures.Add(string.IsNullOrWhiteSpace(loaded.StatusText)
                     ? string.Join("、", groupBuildings)
                     : loaded.StatusText);
@@ -460,7 +427,8 @@ public sealed class SqliteDeviceReadRepository(
             return new RealtimeDetailSet(
                 rows,
                 rows.Count > 0 ? RealtimeDetailAvailability.Unavailable : RealtimeDetailAvailability.MissingSnapshot,
-                string.Join("；", failures));
+                string.Join("；", failures),
+                isTransientFailure: transientFailure);
         }
 
         return new RealtimeDetailSet(
@@ -652,6 +620,45 @@ public sealed class SqliteDeviceReadRepository(
                 ZuoSource: string.IsNullOrWhiteSpace(zuo) ? string.Empty : "db",
                 Note: annotations.Notes.GetValueOrDefault(annotationKey, string.Empty),
                 Tags: annotations.Tags.GetValueOrDefault(annotationKey, [])));
+        }
+
+        return rows;
+    }
+
+    private static async Task<List<DeviceRecord>> LoadRuleMatchRowsAsync(
+        SqliteConnection connection, DeviceSqlSource source, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"SELECT s.building, s.floor, s.text AS sub_area, s.x, c.name {source.FromSql}";
+        var rows = new List<DeviceRecord>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var building = ReadString(reader, "building");
+            var floor = ReadNullableDouble(reader, "floor");
+            var subArea = ReadString(reader, "sub_area");
+            var x = ReadNullableDouble(reader, "x");
+            rows.Add(new DeviceRecord(
+                Id: 0,
+                Building: building,
+                Floor: floor,
+                FloorLabel: DeviceFloorLabelFormatter.Format(floor, subArea),
+                SubArea: subArea,
+                X: x,
+                Y: null,
+                PageName: string.Empty,
+                Name: ReadString(reader, "name"),
+                Layout: string.Empty,
+                SwitchState: string.Empty,
+                Mode: string.Empty,
+                IndoorTemperature: string.Empty,
+                SetTemperature: string.Empty,
+                Fan: string.Empty,
+                Indicator: string.Empty,
+                CommunicationText: string.Empty,
+                CommunicationState: DeviceCommunicationState.Unknown,
+                Zuo: DeviceZuoClassifier.Classify(building, x),
+                ZuoSource: "db"));
         }
 
         return rows;
@@ -1690,6 +1697,16 @@ public sealed class SqliteDeviceReadRepository(
     private sealed record ManualRealtimeMatch(
         RealtimeDetailRecord Detail,
         RealtimeMatchOverride Override);
+
+    private sealed record FilterDeviceSnapshot(
+        System.Collections.Immutable.ImmutableArray<DeviceRecord> Rows,
+        int RealtimeRows,
+        int UnmatchedRealtimeRows,
+        string StatusText)
+    {
+        public SnapshotKey? Key { get; init; }
+        public bool IsCacheable { get; init; } = true;
+    }
 
     private sealed record EnabledAreaGroupRuleGroup(
         long GroupId,

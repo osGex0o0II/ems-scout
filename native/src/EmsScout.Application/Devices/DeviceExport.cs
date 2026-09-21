@@ -13,6 +13,15 @@ public interface IDeviceExportService
         CancellationToken cancellationToken = default);
 }
 
+public interface IDeviceSnapshotExportService
+{
+    Task<DeviceExportResult> ExportSnapshotToFileAsync(
+        DeviceQuery query,
+        DeviceListResult snapshot,
+        string outputPath,
+        CancellationToken cancellationToken = default);
+}
+
 public sealed record DeviceExportResult(
     string Path,
     string FileName,

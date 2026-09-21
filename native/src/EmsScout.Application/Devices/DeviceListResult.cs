@@ -4,4 +4,7 @@ public sealed record DeviceListResult(
     int Total,
     IReadOnlyList<DeviceRecord> Rows,
     DeviceFacets Facets,
-    string DataStatusText = "");
+    string DataStatusText = "")
+{
+    public bool IsCacheable { get; init; } = true;
+}

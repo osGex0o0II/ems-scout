@@ -51,6 +51,9 @@ public sealed class DataViewModel(
     private DataFilterOption? _selectedArea;
     private string _deviceNameText = string.Empty;
     private bool _isInitializing;
+    private bool _suppressFilterSelectionChanges;
+    private long _filterLoadVersion;
+    private CancellationTokenSource? _filterLoadCancellation;
     private DataSourceOption? _selectedDataSource;
     private readonly Dictionary<long, string> _areaGroupFilterValues = [];
 
@@ -369,18 +372,16 @@ public sealed class DataViewModel(
                 ApplyNavigationRequest(navigationRequest);
             }
 
-            if (BuildingOptions.Count == 0 || navigationRequest?.AreaGroupId is not null)
-            {
-                await ReloadFilterOptionsAsync(cancellationToken).ConfigureAwait(true);
-            }
-
-            if (navigationRequest is not null)
-            {
-                ApplyNavigationRequest(navigationRequest);
-            }
+            var navigationSnapshot = navigationRequest is null
+                ? null
+                : CaptureNavigationFilterLoadSnapshot(navigationRequest);
+            var reloadFilterOptions = BuildingOptions.Count == 0 || navigationRequest is not null;
 
             CurrentPage = 1;
-            await LoadPageAsync(cancellationToken).ConfigureAwait(true);
+            if (reloadFilterOptions)
+                await LoadFilterOptionsAndPageAsync(cancellationToken, navigationSnapshot).ConfigureAwait(true);
+            else
+                await LoadPageAsync(cancellationToken).ConfigureAwait(true);
             if (navigationRequest is not null)
             {
                 StatusText = "已定位到数据管理筛选结果";
@@ -412,10 +413,9 @@ public sealed class DataViewModel(
         StatusText = "正在刷新筛选项和设备数据";
         try
         {
-            await ReloadFilterOptionsAsync(cancellationToken).ConfigureAwait(true);
             CurrentPage = 1;
-            await LoadPageCoreAsync(cancellationToken).ConfigureAwait(true);
-            StatusText = ResultStatusText("已刷新当前 SQLite 数据");
+            if (await LoadFilterOptionsAndPageAsync(cancellationToken).ConfigureAwait(true))
+                StatusText = ResultStatusText("已刷新当前 SQLite 数据");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -431,7 +431,8 @@ public sealed class DataViewModel(
         }
         finally
         {
-            IsLoading = false;
+            if (Volatile.Read(ref _filterLoadCancellation) is null)
+                IsLoading = false;
         }
     }
 
@@ -449,10 +450,9 @@ public sealed class DataViewModel(
         StatusText = $"正在读取 {option.Label}";
         try
         {
-            await ReloadFilterOptionsAsync(cancellationToken).ConfigureAwait(true);
             CurrentPage = 1;
-            await LoadPageCoreAsync(cancellationToken).ConfigureAwait(true);
-            StatusText = ResultStatusText($"已读取 {option.Label}");
+            if (await LoadFilterOptionsAndPageAsync(cancellationToken).ConfigureAwait(true))
+                StatusText = ResultStatusText($"已读取 {option.Label}");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -460,7 +460,8 @@ public sealed class DataViewModel(
         }
         finally
         {
-            IsLoading = false;
+            if (Volatile.Read(ref _filterLoadCancellation) is null)
+                IsLoading = false;
         }
     }
 
@@ -490,10 +491,9 @@ public sealed class DataViewModel(
         {
             await RefreshDataSourcesAsync(cancellationToken).ConfigureAwait(true);
             SelectedDataSource = DataSources.FirstOrDefault();
-            await ReloadFilterOptionsAsync(cancellationToken).ConfigureAwait(true);
             CurrentPage = 1;
-            await LoadPageCoreAsync(cancellationToken).ConfigureAwait(true);
-            StatusText = ResultStatusText("已刷新当前数据");
+            if (await LoadFilterOptionsAndPageAsync(cancellationToken).ConfigureAwait(true))
+                StatusText = ResultStatusText("已刷新当前数据");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -501,7 +501,8 @@ public sealed class DataViewModel(
         }
         finally
         {
-            IsLoading = false;
+            if (Volatile.Read(ref _filterLoadCancellation) is null)
+                IsLoading = false;
         }
     }
 
@@ -518,39 +519,193 @@ public sealed class DataViewModel(
         var selectedRealtimeLock = SelectedRealtimeLock?.Value ?? string.Empty;
         var selectedArea = SelectedArea?.Value ?? string.Empty;
 
-        var groupSet = await areaGroupRepository.LoadAsync(cancellationToken).ConfigureAwait(true);
-        var options = await repository.LoadFilterOptionsAsync(
-            BuildQuery(limit: 1, offset: 0),
-            cancellationToken).ConfigureAwait(true);
-        ReplaceOptions(
-            AreaOptions,
-            DataFilterOption.All("全部"),
-            BuildAreaOptions(groupSet.Groups, options.UnmatchedCount, options.AreaGroupCounts),
-            selectedArea);
-        ReplaceOptions(BuildingOptions, DataFilterOption.All("全部"), options.Buildings.Select(DataFilterOption.From), selectedBuilding);
-        ReplaceOptions(CommunicationOptions, DataFilterOption.All("全部"), options.CommunicationStates.Select(DataFilterOption.From), selectedCommunication);
-        ReplaceOptions(FloorOptions, DataFilterOption.All("全部"), options.Floors.Select(DataFilterOption.From), selectedFloor);
-        ReplaceOptions(ZuoOptions, DataFilterOption.All("全部"), options.Zuos.Select(DataFilterOption.From), selectedZuo);
-        ReplaceOptions(PageNameOptions, DataFilterOption.All("全部"), options.PageNames.Select(DataFilterOption.From), selectedPageName);
-        ReplaceOptions(ModeOptions, DataFilterOption.All("全部"), options.Modes.Select(DataFilterOption.From), selectedMode);
-        ReplaceOptions(FanOptions, DataFilterOption.All("全部"), options.Fans.Select(DataFilterOption.From), selectedFan);
-        ReplaceOptions(SetTemperatureOptions, DataFilterOption.All("全部"), options.SetTemperatures.Select(DataFilterOption.From), selectedSetTemperature);
-        ReplaceOptions(
-            RealtimeLockOptions,
-            DataFilterOption.All("全部"),
-            (options.RealtimeLocks ?? []).Select(DataFilterOption.From),
-            selectedRealtimeLock);
-        SelectedBuilding = SelectOption(BuildingOptions, selectedBuilding) ?? BuildingOptions.FirstOrDefault();
-        SelectedCommunication = SelectOption(CommunicationOptions, selectedCommunication) ?? CommunicationOptions.FirstOrDefault();
-        SelectedFloor = SelectOption(FloorOptions, selectedFloor) ?? FloorOptions.FirstOrDefault();
-        SelectedZuo = SelectOption(ZuoOptions, selectedZuo) ?? ZuoOptions.FirstOrDefault();
-        SelectedPageName = SelectOption(PageNameOptions, selectedPageName) ?? PageNameOptions.FirstOrDefault();
-        SelectedMode = SelectOption(ModeOptions, selectedMode) ?? ModeOptions.FirstOrDefault();
-        SelectedFan = SelectOption(FanOptions, selectedFan) ?? FanOptions.FirstOrDefault();
-        SelectedSetTemperature = SelectOption(SetTemperatureOptions, selectedSetTemperature) ?? SetTemperatureOptions.FirstOrDefault();
-        SelectedRealtimeLock = SelectOption(RealtimeLockOptions, selectedRealtimeLock) ?? RealtimeLockOptions.FirstOrDefault();
-        SelectedArea = SelectOption(AreaOptions, selectedArea) ?? AreaOptions.FirstOrDefault();
-        CoerceZuoSelectionForBuilding();
+        var query = BuildQuery(limit: 1, offset: 0);
+        var groupSetTask = Task.Run(() => areaGroupRepository.LoadConfigurationAsync(cancellationToken), cancellationToken);
+        var optionsTask = Task.Run(() => repository.LoadFilterOptionsAsync(
+            query, cancellationToken), cancellationToken);
+        var groupSet = await groupSetTask.ConfigureAwait(true);
+        var options = await optionsTask.ConfigureAwait(true);
+        ApplyFilterOptions(options, groupSet, selectedBuilding, selectedCommunication, selectedFloor, selectedZuo, selectedPageName, selectedMode, selectedFan, selectedSetTemperature, selectedRealtimeLock, selectedArea);
+    }
+
+    private async Task<bool> LoadFilterOptionsAndPageAsync(
+        CancellationToken cancellationToken,
+        FilterLoadSnapshot? requestedSnapshot = null)
+    {
+        var requestVersion = Interlocked.Increment(ref _filterLoadVersion);
+        var loadCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var previousCancellation = Interlocked.Exchange(ref _filterLoadCancellation, loadCancellation);
+        previousCancellation?.Cancel();
+        var snapshot = requestedSnapshot ?? CaptureFilterLoadSnapshot();
+
+        try
+        {
+            var groupSetTask = Task.Run(
+                () => areaGroupRepository.LoadConfigurationAsync(loadCancellation.Token),
+                loadCancellation.Token);
+
+            DevicePageAndFilterResult combined;
+            if (repository is IDeviceReadRepositoryWithFilterOptions optimizedRepository)
+            {
+                combined = await Task.Run(
+                    () => optimizedRepository.SearchWithFilterOptionsAsync(snapshot.Query, loadCancellation.Token),
+                    loadCancellation.Token).ConfigureAwait(true);
+            }
+            else
+            {
+                var optionsQuery = snapshot.Query with { Limit = 1, Offset = 0 };
+                var options = await Task.Run(
+                    () => repository.LoadFilterOptionsAsync(optionsQuery, loadCancellation.Token),
+                    loadCancellation.Token).ConfigureAwait(true);
+                var page = await Task.Run(
+                    () => repository.SearchAsync(snapshot.Query, loadCancellation.Token),
+                    loadCancellation.Token).ConfigureAwait(true);
+                combined = new DevicePageAndFilterResult(page, options);
+            }
+
+            var groupSet = await groupSetTask.ConfigureAwait(true);
+            loadCancellation.Token.ThrowIfCancellationRequested();
+            if (!IsCurrentFilterLoad(requestVersion, loadCancellation))
+                return false;
+            if (requestedSnapshot is null &&
+                !snapshot.Query.Equals(BuildQuery(limit: PageSize, offset: (CurrentPage - 1) * PageSize)))
+            {
+                _ = ApplyFiltersAsync(cancellationToken);
+                return false;
+            }
+
+            ApplyFilterOptions(
+                combined.FilterOptions,
+                groupSet,
+                snapshot.SelectedBuilding,
+                snapshot.SelectedCommunication,
+                snapshot.SelectedFloor,
+                snapshot.SelectedZuo,
+                snapshot.SelectedPageName,
+                snapshot.SelectedMode,
+                snapshot.SelectedFan,
+                snapshot.SelectedSetTemperature,
+                snapshot.SelectedRealtimeLock,
+                snapshot.SelectedArea);
+            ApplyPageResult(combined.Page);
+            return true;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && loadCancellation.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (Exception) when (!IsCurrentFilterLoad(requestVersion, loadCancellation))
+        {
+            return false;
+        }
+        finally
+        {
+            Interlocked.CompareExchange(ref _filterLoadCancellation, null, loadCancellation);
+            loadCancellation.Dispose();
+        }
+    }
+
+    private FilterLoadSnapshot CaptureFilterLoadSnapshot() => new(
+        BuildQuery(limit: PageSize, offset: (CurrentPage - 1) * PageSize),
+        SelectedBuilding?.Value ?? string.Empty,
+        SelectedCommunication?.Value ?? string.Empty,
+        SelectedFloor?.Value ?? string.Empty,
+        SelectedZuo?.Value ?? string.Empty,
+        SelectedPageName?.Value ?? string.Empty,
+        SelectedMode?.Value ?? string.Empty,
+        SelectedFan?.Value ?? string.Empty,
+        SelectedSetTemperature?.Value ?? string.Empty,
+        SelectedRealtimeLock?.Value ?? string.Empty,
+        SelectedArea?.Value ?? string.Empty);
+
+    private FilterLoadSnapshot CaptureNavigationFilterLoadSnapshot(DataNavigationRequest request)
+    {
+        var areaValue = request.AreaGroupId is long groupId
+            ? $"group:{groupId.ToString(CultureInfo.InvariantCulture)}"
+            : request.AreaType;
+        var areaFilter = BuildAreaQuery(areaValue);
+        var building = request.Building ?? string.Empty;
+        var zuo = IsZuoBuilding(building) ? request.Zuo ?? string.Empty : string.Empty;
+        return new FilterLoadSnapshot(
+            new DeviceQuery(
+                Building: EmptyToNull(building),
+                CommunicationState: EmptyToNull(request.CommunicationState),
+                Floor: EmptyToNull(request.Floor),
+                DeviceName: EmptyToNull(request.SearchText),
+                Zuo: EmptyToNull(zuo),
+                PageName: EmptyToNull(request.PageName),
+                AreaType: areaFilter.AreaType,
+                MonitorGroupIds: areaFilter.MonitorGroupIds,
+                Limit: PageSize,
+                Offset: 0,
+                RunId: SelectedDataSource?.RunId),
+            building,
+            request.CommunicationState ?? string.Empty,
+            request.Floor ?? string.Empty,
+            zuo,
+            request.PageName ?? string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            areaValue ?? string.Empty);
+    }
+
+    private bool IsCurrentFilterLoad(long requestVersion, CancellationTokenSource loadCancellation) =>
+        requestVersion == Volatile.Read(ref _filterLoadVersion) &&
+        ReferenceEquals(Volatile.Read(ref _filterLoadCancellation), loadCancellation);
+
+    private void ApplyFilterOptions(
+        DeviceFilterOptions options,
+        AreaGroupSet groupSet,
+        string selectedBuilding,
+        string selectedCommunication,
+        string selectedFloor,
+        string selectedZuo,
+        string selectedPageName,
+        string selectedMode,
+        string selectedFan,
+        string selectedSetTemperature,
+        string selectedRealtimeLock,
+        string selectedArea)
+    {
+        _suppressFilterSelectionChanges = true;
+        try
+        {
+            ReplaceOptions(
+                AreaOptions,
+                DataFilterOption.All("全部"),
+                BuildAreaOptions(groupSet.Groups, options.UnmatchedCount, options.AreaGroupCounts),
+                selectedArea);
+            ReplaceOptions(BuildingOptions, DataFilterOption.All("全部"), options.Buildings.Select(DataFilterOption.From), selectedBuilding);
+            ReplaceOptions(CommunicationOptions, DataFilterOption.All("全部"), options.CommunicationStates.Select(DataFilterOption.From), selectedCommunication);
+            ReplaceOptions(FloorOptions, DataFilterOption.All("全部"), options.Floors.Select(DataFilterOption.From), selectedFloor);
+            ReplaceOptions(ZuoOptions, DataFilterOption.All("全部"), options.Zuos.Select(DataFilterOption.From), selectedZuo);
+            ReplaceOptions(PageNameOptions, DataFilterOption.All("全部"), options.PageNames.Select(DataFilterOption.From), selectedPageName);
+            ReplaceOptions(ModeOptions, DataFilterOption.All("全部"), options.Modes.Select(DataFilterOption.From), selectedMode);
+            ReplaceOptions(FanOptions, DataFilterOption.All("全部"), options.Fans.Select(DataFilterOption.From), selectedFan);
+            ReplaceOptions(SetTemperatureOptions, DataFilterOption.All("全部"), options.SetTemperatures.Select(DataFilterOption.From), selectedSetTemperature);
+            ReplaceOptions(
+                RealtimeLockOptions,
+                DataFilterOption.All("全部"),
+                (options.RealtimeLocks ?? []).Select(DataFilterOption.From),
+                selectedRealtimeLock);
+            SelectedBuilding = SelectOption(BuildingOptions, selectedBuilding) ?? BuildingOptions.FirstOrDefault();
+            SelectedCommunication = SelectOption(CommunicationOptions, selectedCommunication) ?? CommunicationOptions.FirstOrDefault();
+            SelectedFloor = SelectOption(FloorOptions, selectedFloor) ?? FloorOptions.FirstOrDefault();
+            SelectedZuo = SelectOption(ZuoOptions, selectedZuo) ?? ZuoOptions.FirstOrDefault();
+            SelectedPageName = SelectOption(PageNameOptions, selectedPageName) ?? PageNameOptions.FirstOrDefault();
+            SelectedMode = SelectOption(ModeOptions, selectedMode) ?? ModeOptions.FirstOrDefault();
+            SelectedFan = SelectOption(FanOptions, selectedFan) ?? FanOptions.FirstOrDefault();
+            SelectedSetTemperature = SelectOption(SetTemperatureOptions, selectedSetTemperature) ?? SetTemperatureOptions.FirstOrDefault();
+            SelectedRealtimeLock = SelectOption(RealtimeLockOptions, selectedRealtimeLock) ?? RealtimeLockOptions.FirstOrDefault();
+            SelectedArea = SelectOption(AreaOptions, selectedArea) ?? AreaOptions.FirstOrDefault();
+            CoerceZuoSelectionForBuilding();
+        }
+        finally
+        {
+            _suppressFilterSelectionChanges = false;
+        }
     }
 
     private void ApplyVisualSettings()
@@ -562,19 +717,13 @@ public sealed class DataViewModel(
 
     public async Task ApplyFiltersAsync(CancellationToken cancellationToken = default)
     {
-        if (IsLoading)
-        {
-            return;
-        }
-
         IsLoading = true;
         StatusText = "正在同步筛选项和查询设备";
         CurrentPage = 1;
         try
         {
-            await ReloadFilterOptionsAsync(cancellationToken).ConfigureAwait(true);
-            await LoadPageCoreAsync(cancellationToken).ConfigureAwait(true);
-            StatusText = ResultStatusText("已读取当前 SQLite 设备数据");
+            if (await LoadFilterOptionsAndPageAsync(cancellationToken).ConfigureAwait(true))
+                StatusText = ResultStatusText("已读取当前 SQLite 设备数据");
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -582,7 +731,8 @@ public sealed class DataViewModel(
         }
         finally
         {
-            IsLoading = false;
+            if (Volatile.Read(ref _filterLoadCancellation) is null)
+                IsLoading = false;
         }
     }
 
@@ -600,7 +750,7 @@ public sealed class DataViewModel(
 
     public async Task ApplyBuildingSelectionAsync(CancellationToken cancellationToken = default)
     {
-        if (IsLoading || _isInitializing)
+        if (_isInitializing || _suppressFilterSelectionChanges)
         {
             return;
         }
@@ -613,7 +763,7 @@ public sealed class DataViewModel(
 
     public async Task ApplyFloorSelectionAsync(CancellationToken cancellationToken = default)
     {
-        if (IsLoading || _isInitializing)
+        if (_isInitializing || _suppressFilterSelectionChanges)
         {
             return;
         }
@@ -650,10 +800,12 @@ public sealed class DataViewModel(
         StatusText = "正在查询设备";
         try
         {
-            await LoadPageCoreAsync(cancellationToken).ConfigureAwait(true);
-            StatusText = ResultStatusText("已读取当前 SQLite 设备数据");
-            OnPropertyChanged(nameof(EmptyStateVisibility));
-            OnPropertyChanged(nameof(LoadingStateVisibility));
+            if (await LoadPageCoreAsync(cancellationToken).ConfigureAwait(true))
+            {
+                StatusText = ResultStatusText("已读取当前 SQLite 设备数据");
+                OnPropertyChanged(nameof(EmptyStateVisibility));
+                OnPropertyChanged(nameof(LoadingStateVisibility));
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -668,14 +820,45 @@ public sealed class DataViewModel(
         }
         finally
         {
-            IsLoading = false;
+            if (Volatile.Read(ref _filterLoadCancellation) is null)
+                IsLoading = false;
         }
     }
 
-    private async Task LoadPageCoreAsync(CancellationToken cancellationToken)
+    private async Task<bool> LoadPageCoreAsync(CancellationToken cancellationToken)
     {
+        var requestVersion = Interlocked.Increment(ref _filterLoadVersion);
+        var loadCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var previousCancellation = Interlocked.Exchange(ref _filterLoadCancellation, loadCancellation);
+        previousCancellation?.Cancel();
         var query = BuildQuery(limit: PageSize, offset: (CurrentPage - 1) * PageSize);
-        var result = await repository.SearchAsync(query, cancellationToken).ConfigureAwait(true);
+        try
+        {
+            var result = await Task.Run(
+                () => repository.SearchAsync(query, loadCancellation.Token),
+                loadCancellation.Token).ConfigureAwait(true);
+            if (!IsCurrentFilterLoad(requestVersion, loadCancellation))
+                return false;
+            ApplyPageResult(result);
+            return true;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && loadCancellation.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (Exception) when (!IsCurrentFilterLoad(requestVersion, loadCancellation))
+        {
+            return false;
+        }
+        finally
+        {
+            Interlocked.CompareExchange(ref _filterLoadCancellation, null, loadCancellation);
+            loadCancellation.Dispose();
+        }
+    }
+
+    private void ApplyPageResult(DeviceListResult result)
+    {
         TotalRows = result.Total;
         DataStatusText = result.DataStatusText;
         Devices.Clear();
@@ -738,38 +921,62 @@ public sealed class DataViewModel(
         StatusText = "正在同步筛选并导出当前筛选 Excel";
         LastExportPath = string.Empty;
         SetLastExportFilePath(string.Empty);
+        var requestVersion = Interlocked.Increment(ref _filterLoadVersion);
+        var exportCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var previousCancellation = Interlocked.Exchange(ref _filterLoadCancellation, exportCancellation);
+        previousCancellation?.Cancel();
         try
         {
             CurrentPage = 1;
-            await LoadPageCoreAsync(cancellationToken).ConfigureAwait(true);
-            if (TotalRows == 0)
+            var exportQuery = BuildQuery(limit: ExportLimit, offset: 0);
+            var fullSnapshot = await Task.Run(
+                () => repository.SearchAsync(exportQuery, exportCancellation.Token),
+                exportCancellation.Token).ConfigureAwait(true);
+            if (!IsCurrentFilterLoad(requestVersion, exportCancellation))
+                return;
+            ApplyPageResult(fullSnapshot with { Rows = fullSnapshot.Rows.Take(PageSize).ToArray() });
+            if (fullSnapshot.Total == 0)
             {
                 StatusText = "当前筛选没有符合条件的设备，未导出 Excel";
                 return;
             }
 
-            if (TotalRows > ExportLimit)
+            if (fullSnapshot.Total > ExportLimit)
             {
-                StatusText = $"当前筛选 {TotalRows:N0} 行，超过 Excel 导出上限 {ExportLimit:N0} 行；请缩小筛选条件后再导出";
+                StatusText = $"当前筛选 {fullSnapshot.Total:N0} 行，超过 Excel 导出上限 {ExportLimit:N0} 行；请缩小筛选条件后再导出";
                 return;
             }
 
-            var result = await exportService.ExportToFileAsync(
-                BuildQuery(limit: ExportLimit, offset: 0),
-                outputPath,
-                cancellationToken).ConfigureAwait(true);
+            var result = exportService is IDeviceSnapshotExportService snapshotExportService
+                ? await Task.Run(
+                    () => snapshotExportService.ExportSnapshotToFileAsync(exportQuery, fullSnapshot, outputPath, exportCancellation.Token),
+                    exportCancellation.Token).ConfigureAwait(true)
+                : await Task.Run(
+                    () => exportService.ExportToFileAsync(exportQuery, outputPath, exportCancellation.Token),
+                    exportCancellation.Token).ConfigureAwait(true);
+            if (!IsCurrentFilterLoad(requestVersion, exportCancellation))
+                return;
             LastExportPath = $"上次导出：{result.FileName}；位置：{Path.GetDirectoryName(result.Path)}";
             SetLastExportFilePath(result.Path);
             RefreshRecentExports();
             StatusText = $"已导出 {result.RowCount:N0} 行当前筛选 Excel：{result.FileName}";
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && exportCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex) when (IsCurrentFilterLoad(requestVersion, exportCancellation) && ex is not OperationCanceledException)
         {
             StatusText = ex.Message;
         }
+        catch (Exception) when (!IsCurrentFilterLoad(requestVersion, exportCancellation))
+        {
+        }
         finally
         {
-            IsLoading = false;
+            Interlocked.CompareExchange(ref _filterLoadCancellation, null, exportCancellation);
+            exportCancellation.Dispose();
+            if (Volatile.Read(ref _filterLoadCancellation) is null)
+                IsLoading = false;
         }
     }
 
@@ -923,10 +1130,10 @@ public sealed class DataViewModel(
         SelectedCommunication = SelectOption(CommunicationOptions, request.CommunicationState) ?? SelectedCommunication;
         SelectedArea = request.AreaGroupId is null
             ? SelectAreaOption(request.AreaType) ?? SelectedArea
-            : SelectAreaOptionForGroupId(request.AreaGroupId.Value) ?? SelectedArea;
-        SelectedFloor = SelectOption(FloorOptions, request.Floor) ?? FloorOptions.FirstOrDefault();
-        SelectedPageName = SelectOption(PageNameOptions, request.PageName) ?? PageNameOptions.FirstOrDefault();
-        SelectedZuo = SelectOption(ZuoOptions, request.Zuo) ?? ZuoOptions.FirstOrDefault();
+            : SelectOption(AreaOptions, $"group:{request.AreaGroupId.Value.ToString(CultureInfo.InvariantCulture)}") ?? SelectedArea;
+        SelectedFloor = SelectOption(FloorOptions, request.Floor) ?? SelectedFloor;
+        SelectedPageName = SelectOption(PageNameOptions, request.PageName) ?? SelectedPageName;
+        SelectedZuo = SelectOption(ZuoOptions, request.Zuo) ?? SelectedZuo;
         CoerceZuoSelectionForBuilding();
     }
 
@@ -1033,5 +1240,18 @@ public sealed class DataViewModel(
 
         return rows;
     }
+
+    private sealed record FilterLoadSnapshot(
+        DeviceQuery Query,
+        string SelectedBuilding,
+        string SelectedCommunication,
+        string SelectedFloor,
+        string SelectedZuo,
+        string SelectedPageName,
+        string SelectedMode,
+        string SelectedFan,
+        string SelectedSetTemperature,
+        string SelectedRealtimeLock,
+        string SelectedArea);
 
 }

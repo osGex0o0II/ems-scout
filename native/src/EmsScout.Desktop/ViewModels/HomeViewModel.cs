@@ -271,11 +271,11 @@ public sealed partial class HomeViewModel(
     private async Task RefreshDataSourcesAsync(CancellationToken cancellationToken)
     {
         var selectedRunId = SelectedDataSource?.RunId;
-        var runs = await collectionRunRepository.ListAsync(null, cancellationToken).ConfigureAwait(true);
+        var runs = await Task.Run(() => collectionRunRepository.ListAsync(null, cancellationToken), cancellationToken).ConfigureAwait(true);
         var catalog = CollectionDataSourceCatalog.Build(runs);
-        var currentBinding = await collectionRunRepository
-            .GetCurrentDataSourceAsync(cancellationToken)
-            .ConfigureAwait(true);
+        var currentBinding = await Task.Run(
+            () => collectionRunRepository.GetCurrentDataSourceAsync(cancellationToken),
+            cancellationToken).ConfigureAwait(true);
         var currentRun = currentBinding.IsBound
             ? runs.FirstOrDefault(run => currentBinding.Matches(run))
             : null;
@@ -299,7 +299,9 @@ public sealed partial class HomeViewModel(
         PageStatus = runId is null
             ? "正在读取当前数据"
             : "正在读取所选数据";
-        var overview = await overviewService.LoadAsync(runId, cancellationToken).ConfigureAwait(true);
+        var overview = await Task.Run(
+            () => overviewService.LoadAsync(runId, cancellationToken),
+            cancellationToken).ConfigureAwait(true);
         CurrentBatchTimestamp = SelectedDataSource?.Label ?? "当前来源未确定";
         RealtimeStatusText = overview.RealtimeStatusText;
         Metrics.Clear();

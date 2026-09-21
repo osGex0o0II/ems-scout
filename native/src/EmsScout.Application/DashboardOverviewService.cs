@@ -3,6 +3,7 @@ using EmsScout.Application.Collection;
 using EmsScout.Application.Groups;
 using EmsScout.Application.Settings;
 using EmsScout.Domain;
+using System.Collections.Concurrent;
 
 namespace EmsScout.Application;
 
@@ -10,13 +11,111 @@ public sealed class DashboardOverviewService(
     IDeviceReadRepository repository,
     IAreaGroupRepository areaGroupRepository,
     AppSettingsService? settingsService = null,
-    ICollectionRunRepository? collectionRunRepository = null)
+    ICollectionRunRepository? collectionRunRepository = null,
+    IDashboardSummaryRepository? summaryRepository = null,
+    IDeviceReadRevisionSource? revisionSource = null)
 {
+    private const int CacheLimit = 4;
+    private const int MaxRevisionBuildAttempts = 3;
     private static readonly string[] Buildings = ["1号", "2号", "3号", "4号", "5号", "6号"];
+    private readonly ConcurrentDictionary<OverviewCacheKey, Lazy<Task<DashboardOverview>>> _cache = new();
 
     public async Task<DashboardOverview> LoadAsync(
         long? runId = null,
         CancellationToken cancellationToken = default)
+    {
+        return await LoadAsync(runId, buildAttempt: 1, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<DashboardOverview> LoadAsync(
+        long? runId,
+        int buildAttempt,
+        CancellationToken cancellationToken)
+    {
+        var configuredSettings = settingsService?.Current;
+        var anomalySettings = configuredSettings is null
+            ? DashboardAnomalySettings.Default
+            : new DashboardAnomalySettings(
+                configuredSettings.DashboardNormalMode,
+                configuredSettings.DashboardTemperatureMin,
+                configuredSettings.DashboardTemperatureMax);
+        var revision = revisionSource is null
+            ? null
+            : await revisionSource.GetRevisionAsync(cancellationToken).ConfigureAwait(false);
+        if (revision is null)
+        {
+            var uncachedSummary = summaryRepository is null
+                ? null
+                : await summaryRepository.LoadAsync(runId, cancellationToken).ConfigureAwait(false);
+            return await BuildOverviewAsync(runId, anomalySettings, uncachedSummary, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var cacheKey = new OverviewCacheKey(runId, revision, anomalySettings);
+        var pending = _cache.GetOrAdd(
+            cacheKey,
+            key => new Lazy<Task<DashboardOverview>>(
+                () => BuildRevisionAsync(runId, anomalySettings),
+                LazyThreadSafetyMode.ExecutionAndPublication));
+        try
+        {
+            var overview = await pending.Value.WaitAsync(cancellationToken).ConfigureAwait(false);
+            var completedRevision = await revisionSource!
+                .GetRevisionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (!string.Equals(revision, completedRevision, StringComparison.Ordinal))
+            {
+                _cache.TryRemove(new KeyValuePair<OverviewCacheKey, Lazy<Task<DashboardOverview>>>(cacheKey, pending));
+                if (buildAttempt >= MaxRevisionBuildAttempts)
+                {
+                    throw new InvalidOperationException("总览数据版本在读取期间持续变化，请稍后重试。");
+                }
+
+                return await LoadAsync(runId, buildAttempt + 1, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (!overview.IsCacheable)
+            {
+                _cache.TryRemove(new KeyValuePair<OverviewCacheKey, Lazy<Task<DashboardOverview>>>(cacheKey, pending));
+                return overview;
+            }
+
+            if (!string.IsNullOrWhiteSpace(overview.AreaGroupsError))
+            {
+                _cache.TryRemove(new KeyValuePair<OverviewCacheKey, Lazy<Task<DashboardOverview>>>(cacheKey, pending));
+                return overview;
+            }
+
+            TrimCache(cacheKey);
+            return overview;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            _cache.TryRemove(new KeyValuePair<OverviewCacheKey, Lazy<Task<DashboardOverview>>>(cacheKey, pending));
+            throw;
+        }
+    }
+
+    private async Task<DashboardOverview> BuildRevisionAsync(
+        long? runId,
+        DashboardAnomalySettings anomalySettings)
+    {
+        var summaryResult = summaryRepository is null
+            ? null
+            : await summaryRepository.LoadAsync(runId, CancellationToken.None).ConfigureAwait(false);
+        return await BuildOverviewAsync(runId, anomalySettings, summaryResult, CancellationToken.None)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<DashboardOverview> BuildOverviewAsync(
+        long? runId,
+        DashboardAnomalySettings anomalySettings,
+        DashboardSummaryResult? summaryResult,
+        CancellationToken cancellationToken)
     {
         var result = await repository.SearchAsync(
             new DeviceQuery(Limit: 50_000, Offset: 0, RunId: runId),
@@ -24,7 +123,7 @@ public sealed class DashboardOverviewService(
         var inventoryRows = result.Rows
             .Where(device => !device.IsVirtual)
             .ToArray();
-        var summary = BuildSummary(inventoryRows);
+        var summary = summaryResult?.Summary ?? BuildSummary(inventoryRows);
         var onlineRows = inventoryRows
             .Where(device => device.CommunicationState is DeviceCommunicationState.Running or DeviceCommunicationState.Stopped)
             .ToArray();
@@ -35,20 +134,14 @@ public sealed class DashboardOverviewService(
             onlineRows
                 .Select(device => device.RealtimeUnavailableReason)
                 .FirstOrDefault(reason => !string.IsNullOrWhiteSpace(reason)));
-        var configuredSettings = settingsService?.Current;
-        var anomalySettings = configuredSettings is null
-            ? DashboardAnomalySettings.Default
-            : new DashboardAnomalySettings(
-                configuredSettings.DashboardNormalMode,
-                configuredSettings.DashboardTemperatureMin,
-                configuredSettings.DashboardTemperatureMax);
         var areaGroupsTask = LoadAreaGroupsAsync(inventoryRows, anomalySettings, cancellationToken);
         var areaGroupContext = await areaGroupsTask.ConfigureAwait(false);
         var collectedAt = inventoryRows
             .Where(device => device.CollectedAt is not null)
             .Select(device => device.CollectedAt!.Value)
             .ToArray();
-        var sourceUpdatedAt = collectedAt.Length == 0 ? null as DateTimeOffset? : collectedAt.Max();
+        var sourceUpdatedAt = summaryResult?.SourceUpdatedAt ??
+                              (collectedAt.Length == 0 ? null as DateTimeOffset? : collectedAt.Max());
         var batchCompletedAt = await ResolveBatchCompletedAtAsync(runId, cancellationToken).ConfigureAwait(false);
         var totalMetricDetail = collectionRunRepository is not null
             ? batchCompletedAt.HasValue
@@ -75,7 +168,10 @@ public sealed class DashboardOverviewService(
             areaGroupContext.Groups,
             areaGroupContext.Error,
             realtimeStatus.Availability,
-            realtimeStatus.StatusText);
+            realtimeStatus.StatusText)
+        {
+            IsCacheable = result.IsCacheable,
+        };
     }
 
     private async Task<DateTimeOffset?> ResolveBatchCompletedAtAsync(
@@ -169,7 +265,7 @@ public sealed class DashboardOverviewService(
     {
         try
         {
-            var groupSet = await areaGroupRepository.LoadAsync(cancellationToken).ConfigureAwait(false);
+            var groupSet = await areaGroupRepository.LoadConfigurationAsync(cancellationToken).ConfigureAwait(false);
             return new DashboardAreaGroupContext(
                 DashboardAreaGroupBuilder.Build(devices, groupSet, anomalySettings),
                 string.Empty);
@@ -183,4 +279,32 @@ public sealed class DashboardOverviewService(
     private sealed record DashboardAreaGroupContext(
         IReadOnlyList<DashboardAreaGroupSummary> Groups,
         string Error);
+
+    private void TrimCache(OverviewCacheKey currentKey)
+    {
+        if (_cache.Count <= CacheLimit)
+        {
+            return;
+        }
+
+        foreach (var candidate in _cache)
+        {
+            if (_cache.Count <= CacheLimit)
+            {
+                break;
+            }
+
+            if (candidate.Key != currentKey &&
+                candidate.Value.IsValueCreated &&
+                candidate.Value.Value.IsCompleted)
+            {
+                _cache.TryRemove(candidate);
+            }
+        }
+    }
+
+    private sealed record OverviewCacheKey(
+        long? RunId,
+        string Revision,
+        DashboardAnomalySettings AnomalySettings);
 }

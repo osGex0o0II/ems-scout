@@ -436,7 +436,8 @@ public sealed class DataManagementUiContractTests
         Assert.Contains("ViewModel.SelectedArea", xaml);
         Assert.Contains("IAreaGroupRepository areaGroupRepository", viewModel);
         Assert.Contains("DataFilterOption.All(\"全部\")", viewModel);
-        Assert.Contains("SelectAreaOptionForGroupId(request.AreaGroupId.Value", viewModel);
+        Assert.Contains("CaptureNavigationFilterLoadSnapshot(navigationRequest)", viewModel);
+        Assert.Contains("MonitorGroupIds: areaFilter.MonitorGroupIds", viewModel);
         Assert.DoesNotContain("SelectedAreaGroup", viewModel);
         Assert.Contains("long? AreaGroupId = null", navigation);
     }
@@ -454,8 +455,88 @@ public sealed class DataManagementUiContractTests
 
         Assert.True(
             initialize.IndexOf("ApplyNavigationRequest(navigationRequest)", StringComparison.Ordinal) <
-            initialize.IndexOf("ReloadFilterOptionsAsync(cancellationToken)", StringComparison.Ordinal));
+            initialize.IndexOf("CaptureNavigationFilterLoadSnapshot(navigationRequest)", StringComparison.Ordinal));
+        Assert.True(
+            initialize.IndexOf("CaptureNavigationFilterLoadSnapshot(navigationRequest)", StringComparison.Ordinal) <
+            initialize.IndexOf("LoadFilterOptionsAndPageAsync(cancellationToken, navigationSnapshot)", StringComparison.Ordinal));
         Assert.Contains("group.Name", replaceAreaGroups);
+    }
+
+    [Fact]
+    public void NavigationValuesSurviveTheFirstLoadBeforeFilterOptionsExist()
+    {
+        var root = LocateRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs"));
+        var initialize = source[
+            source.IndexOf("public async Task InitializeAsync", StringComparison.Ordinal)..source.IndexOf("public async Task RefreshAsync", StringComparison.Ordinal)];
+        var navigationSnapshot = source[
+            source.IndexOf("private FilterLoadSnapshot CaptureNavigationFilterLoadSnapshot", StringComparison.Ordinal)..source.IndexOf("private bool IsCurrentFilterLoad", StringComparison.Ordinal)];
+        var combinedLoad = source[
+            source.IndexOf("private async Task<bool> LoadFilterOptionsAndPageAsync", StringComparison.Ordinal)..source.IndexOf("private FilterLoadSnapshot CaptureFilterLoadSnapshot", StringComparison.Ordinal)];
+
+        Assert.Equal(1, initialize.Split("ApplyNavigationRequest(navigationRequest)", StringSplitOptions.None).Length - 1);
+        Assert.Contains("var navigationSnapshot = navigationRequest is null", initialize);
+        Assert.Contains("LoadFilterOptionsAndPageAsync(cancellationToken, navigationSnapshot)", initialize);
+        Assert.Contains("areaValue = request.AreaGroupId is long groupId", navigationSnapshot);
+        Assert.Contains("$\"group:{groupId.ToString(CultureInfo.InvariantCulture)}\"", navigationSnapshot);
+        Assert.Contains("MonitorGroupIds: areaFilter.MonitorGroupIds", navigationSnapshot);
+        Assert.Contains("Building: EmptyToNull(building)", navigationSnapshot);
+        Assert.Contains("RunId: SelectedDataSource?.RunId", navigationSnapshot);
+        Assert.Contains("requestedSnapshot ?? CaptureFilterLoadSnapshot()", combinedLoad);
+        Assert.Contains("if (requestedSnapshot is null &&", combinedLoad);
+        Assert.Contains("snapshot.SelectedArea", combinedLoad);
+        Assert.DoesNotContain("new DataFilterOption(value, value, 0)", source);
+    }
+
+    [Fact]
+    public void CombinedFilterLoadCapturesValuesBeforeAwaitAndOnlyLatestRequestApplies()
+    {
+        var root = LocateRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs"));
+        var combined = source[
+            source.IndexOf("private async Task<bool> LoadFilterOptionsAndPageAsync", StringComparison.Ordinal)..source.IndexOf("private void ApplyFilterOptions", StringComparison.Ordinal)];
+        var firstAwait = combined.IndexOf("await ", StringComparison.Ordinal);
+
+        Assert.True(combined.IndexOf("var snapshot = requestedSnapshot ?? CaptureFilterLoadSnapshot()", StringComparison.Ordinal) < firstAwait);
+        Assert.True(combined.IndexOf("var requestVersion = Interlocked.Increment", StringComparison.Ordinal) < firstAwait);
+        Assert.Contains("previousCancellation?.Cancel()", combined);
+        Assert.Contains("IsCurrentFilterLoad(requestVersion, loadCancellation)", combined);
+        Assert.Contains("snapshot.Query.Equals(BuildQuery", combined);
+        Assert.Contains("_ = ApplyFiltersAsync(cancellationToken)", combined);
+        Assert.Contains("snapshot.SelectedBuilding", combined);
+    }
+
+    [Fact]
+    public void RapidBuildingAndFloorChangesSupersedeTheActiveFilterLoad()
+    {
+        var root = LocateRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs"));
+        var applyFilters = source[
+            source.IndexOf("public async Task ApplyFiltersAsync", StringComparison.Ordinal)..source.IndexOf("private void SetDataError", StringComparison.Ordinal)];
+        var selections = source[
+            source.IndexOf("public async Task ApplyBuildingSelectionAsync", StringComparison.Ordinal)..source.IndexOf("public async Task MovePreviousAsync", StringComparison.Ordinal)];
+
+        Assert.DoesNotContain("if (IsLoading)", applyFilters);
+        Assert.DoesNotContain("IsLoading || _isInitializing", selections);
+        Assert.Contains("_suppressFilterSelectionChanges", selections);
+        Assert.Contains("LoadFilterOptionsAndPageAsync(cancellationToken)", applyFilters);
+    }
+
+    [Fact]
+    public void ExportUsesOneCapturedQueryAndOneFullSnapshotWhenSupported()
+    {
+        var root = LocateRepositoryRoot();
+        var source = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs"));
+        var export = source[
+            source.IndexOf("public async Task ExportAsync", StringComparison.Ordinal)..source.IndexOf("public void ReportExportCanceled", StringComparison.Ordinal)];
+
+        Assert.Contains("var exportQuery = BuildQuery(limit: ExportLimit, offset: 0)", export);
+        Assert.Contains("repository.SearchAsync(exportQuery, exportCancellation.Token)", export);
+        Assert.Contains("fullSnapshot with { Rows = fullSnapshot.Rows.Take(PageSize).ToArray() }", export);
+        Assert.Contains("IDeviceSnapshotExportService snapshotExportService", export);
+        Assert.Contains("ExportSnapshotToFileAsync(exportQuery, fullSnapshot, outputPath", export);
+        Assert.Contains("IsCurrentFilterLoad(requestVersion, exportCancellation)", export);
+        Assert.Contains("Interlocked.Exchange(ref _filterLoadCancellation, exportCancellation)", export);
     }
 
     [Fact]
@@ -496,8 +577,7 @@ public sealed class DataManagementUiContractTests
         var applyFilters = source[
             source.IndexOf("public async Task ApplyFiltersAsync", StringComparison.Ordinal)..source.IndexOf("public async Task MovePreviousAsync", StringComparison.Ordinal)];
 
-        Assert.Contains("ReloadFilterOptionsAsync(cancellationToken)", applyFilters);
-        Assert.Contains("LoadPageCoreAsync(cancellationToken)", applyFilters);
+        Assert.Contains("LoadFilterOptionsAndPageAsync(cancellationToken)", applyFilters);
     }
 
     [Fact]

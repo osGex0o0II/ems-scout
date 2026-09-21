@@ -4,7 +4,9 @@ using System.Globalization;
 
 namespace EmsScout.Infrastructure.Sqlite;
 
-public sealed class SqliteDeviceExportService(IDeviceReadRepository repository) : IDeviceExportService
+public sealed class SqliteDeviceExportService(IDeviceReadRepository repository) :
+    IDeviceExportService,
+    IDeviceSnapshotExportService
 {
     private const int ExportLimit = 50000;
 
@@ -34,11 +36,59 @@ public sealed class SqliteDeviceExportService(IDeviceReadRepository repository) 
         string outputPath,
         CancellationToken cancellationToken = default)
     {
+        ValidateCurrentQuery(query);
+        var result = await LoadAllRowsAsync(query, cancellationToken).ConfigureAwait(false);
+        return await ExportSnapshotToFileAsync(query, result, outputPath, cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<DeviceExportResult> ExportSnapshotToFileAsync(
+        DeviceQuery query,
+        DeviceListResult snapshot,
+        string outputPath,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateCurrentQuery(query);
+        var path = NormalizeOutputPath(outputPath);
+        ValidateSnapshot(snapshot);
+
+        return await Task.Run(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var outputDirectory = Path.GetDirectoryName(path)!;
+            Directory.CreateDirectory(outputDirectory);
+            var sheets = BuildSheets(snapshot.Rows);
+            cancellationToken.ThrowIfCancellationRequested();
+            SpreadsheetWorkbookWriter.Write(path, sheets);
+
+            return new DeviceExportResult(
+                Path: path,
+                FileName: Path.GetFileName(path),
+                Format: "xlsx",
+                RowCount: snapshot.Rows.Count,
+                Sheets: sheets.Select(sheet => sheet.Name).ToArray(),
+                Facets: snapshot.Facets);
+        }, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<DeviceListResult> LoadAllRowsAsync(
+        DeviceQuery query,
+        CancellationToken cancellationToken)
+    {
+        return await repository.SearchAsync(
+            query with { Limit = ExportLimit, Offset = 0 },
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private static void ValidateCurrentQuery(DeviceQuery query)
+    {
         if (query.RunId is not null)
         {
             throw new InvalidOperationException("历史批次为只读预览，不能导出为当前数据管理筛选结果。");
         }
+    }
 
+    private static string NormalizeOutputPath(string outputPath)
+    {
         if (string.IsNullOrWhiteSpace(outputPath))
         {
             throw new ArgumentException("Output path is required.", nameof(outputPath));
@@ -50,39 +100,27 @@ public sealed class SqliteDeviceExportService(IDeviceReadRepository repository) 
             throw new ArgumentException("Excel output path must use the .xlsx extension.", nameof(outputPath));
         }
 
-        var outputDirectory = Path.GetDirectoryName(path);
-        if (string.IsNullOrWhiteSpace(outputDirectory))
+        if (string.IsNullOrWhiteSpace(Path.GetDirectoryName(path)))
         {
             throw new ArgumentException("Excel output path must include a directory.", nameof(outputPath));
         }
 
-        Directory.CreateDirectory(outputDirectory);
-        var result = await LoadAllRowsAsync(query, cancellationToken).ConfigureAwait(false);
-        if (result.Total > ExportLimit)
-        {
-            throw new InvalidOperationException(
-                $"Current export limit is {ExportLimit:N0} rows, but the query returned {result.Total:N0} rows.");
-        }
-
-        var sheets = BuildSheets(result.Rows);
-        SpreadsheetWorkbookWriter.Write(path, sheets);
-
-        return new DeviceExportResult(
-            Path: path,
-            FileName: Path.GetFileName(path),
-            Format: "xlsx",
-            RowCount: result.Rows.Count,
-            Sheets: sheets.Select(sheet => sheet.Name).ToArray(),
-            Facets: result.Facets);
+        return path;
     }
 
-    private async Task<DeviceListResult> LoadAllRowsAsync(
-        DeviceQuery query,
-        CancellationToken cancellationToken)
+    private static void ValidateSnapshot(DeviceListResult snapshot)
     {
-        return await repository.SearchAsync(
-            query with { Limit = ExportLimit, Offset = 0 },
-            cancellationToken).ConfigureAwait(false);
+        if (snapshot.Total > ExportLimit)
+        {
+            throw new InvalidOperationException(
+                $"Current export limit is {ExportLimit:N0} rows, but the snapshot contains {snapshot.Total:N0} rows.");
+        }
+
+        if (snapshot.Total != snapshot.Rows.Count)
+        {
+            throw new InvalidOperationException(
+                $"导出快照不完整：总数为 {snapshot.Total:N0}，但仅捕获 {snapshot.Rows.Count:N0} 行。");
+        }
     }
 
     private static IReadOnlyList<IReadOnlyList<string>> DeviceRows(IReadOnlyList<DeviceRecord> rows)

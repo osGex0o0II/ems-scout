@@ -76,16 +76,20 @@
                 </Grid>
             </Border>
 
-            <ScrollViewer
+            <Border
                 Grid.Column="1"
                 HorizontalAlignment="Stretch"
-                HorizontalScrollBarVisibility="Auto"
-                HorizontalScrollMode="Enabled"
-                VerticalScrollBarVisibility="Auto"
-                VerticalScrollMode="Enabled">
-                <Border Padding="16" HorizontalAlignment="Stretch" Style="{StaticResource WorkbenchCardStyle}" Visibility="{x:Bind ViewModel.RuleEditorVisibility, Mode=OneWay}">
-                    <StackPanel HorizontalAlignment="Stretch" Spacing="10">
-                        <Grid ColumnSpacing="8">
+                Padding="16"
+                Style="{StaticResource WorkbenchCardStyle}"
+                Visibility="{x:Bind ViewModel.RuleEditorVisibility, Mode=OneWay}">
+                    <Grid RowSpacing="10" MinHeight="0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" MinHeight="0" />
+                        </Grid.RowDefinitions>
+                        <Grid Grid.Row="0" ColumnSpacing="8">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
@@ -112,11 +116,11 @@
                             </Button>
                         </Grid>
 
-                        <StackPanel Spacing="4">
+                        <StackPanel Grid.Row="1" Spacing="4">
                             <TextBlock Style="{StaticResource EditorFieldHeaderStyle}" Text="区域组名" />
                             <TextBox IsEnabled="{x:Bind ViewModel.CanEditSelectedGroup, Mode=OneWay}" Text="{x:Bind ViewModel.EditName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                         </StackPanel>
-                        <Grid x:Name="GroupSettingsRow" RowSpacing="8" HorizontalAlignment="Stretch">
+                        <Grid Grid.Row="2" x:Name="GroupSettingsRow" RowSpacing="8" HorizontalAlignment="Stretch">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
@@ -148,8 +152,16 @@
                             </StackPanel>
                         </Grid>
 
-                        <StackPanel Spacing="10" Visibility="{x:Bind ViewModel.RulesEditorVisibility, Mode=OneWay}">
-                            <Grid ColumnSpacing="8">
+                        <Grid Grid.Row="3" RowSpacing="10" MinHeight="0" Visibility="{x:Bind ViewModel.RulesEditorVisibility, Mode=OneWay}">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" MinHeight="0" />
+                            </Grid.RowDefinitions>
+                            <Grid Grid.Row="0" ColumnSpacing="8">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
@@ -159,11 +171,11 @@
                                     <TextBlock Text="添加规则" />
                                 </Button>
                             </Grid>
-                            <TextBlock Text="单条规则为 AND，同组规则为 OR；不含规则负责排除" />
-                            <TextBlock Foreground="{ThemeResource SystemFillColorCriticalBrush}" Text="{x:Bind ViewModel.RuleOptionsError, Mode=OneWay}" TextWrapping="Wrap" Visibility="{x:Bind ViewModel.RuleOptionsErrorVisibility, Mode=OneWay}" />
+                            <TextBlock Grid.Row="1" Text="单条规则为 AND，同组规则为 OR；不含规则负责排除" />
+                            <TextBlock Grid.Row="2" Foreground="{ThemeResource SystemFillColorCriticalBrush}" Text="{x:Bind ViewModel.RuleOptionsError, Mode=OneWay}" TextWrapping="Wrap" Visibility="{x:Bind ViewModel.RuleOptionsErrorVisibility, Mode=OneWay}" />
 
-                            <TextBlock Text="暂无规则" Visibility="{x:Bind ViewModel.RulesEmptyVisibility, Mode=OneWay}" />
-                            <Grid ColumnSpacing="8" HorizontalAlignment="Stretch">
+                            <TextBlock Grid.Row="3" Text="暂无规则" Visibility="{x:Bind ViewModel.RulesEmptyVisibility, Mode=OneWay}" />
+                            <Grid Grid.Row="4" ColumnSpacing="8" HorizontalAlignment="Stretch">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="36" MinWidth="32" />
                                     <ColumnDefinition Width="80" MinWidth="72" />
@@ -181,7 +193,17 @@
                                 <TextBlock Grid.Column="5" HorizontalAlignment="Stretch" FontWeight="SemiBold" Text="关键词" />
                                 <TextBlock Grid.Column="6" HorizontalAlignment="Stretch" TextAlignment="Center" FontWeight="SemiBold" Text="操作" />
                             </Grid>
-                            <ListView HorizontalContentAlignment="Stretch" ItemsSource="{x:Bind ViewModel.Rules, Mode=OneWay}" Padding="0">
+                            <ListView
+                                Grid.Row="5"
+                                MinHeight="0"
+                                HorizontalContentAlignment="Stretch"
+                                ItemsSource="{x:Bind ViewModel.Rules, Mode=OneWay}"
+                                Padding="0"
+                                ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                                ScrollViewer.HorizontalScrollMode="Enabled"
+                                ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                ScrollViewer.VerticalScrollMode="Enabled"
+                                ScrollViewer.IsDeferredScrollingEnabled="True">
                                 <ListView.ItemContainerStyle>
                                     <Style TargetType="ListViewItem">
                                         <Setter Property="Padding" Value="0" />
@@ -203,7 +225,7 @@
                                                 <ColumnDefinition Width="36" MinWidth="32" />
                                             </Grid.ColumnDefinitions>
                                             <TextBlock HorizontalAlignment="Stretch" TextAlignment="Center" VerticalAlignment="Center" Text="{x:Bind RuleOrder}" />
-                                            <ComboBox Grid.Column="1" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" ItemsSource="{x:Bind BuildingOptions, Mode=OneWay}" SelectedItem="{x:Bind Building, Mode=TwoWay}" SelectionChanged="RuleRowBuilding_SelectionChanged" />
+                                            <ComboBox Grid.Column="1" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" ItemsSource="{x:Bind BuildingOptions, Mode=OneWay}" SelectedItem="{x:Bind Building, Mode=TwoWay}" />
                                             <ComboBox Grid.Column="2" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" ItemsSource="{x:Bind ZuoOptions, Mode=OneWay}" SelectedItem="{x:Bind Zuo, Mode=TwoWay}" />
                                             <ComboBox Grid.Column="3" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" ItemsSource="{x:Bind FloorOptions, Mode=OneWay}" SelectedItem="{x:Bind Floor, Mode=TwoWay}" />
                                             <ComboBox Grid.Column="4" HorizontalAlignment="Stretch" HorizontalContentAlignment="Center" VerticalContentAlignment="Center" ItemsSource="{x:Bind MatchModeOptions, Mode=OneWay}" SelectedItem="{x:Bind MatchMode, Mode=TwoWay}" />
@@ -221,10 +243,9 @@
                                     </DataTemplate>
                                 </ListView.ItemTemplate>
                             </ListView>
-                        </StackPanel>
-                    </StackPanel>
-                </Border>
-            </ScrollViewer>
+                        </Grid>
+                    </Grid>
+            </Border>
 
             <Border
                 Grid.ColumnSpan="2"

@@ -57,6 +57,7 @@ public sealed partial class AreasPage : Page
         _loadCts?.Cancel();
         _loadCts?.Dispose();
         _loadCts = null;
+        ViewModel.CancelRuleMatchRefresh();
         base.OnNavigatedFrom(e);
     }
 
@@ -94,19 +95,6 @@ public sealed partial class AreasPage : Page
     {
         _requestedGroupId = e.Parameter is long groupId ? groupId : null;
         base.OnNavigatedTo(e);
-    }
-
-    private async void RuleRowBuilding_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        try
-        {
-            if (sender is ComboBox { DataContext: AreaGroupRuleRow row })
-                await ViewModel.RefreshRuleOptionsAsync(row);
-        }
-        catch (Exception ex)
-        {
-            await ShowErrorAsync("加载楼层失败", ex.Message);
-        }
     }
 
     private async void DeleteRuleRow_Click(object sender, RoutedEventArgs e)

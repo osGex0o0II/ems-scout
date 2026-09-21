@@ -1,6 +1,7 @@
 using EmsScout.Application.Devices;
 using EmsScout.Infrastructure.Sqlite;
 using EmsScout.Infrastructure.Realtime;
+using EmsScout.Application.Groups;
 using Microsoft.Data.Sqlite;
 using EmsScout.Domain;
 
@@ -103,6 +104,56 @@ public sealed class SqliteDeviceReadRepositoryTests
         Assert.NotEmpty(options.SetTemperatures);
         Assert.NotEmpty(options.IndoorTemperatures);
         Assert.Empty(options.Tags);
+    }
+
+    [Fact]
+    public async Task CombinedPageAndFilterQueryMatchesTheExistingContracts()
+    {
+        var repository = new SqliteDeviceReadRepository(CurrentDatabasePath());
+        var optimized = Assert.IsAssignableFrom<IDeviceReadRepositoryWithFilterOptions>(repository);
+
+        foreach (var query in new[]
+        {
+            new DeviceQuery(Building: "1号", Limit: 17, Offset: 11),
+            new DeviceQuery(CommunicationState: "离线", Limit: 13, Offset: 3),
+            new DeviceQuery(Mode: "通风", Limit: 11, Offset: 0),
+            new DeviceQuery(AreaType: "未匹配", Limit: 9, Offset: 2),
+            new DeviceQuery(SearchText: "KT", Building: "6号", Limit: 19, Offset: 7),
+        })
+        {
+            var combined = await optimized.SearchWithFilterOptionsAsync(query);
+            var page = await repository.SearchAsync(query);
+            var options = await repository.LoadFilterOptionsAsync(query);
+
+            Assert.Equal(page.Total, combined.Page.Total);
+            Assert.Equal(page.Rows.Select(row => row.Id), combined.Page.Rows.Select(row => row.Id));
+            Assert.Equal(page.Facets, combined.Page.Facets);
+            Assert.Equal(options.Buildings, combined.FilterOptions.Buildings);
+            Assert.Equal(options.CommunicationStates, combined.FilterOptions.CommunicationStates);
+            Assert.Equal(options.AreaGroupCounts, combined.FilterOptions.AreaGroupCounts);
+        }
+    }
+
+    [Fact]
+    public async Task RuleMatchQueryReturnsCountsWithoutRealtimeEnrichment()
+    {
+        var repository = new SqliteDeviceReadRepository(CurrentDatabasePath());
+        var optimized = Assert.IsAssignableFrom<IAreaGroupRuleMatchRepository>(repository);
+        var rules = new[]
+        {
+            new AreaGroupRuleRecord(1, 1, 1, "1号", "-", "1F", 1, "include", ["KT"], ""),
+            new AreaGroupRuleRecord(2, 1, 2, "6号", "C座", "-", null, "include", ["KT"], ""),
+        };
+
+        var counts = await optimized.CountAreaGroupRuleMatchesAsync(rules);
+
+        Assert.Equal(2, counts.Count);
+        foreach (var index in Enumerable.Range(0, rules.Length))
+        {
+            var page = await repository.SearchAsync(new DeviceQuery(Building: rules[index].Building, Limit: 50000));
+            var expected = AreaGroupRuleMatcher.CountMatches(page.Rows, rules[index]);
+            Assert.Equal(expected, counts[index]);
+        }
     }
 
     [Fact]

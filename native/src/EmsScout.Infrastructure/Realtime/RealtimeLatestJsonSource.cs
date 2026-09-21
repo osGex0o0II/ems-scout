@@ -1,10 +1,10 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using EmsScout.Application;
 using EmsScout.Application.Devices;
 
 namespace EmsScout.Infrastructure.Realtime;
 
-public sealed class RealtimeLatestJsonSource(string rootPath, string outDirectory) : IRealtimeDetailSource
+public sealed class RealtimeLatestJsonSource(string rootPath, string outDirectory) : IRealtimeDetailSource, IDeviceReadRevisionSource
 {
     public RealtimeLatestJsonSource(string rootPath, Func<string> outDirectoryResolver)
         : this(rootPath, string.Empty)
@@ -13,6 +13,22 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
     }
 
     private Func<string> OutDirectoryResolver { get; } = () => outDirectory;
+
+    public Task<string> GetRevisionAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var directory = Path.GetFullPath(OutDirectoryResolver());
+        if (!Directory.Exists(directory)) return Task.FromResult(directory + "|missing");
+        var files = Directory.EnumerateFiles(directory, "realtime_*.json")
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .Select(path =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var info = new FileInfo(path);
+                return $"{info.Name}:{info.Length}:{info.LastWriteTimeUtc.Ticks}:{info.CreationTimeUtc.Ticks}";
+            });
+        return Task.FromResult(directory + "|" + string.Join("|", files));
+    }
 
     public async Task<RealtimeDetailSet> LoadAsync(IReadOnlyList<string> buildings, CancellationToken cancellationToken = default)
     {
@@ -64,6 +80,20 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
         bool requireBatchMetadata,
         CancellationToken cancellationToken)
     {
+        var candidateReadFailed = false;
+        var result = await LoadCoreInternalAsync(buildings, expectedRunId, expectedBatchUid,
+            expectedRunKey, requireBatchMetadata, () => candidateReadFailed = true, cancellationToken).ConfigureAwait(false);
+        return candidateReadFailed
+            ? new RealtimeDetailSet(result.Rows, result.Availability, result.StatusText,
+                result.SourceRunId, result.SourceBatchUid, isTransientFailure: true)
+            : result;
+    }
+
+    private async Task<RealtimeDetailSet> LoadCoreInternalAsync(
+        IReadOnlyList<string> buildings, long? expectedRunId, string? expectedBatchUid,
+        string? expectedRunKey, bool requireBatchMetadata, Action onTransientFailure,
+        CancellationToken cancellationToken)
+    {
         var requestedBuildings = buildings
             .Where(item => !string.IsNullOrWhiteSpace(item))
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -73,9 +103,9 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
         string? sourceBatchUid = null;
         foreach (var building in requestedBuildings)
         {
-            var file = LatestRealtimeFile(building, expectedRunId, expectedBatchUid, expectedRunKey, requireBatchMetadata);
+            var file = LatestRealtimeFile(building, expectedRunId, expectedBatchUid, expectedRunKey, requireBatchMetadata, onTransientFailure);
             var fallbackFile = string.IsNullOrWhiteSpace(file)
-                ? LatestRealtimeFile(building)
+                ? LatestRealtimeFile(building, onTransientFailure)
                 : file;
             if (string.IsNullOrWhiteSpace(fallbackFile))
             {
@@ -99,7 +129,8 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
                     [],
                     RealtimeDetailAvailability.Unavailable,
                     $"实时详情文件 {Path.GetFileName(file)} 无法读取：{ex.Message}",
-                    sourceRunId);
+                    sourceRunId,
+                    isTransientFailure: ex is IOException);
             }
 
             using (document)
@@ -285,9 +316,9 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
         return StoredTimestamp.TryParse(value.GetString(), out timestamp);
     }
 
-    private string LatestRealtimeFile(string building)
+    private string LatestRealtimeFile(string building, Action? onTransientFailure = null)
     {
-        return FindLatestFile(OutDirectoryResolver(), building);
+        return FindLatestFile(OutDirectoryResolver(), building, onTransientFailure: onTransientFailure);
     }
 
     private string LatestRealtimeFile(
@@ -295,7 +326,8 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
         long? expectedRunId,
         string? expectedBatchUid,
         string? expectedRunKey,
-        bool requireBatchMetadata)
+        bool requireBatchMetadata,
+        Action? onTransientFailure = null)
     {
         return FindLatestFile(
             OutDirectoryResolver(),
@@ -303,7 +335,8 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
             expectedRunId,
             expectedBatchUid,
             expectedRunKey,
-            requireBatchMetadata);
+            requireBatchMetadata,
+            onTransientFailure);
     }
 
     internal static string FindLatestFile(
@@ -312,7 +345,8 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
         long? expectedRunId = null,
         string? expectedBatchUid = null,
         string? expectedRunKey = null,
-        bool requireBatchMetadata = false)
+        bool requireBatchMetadata = false,
+        Action? onTransientFailure = null)
     {
         if (!Directory.Exists(outDirectory))
         {
@@ -325,6 +359,11 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
                            System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(path), $"^realtime_{System.Text.RegularExpressions.Regex.Escape(building)}_\\d{{8}}_\\d{{6}}\\.json$"))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Select(ReadCandidate)
+            .Select(candidate =>
+            {
+                if (candidate.IsTransientFailure) onTransientFailure?.Invoke();
+                return candidate;
+            })
             .Where(item => !requireBatchMetadata || item.RunId is not null && item.BatchUid is not null && item.RunKey is not null)
             .Where(item => expectedRunId is null || item.RunId == expectedRunId)
             .Where(item => expectedBatchUid is null || string.Equals(item.BatchUid, expectedBatchUid, StringComparison.Ordinal))
@@ -351,9 +390,10 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
             var hasTimestamp = TryReadSourceTimestamp(root, out var capturedAt);
             return new RealtimeFileCandidate(path, hasRows && runId is not null && hasTimestamp, runId, batchUid, runKey, hasTimestamp ? capturedAt : null, info.LastWriteTimeUtc);
         }
-        catch
+        catch (Exception ex)
         {
-            return new RealtimeFileCandidate(path, false, null, null, null, null, info.LastWriteTimeUtc);
+            return new RealtimeFileCandidate(path, false, null, null, null, null, info.LastWriteTimeUtc,
+                IsTransientFailure: ex is IOException or UnauthorizedAccessException);
         }
     }
 
@@ -364,7 +404,8 @@ public sealed class RealtimeLatestJsonSource(string rootPath, string outDirector
         string? BatchUid,
         string? RunKey,
         DateTimeOffset? CapturedAt,
-        DateTime LastWriteUtc);
+        DateTime LastWriteUtc,
+        bool IsTransientFailure = false);
 
     internal static DateTimeOffset ReadSourceUpdatedAt(JsonElement root, string file)
     {

@@ -193,6 +193,89 @@ public sealed class DeviceExportTests
     }
 
     [Fact]
+    public async Task SnapshotExportKeepsCapturedRowsAfterRepositoryDataChanges()
+    {
+        var capturedRows = new[]
+        {
+            Device(1, "1号", "1F", "1F", "captured-device", "关机", "非公区", "", null),
+        };
+        var repository = new MutableDeviceReadRepository(capturedRows);
+        var snapshot = await repository.SearchAsync(new DeviceQuery(Building: "1号", Limit: 50000));
+        repository.ReplaceRows([
+            Device(2, "1号", "1F", "1F", "changed-device", "开机", "非公区", "", null),
+        ]);
+        IDeviceSnapshotExportService exportService = new SqliteDeviceExportService(repository);
+        var outputDirectory = Path.Combine(Path.GetTempPath(), "ems-scout-device-export-tests", Guid.NewGuid().ToString("N"));
+        var selectedPath = Path.Combine(outputDirectory, "snapshot.xlsx");
+
+        var export = await exportService.ExportSnapshotToFileAsync(
+            new DeviceQuery(Building: "1号"),
+            snapshot,
+            selectedPath);
+
+        Assert.Equal(1, export.RowCount);
+        var exportedRows = UserDeviceWorkbookAssert.ReadRows(export.Path);
+        Assert.Equal("captured-device", exportedRows[1][4]);
+        Assert.DoesNotContain(exportedRows, row => row.Contains("changed-device"));
+        Assert.Single(repository.SearchQueries);
+    }
+
+    [Fact]
+    public async Task SnapshotExportRejectsIncompleteSnapshotWithoutWritingWorkbook()
+    {
+        var rows = new[]
+        {
+            Device(1, "1号", "1F", "1F", "1-0101-KT", "关机", "非公区", "", null),
+        };
+        IDeviceSnapshotExportService exportService = new SqliteDeviceExportService(new FakeDeviceReadRepository(rows));
+        var snapshot = new DeviceListResult(2, rows, DeviceFacets.From(rows));
+        var outputDirectory = Path.Combine(Path.GetTempPath(), "ems-scout-device-export-tests", Guid.NewGuid().ToString("N"));
+        var selectedPath = Path.Combine(outputDirectory, "incomplete.xlsx");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            exportService.ExportSnapshotToFileAsync(new DeviceQuery(), snapshot, selectedPath));
+
+        Assert.Contains("完整", error.Message);
+        Assert.False(File.Exists(selectedPath));
+    }
+
+    [Fact]
+    public async Task SnapshotExportRejectsHistoricalQueryWithoutWritingWorkbook()
+    {
+        var rows = new[]
+        {
+            Device(1, "1号", "1F", "1F", "1-0101-KT", "关机", "非公区", "", null),
+        };
+        IDeviceSnapshotExportService exportService = new SqliteDeviceExportService(new FakeDeviceReadRepository(rows));
+        var snapshot = new DeviceListResult(1, rows, DeviceFacets.From(rows));
+        var outputDirectory = Path.Combine(Path.GetTempPath(), "ems-scout-device-export-tests", Guid.NewGuid().ToString("N"));
+        var selectedPath = Path.Combine(outputDirectory, "history.xlsx");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            exportService.ExportSnapshotToFileAsync(new DeviceQuery(RunId: 123), snapshot, selectedPath));
+
+        Assert.Contains("历史批次", error.Message);
+        Assert.False(File.Exists(selectedPath));
+    }
+
+    [Fact]
+    public async Task SnapshotExportRejectsMoreThanFiftyThousandRowsWithoutWritingWorkbook()
+    {
+        var row = Device(1, "1号", "1F", "1F", "1-0101-KT", "关机", "非公区", "", null);
+        var rows = Enumerable.Repeat(row, 50001).ToArray();
+        IDeviceSnapshotExportService exportService = new SqliteDeviceExportService(new FakeDeviceReadRepository(rows));
+        var snapshot = new DeviceListResult(rows.Length, rows, DeviceFacets.From(rows));
+        var outputDirectory = Path.Combine(Path.GetTempPath(), "ems-scout-device-export-tests", Guid.NewGuid().ToString("N"));
+        var selectedPath = Path.Combine(outputDirectory, "too-many.xlsx");
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            exportService.ExportSnapshotToFileAsync(new DeviceQuery(), snapshot, selectedPath));
+
+        Assert.Contains("50,000", error.Message);
+        Assert.False(File.Exists(selectedPath));
+    }
+
+    [Fact]
     public async Task RejectsHistoryRunExport()
     {
         var exportService = CurrentExportService();
@@ -316,6 +399,40 @@ public sealed class DeviceExportTests
                 .Take(Math.Clamp(query.Limit, 1, 50000))
                 .ToArray();
             return Task.FromResult(new DeviceListResult(rows.Count, page, DeviceFacets.From(rows)));
+        }
+
+        public Task<DeviceFilterOptions> LoadFilterOptionsAsync(CancellationToken cancellationToken = default)
+        {
+            return LoadFilterOptionsAsync(new DeviceQuery(), cancellationToken);
+        }
+
+        public Task<DeviceFilterOptions> LoadFilterOptionsAsync(
+            DeviceQuery query,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new DeviceFilterOptions([], [], [], [], [], [], [], [], [], [], [], []));
+        }
+    }
+
+    private sealed class MutableDeviceReadRepository(IReadOnlyList<DeviceRecord> rows) : IDeviceReadRepository
+    {
+        private IReadOnlyList<DeviceRecord> _rows = rows;
+
+        public List<DeviceQuery> SearchQueries { get; } = [];
+
+        public void ReplaceRows(IReadOnlyList<DeviceRecord> replacement)
+        {
+            _rows = replacement;
+        }
+
+        public Task<DeviceListResult> SearchAsync(DeviceQuery query, CancellationToken cancellationToken = default)
+        {
+            SearchQueries.Add(query);
+            var page = _rows
+                .Skip(Math.Max(0, query.Offset))
+                .Take(Math.Clamp(query.Limit, 1, 50000))
+                .ToArray();
+            return Task.FromResult(new DeviceListResult(_rows.Count, page, DeviceFacets.From(_rows)));
         }
 
         public Task<DeviceFilterOptions> LoadFilterOptionsAsync(CancellationToken cancellationToken = default)

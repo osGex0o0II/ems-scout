@@ -12,7 +12,8 @@ public sealed class RealtimeDetailSet(
     RealtimeDetailAvailability availability = RealtimeDetailAvailability.Available,
     string? statusText = null,
     long? sourceRunId = null,
-    string? sourceBatchUid = null)
+    string? sourceBatchUid = null,
+    bool isTransientFailure = false)
 {
     private readonly Dictionary<string, int> _exactUsage = [];
 
@@ -32,6 +33,8 @@ public sealed class RealtimeDetailSet(
     });
 
     public bool IsAvailable => Availability == RealtimeDetailAvailability.Available;
+
+    public bool IsTransientFailure { get; } = isTransientFailure;
 
     public Dictionary<string, List<RealtimeDetailRecord>> ByExactKey { get; } = BuildIndex(rows, row => RealtimeKeyBuilder.ExactKey(row));
 

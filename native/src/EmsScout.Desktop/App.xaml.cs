@@ -134,11 +134,15 @@ public partial class App : Microsoft.UI.Xaml.Application
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
         services.AddSingleton<IDeviceWatchRepository>(provider => new SqliteDeviceWatchRepository(
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
-        services.AddSingleton<IDeviceReadRepository>(provider => new SqliteDeviceReadRepository(
+        services.AddSingleton<SqliteDeviceReadRepository>(provider => new SqliteDeviceReadRepository(
             () => provider.GetRequiredService<AppDataPathService>().DatabasePath,
             provider.GetRequiredService<IRealtimeDetailSource>(),
             provider.GetRequiredService<IDeviceWatchRepository>(),
             provider.GetRequiredService<IRealtimeSnapshotStore>()));
+        services.AddSingleton<IDeviceReadRepository>(provider => provider.GetRequiredService<SqliteDeviceReadRepository>());
+        services.AddSingleton<IDeviceReadRevisionSource>(provider => provider.GetRequiredService<SqliteDeviceReadRepository>());
+        services.AddSingleton<IDashboardSummaryRepository>(provider => new SqliteDashboardSummaryRepository(
+            () => provider.GetRequiredService<AppDataPathService>().DatabasePath));
         services.AddSingleton<IDeviceExportService>(provider => new SqliteDeviceExportService(
             provider.GetRequiredService<IDeviceReadRepository>()));
         services.AddSingleton<IDeviceAnnotationService>(provider => new SqliteDeviceAnnotationService(

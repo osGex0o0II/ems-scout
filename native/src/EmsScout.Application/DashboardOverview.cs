@@ -10,7 +10,10 @@ public sealed record DashboardOverview(
     IReadOnlyList<DashboardAreaGroupSummary> AreaGroups,
     string AreaGroupsError,
     DashboardRealtimeAvailability RealtimeAvailability = DashboardRealtimeAvailability.NotApplicable,
-    string RealtimeStatusText = "");
+    string RealtimeStatusText = "")
+{
+    public bool IsCacheable { get; init; } = true;
+}
 
 public sealed record OverviewMetric(
     string Label,

@@ -20,51 +20,64 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
         return new AreaGroupSet(groups, rules);
     }
 
+    public async Task<AreaGroupSet> LoadReadOnlyAsync(CancellationToken cancellationToken = default)
+    {
+        EnsureDatabaseExists();
+        await using var connection = OpenConnection(readOnly: true);
+        if (!await TableExistsAsync(connection, "monitor_groups", cancellationToken).ConfigureAwait(false) ||
+            !await TableExistsAsync(connection, "area_group_rules", cancellationToken).ConfigureAwait(false))
+        {
+            return new AreaGroupSet([], []);
+        }
+
+        var groups = await LoadGroupsAsync(connection, cancellationToken).ConfigureAwait(false);
+        var rules = await LoadRulesIfPresentAsync(connection, cancellationToken).ConfigureAwait(false);
+        return new AreaGroupSet(groups, rules);
+    }
+
+    public async Task<AreaGroupSet> LoadConfigurationAsync(CancellationToken cancellationToken = default)
+    {
+        EnsureDatabaseExists();
+        await using var connection = OpenConnection(readOnly: true);
+        var groups = await LoadConfigurationGroupsAsync(connection, cancellationToken).ConfigureAwait(false);
+        var rules = await LoadRulesIfPresentAsync(connection, cancellationToken).ConfigureAwait(false);
+        return new AreaGroupSet(groups, rules);
+    }
+
     public async Task<IReadOnlyList<FloorCatalogRecord>> LoadFloorsAsync(
         string building,
         bool includeDisabled = false,
         CancellationToken cancellationToken = default)
     {
         EnsureDatabaseExists();
-        await using var connection = OpenConnection(readOnly: false);
-        await EnsureSchemaAsync(connection, cancellationToken).ConfigureAwait(false);
-        await SyncFloorCatalogFromCurrentAsync(connection, cancellationToken).ConfigureAwait(false);
-
-        await using var command = connection.CreateCommand();
-        var clauses = new List<string>();
-        if (!string.IsNullOrWhiteSpace(building))
+        await using var connection = OpenConnection(readOnly: true);
+        var catalog = await LoadFloorCatalogIfPresentAsync(connection, cancellationToken).ConfigureAwait(false);
+        var discovered = await LoadDiscoveredFloorsIfPresentAsync(connection, cancellationToken).ConfigureAwait(false);
+        var byKey = new Dictionary<string, FloorCatalogRecord>(StringComparer.OrdinalIgnoreCase);
+        foreach (var floor in catalog)
         {
-            clauses.Add("building = $building");
-            command.Parameters.AddWithValue("$building", building.Trim());
+            // Keep the first legacy row if a pre-unique-index database contains a duplicate.
+            byKey.TryAdd(FloorKey(floor), floor);
         }
 
-        if (!includeDisabled)
+        // Discovery is deliberately a projection. Persisting these rows belongs to the
+        // post-import/catalog-sync path, so opening the rule editor remains read-only.
+        foreach (var floor in discovered)
         {
-            clauses.Add("enabled = 1");
+            if (!byKey.ContainsKey(FloorKey(floor)))
+            {
+                byKey[FloorKey(floor)] = floor;
+            }
         }
 
-        command.CommandText = $"""
-            SELECT id, building, floor_label, floor_value, source, enabled, note
-            FROM floor_catalog
-            {(clauses.Count == 0 ? string.Empty : "WHERE " + string.Join(" AND ", clauses))}
-            ORDER BY building, floor_value, floor_label
-            """;
-
-        var rows = new List<FloorCatalogRecord>();
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-        {
-            rows.Add(new FloorCatalogRecord(
-                Id: reader.GetInt64(reader.GetOrdinal("id")),
-                Building: ReadString(reader, "building"),
-                FloorLabel: ReadString(reader, "floor_label"),
-                FloorValue: ReadDouble(reader, "floor_value"),
-                Source: ReadString(reader, "source"),
-                Enabled: ReadInt32(reader, "enabled") != 0,
-                Note: ReadString(reader, "note")));
-        }
-
-        return rows;
+        return byKey.Values
+            .Where(floor => string.IsNullOrWhiteSpace(building) ||
+                            string.Equals(floor.Building, building.Trim(), StringComparison.OrdinalIgnoreCase))
+            .Where(floor => includeDisabled || floor.Enabled)
+            .OrderBy(floor => floor.Building, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(floor => floor.FloorValue)
+            .ThenBy(floor => floor.FloorLabel, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
     }
 
     public async Task<FloorCatalogRecord> SaveFloorAsync(
@@ -923,6 +936,127 @@ public sealed class SqliteAreaGroupRepository(Func<string> databasePathResolver)
                 Note: ReadString(reader, "note"))
             : null;
     }
+
+    private static async Task<IReadOnlyList<FloorCatalogRecord>> LoadFloorCatalogIfPresentAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, "floor_catalog", cancellationToken).ConfigureAwait(false))
+        {
+            return [];
+        }
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, building, floor_label, floor_value, source, enabled, note
+            FROM floor_catalog
+            ORDER BY building, floor_value, floor_label
+            """;
+        var rows = new List<FloorCatalogRecord>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            rows.Add(new FloorCatalogRecord(
+                Id: reader.GetInt64(reader.GetOrdinal("id")),
+                Building: ReadString(reader, "building"),
+                FloorLabel: ReadString(reader, "floor_label"),
+                FloorValue: ReadDouble(reader, "floor_value"),
+                Source: ReadString(reader, "source"),
+                Enabled: ReadInt32(reader, "enabled") != 0,
+                Note: ReadString(reader, "note")));
+        }
+
+        return rows;
+    }
+
+    private static async Task<IReadOnlyList<FloorCatalogRecord>> LoadDiscoveredFloorsIfPresentAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, "sub_areas", cancellationToken).ConfigureAwait(false))
+        {
+            return [];
+        }
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT building, floor
+            FROM sub_areas
+            WHERE floor IS NOT NULL
+            GROUP BY building, floor
+            ORDER BY building, floor
+            """;
+        var rows = new List<FloorCatalogRecord>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var building = ReadString(reader, "building");
+            var floor = ReadDouble(reader, "floor");
+            rows.Add(new FloorCatalogRecord(
+                Id: 0,
+                Building: building,
+                FloorLabel: FloorLabelFromValue(floor),
+                FloorValue: floor,
+                Source: "discovered",
+                Enabled: true,
+                Note: string.Empty));
+        }
+
+        return rows;
+    }
+
+    private static async Task<IReadOnlyList<AreaGroupRecord>> LoadConfigurationGroupsAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        if (!await TableExistsAsync(connection, "monitor_groups", cancellationToken).ConfigureAwait(false))
+        {
+            return [];
+        }
+
+        var groups = new List<AreaGroupRecord>();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            SELECT id, name, area_label, description, priority, enabled, group_key
+            FROM monitor_groups
+            WHERE COALESCE(group_key, '') <> ''
+            ORDER BY enabled DESC, priority DESC, id
+            """;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var group = ReadRawGroup(reader);
+            groups.Add(new AreaGroupRecord(
+                group.Id,
+                group.Name,
+                group.AreaLabel,
+                group.Description,
+                group.Priority,
+                group.Enabled,
+                ItemCount: 0,
+                Total: 0,
+                OnCount: 0,
+                OffCount: 0,
+                OfflineCount: 0,
+                UnknownCount: 0,
+                CoveredAreas: 0,
+                group.GroupKey));
+        }
+
+        return groups;
+    }
+
+    private static async Task<IReadOnlyList<AreaGroupRuleRecord>> LoadRulesIfPresentAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        return await TableExistsAsync(connection, "area_group_rules", cancellationToken).ConfigureAwait(false)
+            ? await LoadRulesAsync(connection, null, cancellationToken).ConfigureAwait(false)
+            : [];
+    }
+
+    private static string FloorKey(FloorCatalogRecord floor) =>
+        $"{floor.Building.Trim()}\u001f{floor.FloorLabel.Trim().ToUpperInvariant()}";
 
     private static async Task<IReadOnlyList<AreaGroupRecord>> LoadGroupsAsync(
         SqliteConnection connection,

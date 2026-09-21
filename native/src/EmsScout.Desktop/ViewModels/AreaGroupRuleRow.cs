@@ -47,6 +47,7 @@ public sealed class AreaGroupRuleRow : ObservableObject
 
     public long Id { get; }
     public long GroupId { get; }
+    public string RefreshKey { get; } = Guid.NewGuid().ToString("N");
     public int RuleOrder
     {
         get => _ruleOrder;
@@ -177,14 +178,15 @@ public sealed class AreaGroupRuleRow : ObservableObject
 
     public void ConfigureFloorOptions(IEnumerable<string> options)
     {
+        var selectedFloor = Floor;
         var normalized = options
             .Select(value => string.IsNullOrWhiteSpace(value) ? "-" : value)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
         if (!normalized.Contains("-", StringComparer.OrdinalIgnoreCase))
             normalized.Insert(0, "-");
-        Replace(FloorOptions, normalized);
-        if (!FloorOptions.Contains(Floor, StringComparer.OrdinalIgnoreCase))
+        Reconcile(FloorOptions, normalized);
+        if (!FloorOptions.Contains(selectedFloor, StringComparer.OrdinalIgnoreCase))
             Floor = "-";
     }
 
@@ -204,5 +206,29 @@ public sealed class AreaGroupRuleRow : ObservableObject
         target.Clear();
         foreach (var value in values)
             target.Add(value);
+    }
+
+    private static void Reconcile(ObservableCollection<string> target, IReadOnlyList<string> values)
+    {
+        for (var targetIndex = 0; targetIndex < values.Count; targetIndex++)
+        {
+            var existingIndex = -1;
+            for (var index = targetIndex; index < target.Count; index++)
+            {
+                if (string.Equals(target[index], values[targetIndex], StringComparison.OrdinalIgnoreCase))
+                {
+                    existingIndex = index;
+                    break;
+                }
+            }
+
+            if (existingIndex < 0)
+                target.Insert(targetIndex, values[targetIndex]);
+            else if (existingIndex != targetIndex)
+                target.Move(existingIndex, targetIndex);
+        }
+
+        while (target.Count > values.Count)
+            target.RemoveAt(target.Count - 1);
     }
 }

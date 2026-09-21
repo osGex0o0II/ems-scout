@@ -4,6 +4,16 @@ public interface IAreaGroupRepository
 {
     Task<AreaGroupSet> LoadAsync(CancellationToken cancellationToken = default);
 
+    // Compatibility default for repositories that have not separated startup migration
+    // from normal reads. SQLite overrides this and preserves statistics without writes.
+    Task<AreaGroupSet> LoadReadOnlyAsync(CancellationToken cancellationToken = default) =>
+        LoadAsync(cancellationToken);
+
+    // Compatibility default for repositories that have not yet split configuration from statistics.
+    // Implementations backed by SQLite should override this with a configuration-only read.
+    Task<AreaGroupSet> LoadConfigurationAsync(CancellationToken cancellationToken = default) =>
+        LoadAsync(cancellationToken);
+
     Task<AreaGroupRecord> SaveGroupAsync(
         AreaGroupEdit edit,
         CancellationToken cancellationToken = default);
