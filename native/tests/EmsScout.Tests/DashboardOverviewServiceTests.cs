@@ -78,6 +78,45 @@ public sealed class DashboardOverviewServiceTests
     }
 
     [Fact]
+    public async Task UsesBoundBatchCompletionTimeForOverviewMetric()
+    {
+        var device = TestDevice(42, isVirtual: false, DateTimeOffset.Parse("2026-08-31T11:07:02+08:00"));
+        var repository = new CapturingDeviceRepository(
+            new DeviceListResult(1, [device], DeviceFacets.From([device])));
+        var run = TestRun(41, "2026-09-16T15:23:16+08:00");
+        var service = new DashboardOverviewService(
+            repository,
+            new FailingAreaGroupRepository(),
+            collectionRunRepository: new EmptyCollectionRunRepository(
+                [run],
+                new CurrentDataSourceBinding(CurrentDataSourceStates.Bound, run.Id, 1, string.Empty)));
+
+        var overview = await service.LoadAsync();
+
+        Assert.Equal(
+            "2026-09-16 15:23:16",
+            overview.Metrics.Single(metric => metric.Label == "总设备数").Detail);
+    }
+
+    [Fact]
+    public async Task DoesNotExposeSourceTimestampAsBatchTimeWhenCurrentSourceIsUnresolved()
+    {
+        var device = TestDevice(42, isVirtual: false, DateTimeOffset.Parse("2026-08-31T11:07:02+08:00"));
+        var repository = new CapturingDeviceRepository(
+            new DeviceListResult(1, [device], DeviceFacets.From([device])));
+        var service = new DashboardOverviewService(
+            repository,
+            new FailingAreaGroupRepository(),
+            collectionRunRepository: new EmptyCollectionRunRepository(
+                [],
+                CurrentDataSourceBinding.Unresolved("旧数据库未记录当前数据来源")));
+
+        var overview = await service.LoadAsync();
+
+        Assert.Equal("当前来源未确定", overview.Metrics.Single(metric => metric.Label == "总设备数").Detail);
+    }
+
+    [Fact]
     public async Task UsesPercentagesForEveryStatusMetricDetail()
     {
         var devices = new[]
@@ -156,6 +195,27 @@ public sealed class DashboardOverviewServiceTests
             CollectedAt: collectedAt);
     }
 
+    private static CollectionRunRecord TestRun(long id, string completedAt) =>
+        new(
+            id,
+            $"run-{id}",
+            completedAt,
+            completedAt,
+            completedAt,
+            "completed",
+            "full",
+            ["1号"],
+            string.Empty,
+            string.Empty,
+            1,
+            0,
+            1,
+            0,
+            0,
+            "{}",
+            false,
+            string.Empty);
+
     private sealed class CapturingDeviceRepository(DeviceListResult? result = null) : IDeviceReadRepository
     {
         private readonly DeviceListResult _result = result ?? new DeviceListResult(0, [], DeviceFacets.From([]));
@@ -193,10 +253,20 @@ public sealed class DashboardOverviewServiceTests
             Task.FromException<RealtimeReconciliationResult>(new InvalidOperationException("not used"));
     }
 
-    private sealed class EmptyCollectionRunRepository : ICollectionRunRepository
+    private sealed class EmptyCollectionRunRepository(
+        IReadOnlyList<CollectionRunRecord>? runs = null,
+        CurrentDataSourceBinding? currentBinding = null) : ICollectionRunRepository
     {
+        private IReadOnlyList<CollectionRunRecord> Runs { get; } = runs ?? [];
+
+        private CurrentDataSourceBinding CurrentBinding { get; } = currentBinding ??
+            CurrentDataSourceBinding.Unresolved("未配置");
+
         public Task<IReadOnlyList<CollectionRunRecord>> ListAsync(int? limit = 50, CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<CollectionRunRecord>>([]);
+            Task.FromResult(Runs);
+
+        public Task<CurrentDataSourceBinding> GetCurrentDataSourceAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(CurrentBinding);
 
         public Task<RunDeleteImpact> GetDeleteImpactAsync(long runId, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();

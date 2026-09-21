@@ -7,6 +7,35 @@ namespace EmsScout.Tests;
 public sealed class CollectionRunRepositoryTests
 {
     [Fact]
+    public async Task ReadsSingleBoundCurrentDataSourceRun()
+    {
+        var databasePath = CreateDatabase();
+        await new SqliteSchemaMigrator(() => databasePath).MigrateAsync();
+        await ExecuteAsync(databasePath, "UPDATE current_data_sources SET revision_uid = 'revision-1', run_id = 1, batch_uid = (SELECT batch_uid FROM collection_runs WHERE id = 1), card_count = 1, state = 'bound', reason = '' WHERE building = '1号';");
+
+        var binding = await new SqliteCollectionRunRepository(() => databasePath)
+            .GetCurrentDataSourceAsync();
+
+        Assert.True(binding.IsBound);
+        Assert.Equal(1, binding.RunId);
+        Assert.Equal(1, binding.CardCount);
+    }
+
+    [Fact]
+    public async Task KeepsLegacyCurrentDataSourceUnresolved()
+    {
+        var databasePath = CreateDatabase();
+        await new SqliteSchemaMigrator(() => databasePath).MigrateAsync();
+
+        var binding = await new SqliteCollectionRunRepository(() => databasePath)
+            .GetCurrentDataSourceAsync();
+
+        Assert.False(binding.IsBound);
+        Assert.Null(binding.RunId);
+        Assert.Contains("来源", binding.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task CannotDeleteCurrentRun()
     {
         var databasePath = CreateDatabase();

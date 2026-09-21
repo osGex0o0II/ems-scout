@@ -146,6 +146,25 @@ public sealed class TasksPageUiContractTests
         Assert.Contains("report.IsStale || report.Summary.IssueCount > 0", viewModel);
     }
 
+    [Fact]
+    public void SuccessfulCompletionCardOnlyShowsCompletionAndTimestamp()
+    {
+        var root = LocateRepositoryRoot();
+        var page = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "TasksPage.xaml"));
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "CollectionTaskViewModel.cs"));
+        var successStart = viewModel.IndexOf("var completedAt = DateTimeOffset.Now;", StringComparison.Ordinal);
+        var successEnd = viewModel.IndexOf("catch (OperationCanceledException)", successStart, StringComparison.Ordinal);
+
+        Assert.True(successStart >= 0 && successEnd > successStart);
+        var successBlock = viewModel[successStart..successEnd];
+        Assert.Contains("CollectionCompletionText = \"采集完成\";", successBlock);
+        Assert.Contains("CollectionCompletedAtText", successBlock);
+        Assert.Contains("CollectionDurationText = string.Empty", successBlock);
+        Assert.Contains("TaskSummaryText = string.Empty", successBlock);
+        Assert.DoesNotContain("有待复核", successBlock);
+        Assert.DoesNotContain("CollectionDurationText", page);
+    }
+
     private static string LocateRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

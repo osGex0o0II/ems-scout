@@ -1330,33 +1330,14 @@ public sealed partial class CollectionTaskViewModel(
                 ? $"{(int)elapsed.TotalMinutes} 分 {elapsed.Seconds} 秒"
                 : $"{elapsed.Seconds} 秒";
             var completedAt = DateTimeOffset.Now;
-            CollectionCompletionText = runImportAfterCollect
-                ? _qualityRequiresReview
-                    ? "采集完成，数据已更新（有待复核项）"
-                    : "采集完成，数据已更新"
-                : runRealtimeDetailsAfterImport
-                    ? _qualityRequiresReview
-                        ? "采集完成，实时详情已更新（有待复核项）"
-                        : "采集完成，实时详情已更新"
-                    : "采集完成";
+            CollectionCompletionText = "采集完成";
             HasTaskIssue = false;
             CollectionCompletedAtText = $"完成时间：{completedAt:yyyy-MM-dd HH:mm:ss}";
-            CollectionDurationText = $"本次用时：{elapsedText}";
-            var cardCount = ProgressOverallText.Contains('/') ? ProgressOverallText.Split('·')[0].Trim() : string.Empty;
-            TaskSummaryText = _qualityRequiresReview
-                ? $"采集完成 · {cardCount}· 用时 {elapsedText} · 有待复核问题"
-                : runImportAfterCollect
-                    ? $"采集完成 · {cardCount}· 用时 {elapsedText}"
-                    : runRealtimeDetailsAfterImport
-                        ? $"采集完成 · 实时详情已更新 · 用时 {elapsedText}"
-                        : $"采集完成 · 用时 {elapsedText}";
+            CollectionDurationText = string.Empty;
+            TaskSummaryText = string.Empty;
             ShowCompletionCelebration = true;
             AddLog($"采集完成：完成时间 {completedAt:yyyy-MM-dd HH:mm:ss}；本次用时 {elapsedText}");
-            StatusText = _currentDataUpdatedThisRun
-                ? _qualityRequiresReview
-                    ? "任务完成，当前数据已更新，存在待复核质量问题"
-                    : "任务完成，当前数据已更新"
-                : plan.CompletedStatus(runImportAfterCollect, runRealtimeDetailsAfterImport);
+            StatusText = "采集完成";
             AddLog(StatusText);
         }
         catch (OperationCanceledException)

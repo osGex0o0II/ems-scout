@@ -273,8 +273,14 @@ public sealed partial class HomeViewModel(
         var selectedRunId = SelectedDataSource?.RunId;
         var runs = await collectionRunRepository.ListAsync(null, cancellationToken).ConfigureAwait(true);
         var catalog = CollectionDataSourceCatalog.Build(runs);
+        var currentBinding = await collectionRunRepository
+            .GetCurrentDataSourceAsync(cancellationToken)
+            .ConfigureAwait(true);
+        var currentRun = currentBinding.IsBound
+            ? runs.FirstOrDefault(run => currentBinding.Matches(run))
+            : null;
         DataSources.Clear();
-        DataSources.Add(DataSourceOption.Current(catalog.CurrentRun));
+        DataSources.Add(DataSourceOption.Current(currentRun));
         foreach (var run in catalog.HistoricalRuns)
         {
             DataSources.Add(new DataSourceOption(run));
@@ -294,9 +300,7 @@ public sealed partial class HomeViewModel(
             ? "正在读取当前数据"
             : "正在读取所选数据";
         var overview = await overviewService.LoadAsync(runId, cancellationToken).ConfigureAwait(true);
-        CurrentBatchTimestamp = overview.SourceUpdatedAt.HasValue
-            ? overview.SourceUpdatedAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
-            : SelectedDataSource?.Label ?? "--";
+        CurrentBatchTimestamp = SelectedDataSource?.Label ?? "当前来源未确定";
         RealtimeStatusText = overview.RealtimeStatusText;
         Metrics.Clear();
         StatusDistribution.Clear();

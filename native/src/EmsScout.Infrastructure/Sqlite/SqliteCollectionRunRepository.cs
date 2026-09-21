@@ -62,6 +62,60 @@ public sealed class SqliteCollectionRunRepository(
         return rows;
     }
 
+    public async Task<CurrentDataSourceBinding> GetCurrentDataSourceAsync(
+        CancellationToken cancellationToken = default)
+    {
+        EnsureDatabaseExists();
+        await using var connection = OpenConnection(readOnly: true);
+        if (!await TableExistsAsync(connection, "current_data_sources", cancellationToken).ConfigureAwait(false))
+        {
+            return CurrentDataSourceBinding.Unresolved(
+                "旧数据库未记录当前数据来源，禁止自动绑定到最新历史批次");
+        }
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT state, run_id, card_count, reason FROM current_data_sources";
+        var rows = new List<(string State, long? RunId, int CardCount, string Reason)>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            rows.Add((
+                reader.IsDBNull(0) ? CurrentDataSourceStates.Bound : reader.GetString(0),
+                reader.IsDBNull(1) ? null : reader.GetInt64(1),
+                reader.IsDBNull(2) ? 0 : reader.GetInt32(2),
+                reader.IsDBNull(3) ? string.Empty : reader.GetString(3)));
+        }
+
+        var cardCount = rows.Sum(row => Math.Max(0, row.CardCount));
+        if (rows.Count == 0)
+        {
+            return CurrentDataSourceBinding.Unresolved("当前数据来源记录为空", cardCount);
+        }
+
+        var invalidRows = rows.Where(row =>
+            !row.State.Equals(CurrentDataSourceStates.Bound, StringComparison.OrdinalIgnoreCase) ||
+            row.RunId is not > 0).ToArray();
+        if (invalidRows.Length > 0)
+        {
+            var reason = invalidRows
+                .Select(row => row.Reason)
+                .FirstOrDefault(reason => !string.IsNullOrWhiteSpace(reason));
+            return CurrentDataSourceBinding.Unresolved(
+                string.IsNullOrWhiteSpace(reason)
+                    ? "当前数据来源未完整绑定到批次"
+                    : reason,
+                cardCount);
+        }
+
+        var runIds = rows
+            .Select(row => row.RunId!.Value)
+            .Distinct()
+            .ToArray();
+        return runIds.Length == 1
+            ? new CurrentDataSourceBinding(CurrentDataSourceStates.Bound, runIds[0], cardCount, string.Empty)
+            : CurrentDataSourceBinding.Unresolved("当前数据来源包含多个批次，无法统一显示批次时间", cardCount);
+    }
+
     public async Task<CollectionRunComparison> CompareCurrentAsync(
         long runId,
         CancellationToken cancellationToken = default)

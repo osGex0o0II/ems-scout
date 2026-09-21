@@ -1,4 +1,5 @@
 using EmsScout.Application.Devices;
+using EmsScout.Application.Collection;
 using EmsScout.Application.Groups;
 using EmsScout.Application.Settings;
 using EmsScout.Domain;
@@ -8,7 +9,8 @@ namespace EmsScout.Application;
 public sealed class DashboardOverviewService(
     IDeviceReadRepository repository,
     IAreaGroupRepository areaGroupRepository,
-    AppSettingsService? settingsService = null)
+    AppSettingsService? settingsService = null,
+    ICollectionRunRepository? collectionRunRepository = null)
 {
     private static readonly string[] Buildings = ["1号", "2号", "3号", "4号", "5号", "6号"];
 
@@ -47,9 +49,14 @@ public sealed class DashboardOverviewService(
             .Select(device => device.CollectedAt!.Value)
             .ToArray();
         var sourceUpdatedAt = collectedAt.Length == 0 ? null as DateTimeOffset? : collectedAt.Max();
-        var totalMetricDetail = sourceUpdatedAt.HasValue
-            ? sourceUpdatedAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
-            : "暂无采集时间";
+        var batchCompletedAt = await ResolveBatchCompletedAtAsync(runId, cancellationToken).ConfigureAwait(false);
+        var totalMetricDetail = collectionRunRepository is not null
+            ? batchCompletedAt.HasValue
+                ? batchCompletedAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+                : "当前来源未确定"
+            : sourceUpdatedAt.HasValue
+                ? sourceUpdatedAt.Value.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+                : "暂无采集时间";
 
         var metrics = new[]
         {
@@ -69,6 +76,48 @@ public sealed class DashboardOverviewService(
             areaGroupContext.Error,
             realtimeStatus.Availability,
             realtimeStatus.StatusText);
+    }
+
+    private async Task<DateTimeOffset?> ResolveBatchCompletedAtAsync(
+        long? runId,
+        CancellationToken cancellationToken)
+    {
+        if (collectionRunRepository is null)
+        {
+            return null;
+        }
+
+        var runs = await collectionRunRepository.ListAsync(null, cancellationToken).ConfigureAwait(false);
+        CollectionRunRecord? run;
+        if (runId is > 0)
+        {
+            run = runs.FirstOrDefault(item => item.Id == runId.Value);
+        }
+        else
+        {
+            var binding = await collectionRunRepository
+                .GetCurrentDataSourceAsync(cancellationToken)
+                .ConfigureAwait(false);
+            run = binding.IsBound && binding.RunId is > 0
+                ? runs.FirstOrDefault(item => item.Id == binding.RunId.Value)
+                : null;
+
+            if (run is not null && !binding.Matches(run))
+            {
+                run = null;
+            }
+        }
+
+        if (run is null)
+        {
+            return null;
+        }
+
+        return StoredTimestamp.TryParse(run.CompletedAt, out var completedAt)
+            ? completedAt
+            : StoredTimestamp.TryParse(run.ImportedAt, out var importedAt)
+                ? importedAt
+                : null;
     }
 
     private static string Percent(double value)

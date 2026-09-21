@@ -3,6 +3,41 @@ namespace EmsScout.Tests;
 public sealed class HomePageUiContractTests
 {
     [Fact]
+    public void UnresolvedCurrentDataDoesNotBorrowLatestBatchTimestamp()
+    {
+        var root = LocateRepositoryRoot();
+        var viewModel = File.ReadAllText(Path.Combine(
+            root,
+            "native",
+            "src",
+            "EmsScout.Desktop",
+            "ViewModels",
+            "HomeViewModel.cs"));
+        var dataSource = File.ReadAllText(Path.Combine(
+            root,
+            "native",
+            "src",
+            "EmsScout.Desktop",
+            "ViewModels",
+            "DataSourceOption.cs"));
+
+        Assert.Contains("GetCurrentDataSourceAsync", viewModel);
+        Assert.Contains("当前来源未确定", dataSource);
+        Assert.DoesNotContain("DataSourceOption.Current(catalog.CurrentRun)", viewModel);
+        Assert.Contains("CurrentBatchTimestamp = SelectedDataSource?.Label ?? \"当前来源未确定\"", viewModel);
+
+        var dataViewModel = File.ReadAllText(Path.Combine(
+            root,
+            "native",
+            "src",
+            "EmsScout.Desktop",
+            "ViewModels",
+            "DataViewModel.cs"));
+        Assert.DoesNotContain("DataSourceOption.Current(catalog.CurrentRun)", dataViewModel);
+        Assert.Contains("GetCurrentDataSourceAsync", dataViewModel);
+    }
+
+    [Fact]
     public void HomePageUsesHistoryBatchSelectorAndLatestRefreshWithoutSourceStatusBlock()
     {
         var root = LocateRepositoryRoot();

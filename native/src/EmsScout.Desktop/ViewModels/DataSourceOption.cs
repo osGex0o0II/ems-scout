@@ -28,13 +28,13 @@ public sealed class DataSourceOption
         IsCurrent = true;
     }
 
-    public static DataSourceOption Current(CollectionRunRecord? latestRun)
+    public static DataSourceOption Current(CollectionRunRecord? boundRun)
     {
-        return latestRun is null
-            ? new DataSourceOption("暂无采集时间", "暂无批次")
+        return boundRun is null
+            ? new DataSourceOption("当前来源未确定", "当前数据")
             : new DataSourceOption(
-                FormatDateTime(latestRun.CompletedAt, latestRun.ImportedAt),
-                $"{latestRun.ScopeLabel} · {latestRun.CountLabel}");
+                FormatDateTime(boundRun.CompletedAt, boundRun.ImportedAt),
+                $"{boundRun.ScopeLabel} · {boundRun.CountLabel}");
     }
 
     public string Value { get; }

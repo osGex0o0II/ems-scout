@@ -890,8 +890,14 @@ public sealed class DataViewModel(
         var selectedRunId = SelectedDataSource?.RunId;
             var runs = await collectionRunRepository.ListAsync(null, cancellationToken).ConfigureAwait(true);
             var catalog = CollectionDataSourceCatalog.Build(runs);
+            var currentBinding = await collectionRunRepository
+                .GetCurrentDataSourceAsync(cancellationToken)
+                .ConfigureAwait(true);
+            var currentRun = currentBinding.IsBound
+                ? runs.FirstOrDefault(run => currentBinding.Matches(run))
+                : null;
             DataSources.Clear();
-        DataSources.Add(DataSourceOption.Current(catalog.CurrentRun));
+        DataSources.Add(DataSourceOption.Current(currentRun));
         foreach (var run in catalog.HistoricalRuns)
         {
             DataSources.Add(new DataSourceOption(run));

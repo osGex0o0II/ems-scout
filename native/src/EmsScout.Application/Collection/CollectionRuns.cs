@@ -6,6 +6,9 @@ public interface ICollectionRunRepository
         int? limit = 50,
         CancellationToken cancellationToken = default);
 
+    Task<CurrentDataSourceBinding> GetCurrentDataSourceAsync(
+        CancellationToken cancellationToken = default);
+
     Task<RunDeleteImpact> GetDeleteImpactAsync(
         long runId,
         CancellationToken cancellationToken = default);
@@ -31,6 +34,25 @@ public interface ICollectionRunRepository
     Task<CollectionRunDeleteResult> DeleteAsync(
         long runId,
         CancellationToken cancellationToken = default);
+}
+
+public sealed record CurrentDataSourceBinding(
+    string State,
+    long? RunId,
+    int CardCount,
+    string Reason)
+{
+    public bool IsBound =>
+        State.Equals(CurrentDataSourceStates.Bound, StringComparison.OrdinalIgnoreCase) &&
+        RunId is > 0;
+
+    public bool Matches(CollectionRunRecord run) =>
+        IsBound &&
+        RunId == run.Id &&
+        CardCount == run.CardCount;
+
+    public static CurrentDataSourceBinding Unresolved(string reason, int cardCount = 0) =>
+        new(CurrentDataSourceStates.Unresolved, null, cardCount, reason);
 }
 
 public sealed record CollectionRunRecord(

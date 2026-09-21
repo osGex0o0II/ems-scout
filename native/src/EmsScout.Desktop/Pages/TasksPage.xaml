@@ -225,10 +225,7 @@
                                         FontWeight="SemiBold"
                                         Foreground="{ThemeResource SystemFillColorSuccessBrush}"
                                         Text="{x:Bind ViewModel.CollectionCompletionText, Mode=OneWay}" />
-                                    <StackPanel Orientation="Horizontal" Spacing="14">
-                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.CollectionCompletedAtText, Mode=OneWay}" />
-                                        <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.CollectionDurationText, Mode=OneWay}" />
-                                    </StackPanel>
+                                    <TextBlock Foreground="{ThemeResource TextFillColorSecondaryBrush}" Text="{x:Bind ViewModel.CollectionCompletedAtText, Mode=OneWay}" />
                                 </StackPanel>
                             </Grid>
                         </Border>
