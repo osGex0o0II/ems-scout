@@ -376,6 +376,14 @@ public sealed partial class HomeViewModel(
         navigationService.NavigateToData(row.NavigationRequest);
     }
 
+    public void OpenAreaGroupMetric(DataNavigationRequest? request)
+    {
+        if (request is not null)
+        {
+            navigationService.NavigateToData(request);
+        }
+    }
+
     public void OpenAreaGroups()
     {
         navigationService.NavigateToGroups();
@@ -453,9 +461,27 @@ public sealed class DashboardAreaGroupRow(DashboardAreaGroupSummary summary, lon
 
     public string AreaType { get; } = summary.AreaType;
 
-    public DataNavigationRequest NavigationRequest { get; } = string.IsNullOrWhiteSpace(summary.AreaType)
-        ? new DataNavigationRequest(AreaGroupId: summary.Id, RunId: runId)
-        : new DataNavigationRequest(AreaType: summary.AreaType, RunId: runId);
+    public DataNavigationRequest NavigationRequest { get; } = CreateRequest(summary, runId);
+
+    public DataNavigationRequest TotalNavigationRequest { get; } = CreateRequest(summary, runId);
+
+    public DataNavigationRequest OnlineNavigationRequest { get; } = CreateRequest(summary, runId, QuickFilter: "online");
+
+    public DataNavigationRequest OfflineNavigationRequest { get; } = CreateRequest(summary, runId, QuickFilter: "offline");
+
+    public DataNavigationRequest RunningNavigationRequest { get; } = CreateRequest(summary, runId, CommunicationState: "开机");
+
+    public DataNavigationRequest StoppedNavigationRequest { get; } = CreateRequest(summary, runId, CommunicationState: "关机");
+
+    public DataNavigationRequest ModeAbnormalNavigationRequest { get; } = CreateRequest(summary, runId, QuickFilter: "mode_abnormal");
+
+    public DataNavigationRequest TemperatureAbnormalNavigationRequest { get; } = CreateRequest(summary, runId, QuickFilter: "temperature_abnormal");
+
+    public DataNavigationRequest LockOnNavigationRequest { get; } = CreateRequest(summary, runId, RealtimeLock: "开启");
+
+    public DataNavigationRequest LockOffNavigationRequest { get; } = CreateRequest(summary, runId, RealtimeLock: "关闭");
+
+    public bool CanNavigateLock { get; } = IsRealtimeMetricsAvailable(summary);
 
     public string Total { get; } = summary.Total.ToString("N0");
 
@@ -507,5 +533,24 @@ public sealed class DashboardAreaGroupRow(DashboardAreaGroupSummary summary, lon
             DashboardRealtimeAvailability.Available or
             DashboardRealtimeAvailability.Partial or
             DashboardRealtimeAvailability.NotApplicable;
+    }
+
+    private static DataNavigationRequest CreateRequest(
+        DashboardAreaGroupSummary summary,
+        long? runId,
+        string QuickFilter = "",
+        string CommunicationState = "",
+        string RealtimeLock = "")
+    {
+        return new DataNavigationRequest(
+            CommunicationState: CommunicationState,
+            AreaType: string.IsNullOrWhiteSpace(summary.AreaType) ? "" : summary.AreaType,
+            AreaGroupId: string.IsNullOrWhiteSpace(summary.AreaType) ? summary.Id : null,
+            RunId: runId,
+            QuickFilter: QuickFilter,
+            NormalMode: summary.NormalMode,
+            TemperatureMin: summary.TemperatureMin,
+            TemperatureMax: summary.TemperatureMax,
+            RealtimeLock: RealtimeLock);
     }
 }

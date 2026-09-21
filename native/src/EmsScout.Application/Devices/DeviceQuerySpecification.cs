@@ -58,7 +58,14 @@ public static class DeviceQuerySpecification
                (excludedFacet == DeviceFilterFacet.RealtimeLock || MatchesRealtimeLock(row, query.RealtimeLock)) &&
                (excludedFacet == DeviceFilterFacet.RealtimeSystemType || MatchesRealtimeField(row, query.RealtimeSystemType, detail => detail.Field("系统类型"))) &&
                MatchesRealtimeText(row, query.RealtimeModbus, detail => detail.ModbusAddress) &&
-               DeviceHealthRules.MatchesQuickFilter(row, query.QuickFilter);
+               (DashboardAreaGroupMetricRules.IsDashboardMetric(query.QuickFilter)
+                   ? DashboardAreaGroupMetricRules.Matches(
+                       row,
+                       query.QuickFilter,
+                       query.NormalMode ?? DashboardAnomalySettings.Default.NormalMode,
+                       query.TemperatureMin ?? DashboardAnomalySettings.Default.TemperatureMin,
+                       query.TemperatureMax ?? DashboardAnomalySettings.Default.TemperatureMax)
+                   : DeviceHealthRules.MatchesQuickFilter(row, query.QuickFilter));
     }
 
     private static bool MatchesBuilding(DeviceRecord row, string? building)

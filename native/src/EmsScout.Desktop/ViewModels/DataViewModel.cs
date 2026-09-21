@@ -48,10 +48,16 @@ public sealed class DataViewModel(
     private DataFilterOption? _selectedFan;
     private DataFilterOption? _selectedSetTemperature;
     private DataFilterOption? _selectedRealtimeLock;
+    private string _navigationQuickFilter = string.Empty;
+    private string _navigationNormalMode = string.Empty;
+    private double? _navigationTemperatureMin;
+    private double? _navigationTemperatureMax;
+    private string _navigationRealtimeLock = string.Empty;
     private DataFilterOption? _selectedArea;
     private string _deviceNameText = string.Empty;
     private bool _isInitializing;
     private bool _suppressFilterSelectionChanges;
+    private bool _applyingNavigationRequest;
     private long _filterLoadVersion;
     private CancellationTokenSource? _filterLoadCancellation;
     private DataSourceOption? _selectedDataSource;
@@ -345,7 +351,15 @@ public sealed class DataViewModel(
     public DataFilterOption? SelectedRealtimeLock
     {
         get => _selectedRealtimeLock;
-        set => SetProperty(ref _selectedRealtimeLock, value);
+        set
+        {
+            if (SetProperty(ref _selectedRealtimeLock, value) &&
+                !_suppressFilterSelectionChanges &&
+                !_applyingNavigationRequest)
+            {
+                _navigationRealtimeLock = string.Empty;
+            }
+        }
     }
 
     public DataFilterOption? SelectedArea
@@ -634,6 +648,11 @@ public sealed class DataViewModel(
                 PageName: EmptyToNull(request.PageName),
                 AreaType: areaFilter.AreaType,
                 MonitorGroupIds: areaFilter.MonitorGroupIds,
+                QuickFilter: EmptyToNull(request.QuickFilter),
+                NormalMode: EmptyToNull(request.NormalMode),
+                TemperatureMin: request.TemperatureMin,
+                TemperatureMax: request.TemperatureMax,
+                RealtimeLock: EmptyToNull(request.RealtimeLock),
                 Limit: PageSize,
                 Offset: 0,
                 RunId: SelectedDataSource?.RunId),
@@ -898,6 +917,11 @@ public sealed class DataViewModel(
         }
 
         DeviceNameText = string.Empty;
+        _navigationQuickFilter = string.Empty;
+        _navigationNormalMode = string.Empty;
+        _navigationTemperatureMin = null;
+        _navigationTemperatureMax = null;
+        _navigationRealtimeLock = string.Empty;
         SelectedBuilding = BuildingOptions.FirstOrDefault();
         SelectedCommunication = CommunicationOptions.FirstOrDefault();
         SelectedFloor = FloorOptions.FirstOrDefault();
@@ -1085,7 +1109,14 @@ public sealed class DataViewModel(
             Mode: EmptyToNull(SelectedMode?.Value),
             Fan: EmptyToNull(SelectedFan?.Value),
             SetTemperature: EmptyToNull(SelectedSetTemperature?.Value),
-            RealtimeLock: EmptyToNull(SelectedRealtimeLock?.Value),
+            // A visible lock selection is the user's latest choice. Keep the
+            // hidden navigation value only as a fallback when the selected
+            // option is unavailable in the current snapshot.
+            RealtimeLock: EmptyToNull(SelectedRealtimeLock?.Value) ?? EmptyToNull(_navigationRealtimeLock),
+            QuickFilter: EmptyToNull(_navigationQuickFilter),
+            NormalMode: EmptyToNull(_navigationNormalMode),
+            TemperatureMin: _navigationTemperatureMin,
+            TemperatureMax: _navigationTemperatureMax,
             AreaType: areaFilter.AreaType,
             MonitorGroupIds: areaFilter.MonitorGroupIds,
             Limit: limit,
@@ -1123,24 +1154,38 @@ public sealed class DataViewModel(
 
     private void ApplyNavigationRequest(DataNavigationRequest request)
     {
-        DeviceNameText = request.SearchText;
-        if (request.RunId is not null)
+        _applyingNavigationRequest = true;
+        try
         {
-            SelectedDataSource = DataSources.FirstOrDefault(option => option.RunId == request.RunId)
-                ?? throw new InvalidOperationException($"历史批次 {request.RunId} 不可用，请重新选择数据来源。");
+            DeviceNameText = request.SearchText;
+            _navigationQuickFilter = request.QuickFilter ?? string.Empty;
+            _navigationNormalMode = request.NormalMode ?? string.Empty;
+            _navigationTemperatureMin = request.TemperatureMin;
+            _navigationTemperatureMax = request.TemperatureMax;
+            _navigationRealtimeLock = request.RealtimeLock ?? string.Empty;
+            if (request.RunId is not null)
+            {
+                SelectedDataSource = DataSources.FirstOrDefault(option => option.RunId == request.RunId)
+                    ?? throw new InvalidOperationException($"历史批次 {request.RunId} 不可用，请重新选择数据来源。");
+            }
+            SelectedBuilding = SelectOption(BuildingOptions, request.Building) ?? SelectedBuilding;
+            SelectedCommunication = SelectOption(CommunicationOptions, request.CommunicationState) ?? SelectedCommunication;
+            SelectedArea = request.AreaGroupId is null
+                ? SelectAreaOption(request.AreaType) ?? SelectedArea
+                : SelectOption(AreaOptions, $"group:{request.AreaGroupId.Value.ToString(CultureInfo.InvariantCulture)}") ?? SelectedArea;
+            SelectedRealtimeLock = SelectOption(RealtimeLockOptions, request.RealtimeLock) ?? SelectedRealtimeLock;
+            SelectedFloor = SelectOption(FloorOptions, request.Floor) ?? SelectedFloor;
+            SelectedPageName = SelectOption(PageNameOptions, request.PageName) ?? SelectedPageName;
+            SelectedZuo = SelectOption(ZuoOptions, request.Zuo) ?? SelectedZuo;
+            CoerceZuoSelectionForBuilding();
         }
-        SelectedBuilding = SelectOption(BuildingOptions, request.Building) ?? SelectedBuilding;
-        SelectedCommunication = SelectOption(CommunicationOptions, request.CommunicationState) ?? SelectedCommunication;
-        SelectedArea = request.AreaGroupId is null
-            ? SelectAreaOption(request.AreaType) ?? SelectedArea
-            : SelectOption(AreaOptions, $"group:{request.AreaGroupId.Value.ToString(CultureInfo.InvariantCulture)}") ?? SelectedArea;
-        SelectedFloor = SelectOption(FloorOptions, request.Floor) ?? SelectedFloor;
-        SelectedPageName = SelectOption(PageNameOptions, request.PageName) ?? SelectedPageName;
-        SelectedZuo = SelectOption(ZuoOptions, request.Zuo) ?? SelectedZuo;
-        CoerceZuoSelectionForBuilding();
+        finally
+        {
+            _applyingNavigationRequest = false;
+        }
     }
 
-    private static DataFilterOption? SelectOption(IEnumerable<DataFilterOption> options, string value)
+    private static DataFilterOption? SelectOption(IEnumerable<DataFilterOption> options, string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
         {

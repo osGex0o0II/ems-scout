@@ -63,7 +63,7 @@ public static class DashboardAreaGroupBuilder
             Priority: group.Priority,
             MemberCount: rules.Count,
             Total: matches.Length,
-            Online: matches.Count(device => device.CommunicationState is DeviceCommunicationState.Running or DeviceCommunicationState.Stopped),
+            Online: matches.Count(device => DashboardAreaGroupMetricRules.Matches(device, "online", anomalySettings.NormalMode, anomalySettings.TemperatureMin, anomalySettings.TemperatureMax)),
             Offline: matches.Count(device => device.CommunicationState == DeviceCommunicationState.Offline),
             Unknown: matches.Count(device => device.CommunicationState == DeviceCommunicationState.Unknown),
             Running: matches.Count(device => device.CommunicationState == DeviceCommunicationState.Running),
@@ -72,17 +72,16 @@ public static class DashboardAreaGroupBuilder
                 .Select(device => (device.Building, device.Floor, device.SubArea))
                 .Distinct()
                 .Count(),
-            ModeAbnormal: onlineMatches.Count(device =>
-                !string.IsNullOrWhiteSpace(device.Mode) &&
-                !string.Equals(device.Mode.Trim(), anomalySettings.NormalMode, StringComparison.OrdinalIgnoreCase)),
-            TemperatureAbnormal: onlineMatches.Count(device =>
-                DeviceTemperatureRules.TryRead(device.SetTemperature, out var temperature) &&
-                (temperature < anomalySettings.TemperatureMin || temperature > anomalySettings.TemperatureMax)),
-            LockOn: realtimeDevices.Count(device => device.Realtime?.LockStateValid == true && device.Realtime.LockState == "开启"),
-            LockOff: realtimeDevices.Count(device => device.Realtime?.LockStateValid == true && device.Realtime.LockState == "关闭"),
+            ModeAbnormal: matches.Count(device => DashboardAreaGroupMetricRules.Matches(device, "mode_abnormal", anomalySettings.NormalMode, anomalySettings.TemperatureMin, anomalySettings.TemperatureMax)),
+            TemperatureAbnormal: matches.Count(device => DashboardAreaGroupMetricRules.Matches(device, "temperature_abnormal", anomalySettings.NormalMode, anomalySettings.TemperatureMin, anomalySettings.TemperatureMax)),
+            LockOn: matches.Count(device => DashboardAreaGroupMetricRules.Matches(device, "lock_on", anomalySettings.NormalMode, anomalySettings.TemperatureMin, anomalySettings.TemperatureMax)),
+            LockOff: matches.Count(device => DashboardAreaGroupMetricRules.Matches(device, "lock_off", anomalySettings.NormalMode, anomalySettings.TemperatureMin, anomalySettings.TemperatureMax)),
             AreaType: string.Empty,
             RealtimeAvailability: realtimeStatus.Availability,
-            RealtimeStatusText: realtimeStatus.StatusText);
+            RealtimeStatusText: realtimeStatus.StatusText,
+            NormalMode: anomalySettings.NormalMode,
+            TemperatureMin: anomalySettings.TemperatureMin,
+            TemperatureMax: anomalySettings.TemperatureMax);
     }
 
     private static int PriorityRank(string priority)

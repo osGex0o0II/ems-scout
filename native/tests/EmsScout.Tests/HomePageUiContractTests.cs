@@ -1,7 +1,30 @@
+using System.Text.RegularExpressions;
+
 namespace EmsScout.Tests;
 
 public sealed class HomePageUiContractTests
 {
+    [Fact]
+    public void AreaGroupMetricValuesNavigateWithTheirSpecificFilterRequest()
+    {
+        var root = LocateRepositoryRoot();
+        var xaml = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "HomePage.xaml"));
+        var codeBehind = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "Pages", "HomePage.xaml.cs"));
+        var viewModel = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "HomeViewModel.cs"));
+
+        Assert.Equal(18, Regex.Matches(xaml, "AreaGroupMetric_Click").Count);
+        Assert.Contains("OnlineNavigationRequest", xaml);
+        Assert.Contains("ModeAbnormalNavigationRequest", xaml);
+        Assert.Contains("TemperatureAbnormalNavigationRequest", xaml);
+        Assert.Contains("LockOnNavigationRequest", xaml);
+        Assert.Contains("LockOffNavigationRequest", xaml);
+        Assert.Contains("OpenAreaGroupMetric", codeBehind);
+        Assert.Contains("QuickFilter: \"mode_abnormal\"", viewModel);
+        Assert.Contains("QuickFilter: \"temperature_abnormal\"", viewModel);
+        Assert.Contains("RealtimeLock: \"开启\"", viewModel);
+        Assert.Contains("RealtimeLock: \"关闭\"", viewModel);
+    }
+
     [Fact]
     public void UnresolvedCurrentDataDoesNotBorrowLatestBatchTimestamp()
     {

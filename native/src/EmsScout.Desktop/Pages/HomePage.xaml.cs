@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Navigation;
+using EmsScout.Desktop.Services;
 using EmsScout.Desktop.ViewModels;
 
 namespace EmsScout.Desktop.Pages;
@@ -78,6 +79,14 @@ public sealed partial class HomePage : Page
     private void AreaGroups_ItemClick(object sender, ItemClickEventArgs e)
     {
         ViewModel.OpenAreaGroup(e.ClickedItem as DashboardAreaGroupRow);
+    }
+
+    private void AreaGroupMetric_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is Button button && button.Tag is DataNavigationRequest request)
+        {
+            ViewModel.OpenAreaGroupMetric(request);
+        }
     }
 
     private void OpenAreaGroups_Click(object sender, RoutedEventArgs e)

@@ -19,7 +19,12 @@ public sealed record DataNavigationRequest(
     string PageName = "",
     string Zuo = "",
     long? AreaGroupId = null,
-    long? RunId = null)
+    long? RunId = null,
+    string QuickFilter = "",
+    string NormalMode = "",
+    double? TemperatureMin = null,
+    double? TemperatureMax = null,
+    string RealtimeLock = "")
 {
     public static DataNavigationRequest From(DeviceNavigationTarget target)
     {

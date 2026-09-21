@@ -274,15 +274,15 @@
                                                 TextTrimming="CharacterEllipsis"
                                                 ToolTipService.ToolTip="{x:Bind Description}" />
                                         </StackPanel>
-                                        <TextBlock Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold" Text="{x:Bind Total}" />
-                                        <TextBlock Grid.Column="2" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource SystemFillColorSuccessBrush}" FontWeight="SemiBold" Text="{x:Bind Online}" />
-                                        <TextBlock Grid.Column="3" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource SystemFillColorCriticalBrush}" FontWeight="SemiBold" Text="{x:Bind Offline}" />
-                                        <TextBlock Grid.Column="4" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource SystemFillColorSuccessBrush}" FontWeight="SemiBold" Text="{x:Bind Running}" />
-                                        <TextBlock Grid.Column="5" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold" Text="{x:Bind Stopped}" />
-                                        <TextBlock Grid.Column="6" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource SystemFillColorCautionBrush}" FontWeight="SemiBold" Text="{x:Bind ModeAbnormal}" ToolTipService.ToolTip="{x:Bind RealtimeStatusText}" />
-                                        <TextBlock Grid.Column="7" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource SystemFillColorCautionBrush}" FontWeight="SemiBold" Text="{x:Bind TemperatureAbnormal}" ToolTipService.ToolTip="{x:Bind RealtimeStatusText}" />
-                                        <TextBlock Grid.Column="8" HorizontalAlignment="Right" VerticalAlignment="Center" Foreground="{ThemeResource SystemFillColorSuccessBrush}" FontWeight="SemiBold" Text="{x:Bind LockOn}" ToolTipService.ToolTip="{x:Bind RealtimeStatusText}" />
-                                        <TextBlock Grid.Column="9" HorizontalAlignment="Right" VerticalAlignment="Center" FontWeight="SemiBold" Text="{x:Bind LockOff}" ToolTipService.ToolTip="{x:Bind RealtimeStatusText}" />
+                                        <Button Grid.Column="1" Style="{StaticResource AreaGroupMetricButtonStyle}" Content="{x:Bind Total}" Tag="{x:Bind TotalNavigationRequest}" Click="AreaGroupMetric_Click" AutomationProperties.Name="查看设备筛选结果" />
+                                        <Button Grid.Column="2" Style="{StaticResource AreaGroupMetricButtonStyle}" Foreground="{ThemeResource SystemFillColorSuccessBrush}" Content="{x:Bind Online}" Tag="{x:Bind OnlineNavigationRequest}" Click="AreaGroupMetric_Click" AutomationProperties.Name="查看在线筛选结果" />
+                                        <Button Grid.Column="3" Style="{StaticResource AreaGroupMetricButtonStyle}" Foreground="{ThemeResource SystemFillColorCriticalBrush}" Content="{x:Bind Offline}" Tag="{x:Bind OfflineNavigationRequest}" Click="AreaGroupMetric_Click" AutomationProperties.Name="查看离线筛选结果" />
+                                        <Button Grid.Column="4" Style="{StaticResource AreaGroupMetricButtonStyle}" Foreground="{ThemeResource SystemFillColorSuccessBrush}" Content="{x:Bind Running}" Tag="{x:Bind RunningNavigationRequest}" Click="AreaGroupMetric_Click" AutomationProperties.Name="查看开机筛选结果" />
+                                        <Button Grid.Column="5" Style="{StaticResource AreaGroupMetricButtonStyle}" Content="{x:Bind Stopped}" Tag="{x:Bind StoppedNavigationRequest}" Click="AreaGroupMetric_Click" AutomationProperties.Name="查看关机筛选结果" />
+                                        <Button Grid.Column="6" Style="{StaticResource AreaGroupMetricButtonStyle}" Foreground="{ThemeResource SystemFillColorCautionBrush}" Content="{x:Bind ModeAbnormal}" Tag="{x:Bind ModeAbnormalNavigationRequest}" Click="AreaGroupMetric_Click" AutomationProperties.Name="查看模式异常筛选结果" />
+                                        <Button Grid.Column="7" Style="{StaticResource AreaGroupMetricButtonStyle}" Foreground="{ThemeResource SystemFillColorCautionBrush}" Content="{x:Bind TemperatureAbnormal}" Tag="{x:Bind TemperatureAbnormalNavigationRequest}" Click="AreaGroupMetric_Click" AutomationProperties.Name="查看温度异常筛选结果" />
+                                        <Button Grid.Column="8" Style="{StaticResource AreaGroupMetricButtonStyle}" Foreground="{ThemeResource SystemFillColorSuccessBrush}" Content="{x:Bind LockOn}" Tag="{x:Bind LockOnNavigationRequest}" Click="AreaGroupMetric_Click" IsEnabled="{x:Bind CanNavigateLock}" AutomationProperties.Name="查看集控锁开启筛选结果" />
+                                        <Button Grid.Column="9" Style="{StaticResource AreaGroupMetricButtonStyle}" Content="{x:Bind LockOff}" Tag="{x:Bind LockOffNavigationRequest}" Click="AreaGroupMetric_Click" IsEnabled="{x:Bind CanNavigateLock}" AutomationProperties.Name="查看集控锁关闭筛选结果" />
                                         <StackPanel Grid.Column="10" HorizontalAlignment="Right" VerticalAlignment="Center" Orientation="Horizontal" Spacing="5">
                                             <TextBlock Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}" Text="查看设备" />
                                             <FontIcon Foreground="{ThemeResource TextFillColorSecondaryBrush}" Glyph="&#xE76C;" />
@@ -350,39 +350,39 @@
                                             </Grid.ColumnDefinitions>
                                             <StackPanel HorizontalAlignment="Center" Spacing="0">
                                                 <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="设备" />
-                                                <TextBlock FontWeight="SemiBold" Text="{x:Bind Total}" />
+                                                <Button Style="{StaticResource AreaGroupMetricButtonStyle}" Content="{x:Bind Total}" Tag="{x:Bind TotalNavigationRequest}" Click="AreaGroupMetric_Click" AutomationProperties.Name="查看设备筛选结果" />
                                             </StackPanel>
                                             <StackPanel Grid.Column="1" HorizontalAlignment="Center" Spacing="0">
                                                 <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="在线" />
-                                                <TextBlock Foreground="{ThemeResource SystemFillColorSuccessBrush}" FontWeight="SemiBold" Text="{x:Bind Online}" />
+                                                <Button Style="{StaticResource AreaGroupMetricButtonStyle}" Foreground="{ThemeResource SystemFillColorSuccessBrush}" Content="{x:Bind Online}" Tag="{x:Bind OnlineNavigationRequest}" Click="AreaGroupMetric_Click" AutomationProperties.Name="查看在线筛选结果" />
                                             </StackPanel>
                                             <StackPanel Grid.Column="2" HorizontalAlignment="Center" Spacing="0">
                                                 <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="离线" />
-                                                <TextBlock Foreground="{ThemeResource SystemFillColorCriticalBrush}" FontWeight="SemiBold" Text="{x:Bind Offline}" />
+                                                <Button Style="{StaticResource AreaGroupMetricButtonStyle}" Foreground="{ThemeResource SystemFillColorCriticalBrush}" Content="{x:Bind Offline}" Tag="{x:Bind OfflineNavigationRequest}" Click="AreaGroupMetric_Click" AutomationProperties.Name="查看离线筛选结果" />
                                             </StackPanel>
                                             <StackPanel Grid.Column="3" HorizontalAlignment="Center" Spacing="0">
                                                 <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="开机" />
-                                                <TextBlock Foreground="{ThemeResource SystemFillColorSuccessBrush}" FontWeight="SemiBold" Text="{x:Bind Running}" />
+                                                <Button Style="{StaticResource AreaGroupMetricButtonStyle}" Foreground="{ThemeResource SystemFillColorSuccessBrush}" Content="{x:Bind Running}" Tag="{x:Bind RunningNavigationRequest}" Click="AreaGroupMetric_Click" AutomationProperties.Name="查看开机筛选结果" />
                                             </StackPanel>
                                             <StackPanel Grid.Column="4" HorizontalAlignment="Center" Spacing="0">
                                                 <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="关机" />
-                                                <TextBlock FontWeight="SemiBold" Text="{x:Bind Stopped}" />
+                                                <Button Style="{StaticResource AreaGroupMetricButtonStyle}" Content="{x:Bind Stopped}" Tag="{x:Bind StoppedNavigationRequest}" Click="AreaGroupMetric_Click" AutomationProperties.Name="查看关机筛选结果" />
                                             </StackPanel>
                                             <StackPanel Grid.Column="5" HorizontalAlignment="Center" Spacing="0">
                                                 <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="模式异常" />
-                                                <TextBlock Foreground="{ThemeResource SystemFillColorCautionBrush}" FontWeight="SemiBold" Text="{x:Bind ModeAbnormal}" ToolTipService.ToolTip="{x:Bind RealtimeStatusText}" />
+                                                <Button Style="{StaticResource AreaGroupMetricButtonStyle}" Foreground="{ThemeResource SystemFillColorCautionBrush}" Content="{x:Bind ModeAbnormal}" Tag="{x:Bind ModeAbnormalNavigationRequest}" Click="AreaGroupMetric_Click" AutomationProperties.Name="查看模式异常筛选结果" />
                                             </StackPanel>
                                             <StackPanel Grid.Column="6" HorizontalAlignment="Center" Spacing="0">
                                                 <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="温度异常" />
-                                                <TextBlock Foreground="{ThemeResource SystemFillColorCautionBrush}" FontWeight="SemiBold" Text="{x:Bind TemperatureAbnormal}" ToolTipService.ToolTip="{x:Bind RealtimeStatusText}" />
+                                                <Button Style="{StaticResource AreaGroupMetricButtonStyle}" Foreground="{ThemeResource SystemFillColorCautionBrush}" Content="{x:Bind TemperatureAbnormal}" Tag="{x:Bind TemperatureAbnormalNavigationRequest}" Click="AreaGroupMetric_Click" AutomationProperties.Name="查看温度异常筛选结果" />
                                             </StackPanel>
                                             <StackPanel Grid.Column="7" HorizontalAlignment="Center" Spacing="0">
                                                 <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="集控锁开" />
-                                                <TextBlock Foreground="{ThemeResource SystemFillColorSuccessBrush}" FontWeight="SemiBold" Text="{x:Bind LockOn}" ToolTipService.ToolTip="{x:Bind RealtimeStatusText}" />
+                                                <Button Style="{StaticResource AreaGroupMetricButtonStyle}" Foreground="{ThemeResource SystemFillColorSuccessBrush}" Content="{x:Bind LockOn}" Tag="{x:Bind LockOnNavigationRequest}" Click="AreaGroupMetric_Click" IsEnabled="{x:Bind CanNavigateLock}" AutomationProperties.Name="查看集控锁开启筛选结果" />
                                             </StackPanel>
                                             <StackPanel Grid.Column="8" HorizontalAlignment="Center" Spacing="0">
                                                 <TextBlock FontSize="12" Foreground="{ThemeResource TextFillColorTertiaryBrush}" Text="集控锁关" />
-                                                <TextBlock FontWeight="SemiBold" Text="{x:Bind LockOff}" ToolTipService.ToolTip="{x:Bind RealtimeStatusText}" />
+                                                <Button Style="{StaticResource AreaGroupMetricButtonStyle}" Content="{x:Bind LockOff}" Tag="{x:Bind LockOffNavigationRequest}" Click="AreaGroupMetric_Click" IsEnabled="{x:Bind CanNavigateLock}" AutomationProperties.Name="查看集控锁关闭筛选结果" />
                                             </StackPanel>
                                         </Grid>
                                     </Grid>

@@ -48,6 +48,18 @@
                 <Setter Property="BorderThickness" Value="1" />
             </Style>
 
+            <Style x:Key="AreaGroupMetricButtonStyle" TargetType="Button">
+                <Setter Property="Background" Value="Transparent" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="MinWidth" Value="0" />
+                <Setter Property="MinHeight" Value="0" />
+                <Setter Property="HorizontalContentAlignment" Value="Right" />
+                <Setter Property="VerticalContentAlignment" Value="Center" />
+                <Setter Property="FontWeight" Value="SemiBold" />
+                <Setter Property="ToolTipService.ToolTip" Value="点击查看对应筛选结果" />
+            </Style>
+
             <Style x:Key="EditorActionButtonStyle" TargetType="Button" BasedOn="{StaticResource ToolbarButtonStyle}">
                 <Setter Property="Width" Value="120" />
                 <Setter Property="MinHeight" Value="32" />

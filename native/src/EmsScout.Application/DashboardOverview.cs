@@ -43,7 +43,10 @@ public sealed record DashboardAreaGroupSummary(
     int LockOff,
     string AreaType = "",
     DashboardRealtimeAvailability RealtimeAvailability = DashboardRealtimeAvailability.NotApplicable,
-    string RealtimeStatusText = "")
+    string RealtimeStatusText = "",
+    string NormalMode = "制冷",
+    double TemperatureMin = 22,
+    double TemperatureMax = 26)
 {
     public int Attention => Offline + Unknown;
 }
