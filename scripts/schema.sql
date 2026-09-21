@@ -87,9 +87,28 @@ CREATE TABLE IF NOT EXISTS monitor_groups (
     description TEXT NOT NULL DEFAULT '',
     priority TEXT NOT NULL DEFAULT '重点',
     enabled INTEGER NOT NULL DEFAULT 1,
+    group_key TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60)),
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f', 'now', 'localtime') || printf('%+.2d:%02d', CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 3600 AS INTEGER), abs(CAST((strftime('%s','now','localtime') - strftime('%s','now')) / 60 AS INTEGER)) % 60))
 );
+
+CREATE TABLE IF NOT EXISTS area_group_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_id INTEGER NOT NULL,
+    rule_order INTEGER NOT NULL DEFAULT 0,
+    building TEXT NOT NULL,
+    zuo TEXT NOT NULL DEFAULT '-',
+    floor_label TEXT NOT NULL DEFAULT '',
+    floor_value REAL,
+    match_mode TEXT NOT NULL,
+    keywords TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(group_id) REFERENCES monitor_groups(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_area_group_rules_group_order
+    ON area_group_rules(group_id, rule_order, id);
 
 CREATE TABLE IF NOT EXISTS collection_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
