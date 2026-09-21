@@ -159,7 +159,29 @@ public sealed partial class SqliteDeviceReadRepository(
         var rows = await LoadDeviceRowsAsync(connection, source, runWhereSql, runParameters, annotations, cancellationToken).ConfigureAwait(false);
         var realtimeBuildings = ResolveRealtimeBuildings(candidateQuery, rows, groupIds.Count > 0 ? groupRules : null);
         var realtimeSet = await LoadRealtimeDetailsAsync(connection, source, query.RunId, realtimeBuildings, cancellationToken).ConfigureAwait(false);
-        rows = AttachRealtimeRows(rows, realtimeSet, overrides);
+        // SQL determines the requested provenance scope, but must not hide another
+        // device that owns an exact match or makes a name fallback ambiguous.
+        var visibleIds = rows.Select(row => row.Id).ToHashSet();
+        if (realtimeSet.Rows.Count > 0 && realtimeBuildings.Count > 0)
+        {
+            var identityQuery = new DeviceQuery(Building: query.Building, RunId: query.RunId);
+            var (identityWhere, identityParameters) = BuildWhereClause(identityQuery, source);
+            if (identityWhere != runWhereSql)
+            {
+                var parameters = new Dictionary<string, object>(identityParameters);
+                var buildingParameters = realtimeBuildings.Select((building, index) =>
+                {
+                    var key = "$identity_building_" + index.ToString(CultureInfo.InvariantCulture);
+                    parameters[key] = building;
+                    return key;
+                }).ToArray();
+                identityWhere += (identityWhere.Length == 0 ? "WHERE " : " AND ") +
+                    $"s.building IN ({string.Join(",", buildingParameters)})";
+                rows = await LoadDeviceRowsAsync(connection, source, identityWhere, parameters, annotations, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        rows = AttachRealtimeRows(rows, realtimeSet, overrides)
+            .Where(row => row.IsVirtual || visibleIds.Contains(row.Id)).ToList();
         rows = AttachAreaGroups(rows, allEnabledRuleGroups, preparedAllEnabledRuleGroups)
             .Where(row => DeviceQueryVisibility.ShouldInclude(row, query))
             .ToList();
@@ -176,6 +198,9 @@ public sealed partial class SqliteDeviceReadRepository(
 
         return new FilterDeviceSnapshot(rows.Select(FreezeRow).ToImmutableArray(), realtimeSet.Rows.Count, realtimeSet.UnmatchedRealtimeRows, realtimeSet.StatusText)
         {
+            AreaGroups = allEnabledRuleGroups.Select(group => new DeviceAreaGroupOption(
+                group.GroupId, group.Name, rows.Count(row =>
+                    AreaGroupRuleMatcher.MatchesAny(row, preparedAllEnabledRuleGroups[group.GroupId])))).ToImmutableArray(),
             IsCacheable = !realtimeSet.IsTransientFailure
         };
     }
@@ -1417,6 +1442,14 @@ public sealed partial class SqliteDeviceReadRepository(
             manualMatches[target.Id] = new ManualRealtimeMatch(detail, matchOverride);
         }
 
+        var exactMatches = new Dictionary<long, RealtimeDetailRecord>();
+        foreach (var row in rows.Where(row => !manualMatches.ContainsKey(row.Id)))
+        {
+            var exact = realtimeSet.TakeExact(RealtimeKeyBuilder.ExactKey(
+                row.Building, row.Floor, row.SubArea, row.PageName, row.Name));
+            if (exact is not null) exactMatches[row.Id] = exact;
+        }
+
         var attached = new List<DeviceRecord>(rows.Count + virtualRows.Count);
         foreach (var row in rows)
         {
@@ -1426,20 +1459,16 @@ public sealed partial class SqliteDeviceReadRepository(
                 continue;
             }
 
-            var exact = realtimeSet.TakeExact(RealtimeKeyBuilder.ExactKey(
-                row.Building,
-                row.Floor,
-                row.SubArea,
-                row.PageName,
-                row.Name));
-            if (exact is not null)
+            if (exactMatches.TryGetValue(row.Id, out var exact))
             {
                 var matchOverride = overrides.Find(exact);
                 attached.Add(ApplyRealtime(row, exact, AutomaticMatchKind(matchOverride, "exact"), matchOverride));
                 continue;
             }
 
-            var byNameDetail = realtimeSet.UniqueByName(RealtimeKeyBuilder.NameKey(row.Building, row.Name));
+            var nameKey = RealtimeKeyBuilder.NameKey(row.Building, row.Name);
+            var byNameDetail = byName.TryGetValue(nameKey, out var names) && names.Count == 1
+                ? realtimeSet.UniqueByName(nameKey) : null;
             if (byNameDetail is not null)
             {
                 var matchOverride = overrides.Find(byNameDetail);
@@ -1706,6 +1735,7 @@ public sealed partial class SqliteDeviceReadRepository(
     {
         public SnapshotKey? Key { get; init; }
         public bool IsCacheable { get; init; } = true;
+        public ImmutableArray<DeviceAreaGroupOption> AreaGroups { get; init; } = [];
     }
 
     private sealed record EnabledAreaGroupRuleGroup(

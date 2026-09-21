@@ -5,6 +5,16 @@ namespace EmsScout.Tests;
 public sealed class CollectionDataSourceCatalogTests
 {
     [Fact]
+    public void MissingSnapshotIsAnExplicitErrorWhileCurrentRemainsSelectable()
+    {
+        var catalog = CollectionDataSourceCatalog.Build([Run(1, "2026-09-01", "completed", 2), Run(2, "2026-09-02", "needs_review", 3)]);
+        CollectionDataSourceCatalog.EnsureSnapshotAvailable(catalog, null);
+        CollectionDataSourceCatalog.EnsureSnapshotAvailable(catalog, 1);
+        CollectionDataSourceCatalog.EnsureSnapshotAvailable(catalog, 2);
+        Assert.Contains("999", Assert.Throws<InvalidOperationException>(() => CollectionDataSourceCatalog.EnsureSnapshotAvailable(catalog, 999)).Message);
+    }
+
+    [Fact]
     public void KeepsCurrentDatabaseSeparateWhenNewestRunFailsQualityGate()
     {
         var failedNewest = Run(24, "2026-09-08T10:00:00Z", "failed", 6471);
@@ -13,7 +23,7 @@ public sealed class CollectionDataSourceCatalogTests
         var result = CollectionDataSourceCatalog.Build([failedNewest, olderComplete]);
 
         Assert.Equal(21, result.CurrentRun!.Id);
-        Assert.DoesNotContain(result.HistoricalRuns, run => run.Id == result.CurrentRun.Id);
+        Assert.Equal(21, Assert.Single(result.HistoricalRuns).Id);
     }
 
     [Fact]
@@ -25,8 +35,7 @@ public sealed class CollectionDataSourceCatalogTests
         var result = CollectionDataSourceCatalog.Build([olderFull, newestPartial]);
 
         Assert.Equal(24, result.CurrentRun!.Id);
-        Assert.Single(result.HistoricalRuns);
-        Assert.Equal(21, result.HistoricalRuns[0].Id);
+        Assert.Equal([24L, 21L], result.HistoricalRuns.Select(run => run.Id));
     }
 
     [Fact]
@@ -39,7 +48,7 @@ public sealed class CollectionDataSourceCatalogTests
 
         Assert.Equal(24, result.CurrentRun!.Id);
         Assert.Equal("需复核", result.CurrentRun.StatusLabel);
-        Assert.Single(result.HistoricalRuns);
+        Assert.Equal([24L, 21L], result.HistoricalRuns.Select(run => run.Id));
     }
 
     [Fact]

@@ -134,7 +134,7 @@ public sealed class DashboardOverviewService(
             onlineRows
                 .Select(device => device.RealtimeUnavailableReason)
                 .FirstOrDefault(reason => !string.IsNullOrWhiteSpace(reason)));
-        var areaGroupsTask = LoadAreaGroupsAsync(inventoryRows, anomalySettings, cancellationToken);
+        var areaGroupsTask = LoadAreaGroupsAsync(inventoryRows, runId, anomalySettings, cancellationToken);
         var areaGroupContext = await areaGroupsTask.ConfigureAwait(false);
         var collectedAt = inventoryRows
             .Where(device => device.CollectedAt is not null)
@@ -260,12 +260,17 @@ public sealed class DashboardOverviewService(
 
     private async Task<DashboardAreaGroupContext> LoadAreaGroupsAsync(
         IReadOnlyList<DeviceRecord> devices,
+        long? runId,
         DashboardAnomalySettings anomalySettings,
         CancellationToken cancellationToken)
     {
         try
         {
-            var groupSet = await areaGroupRepository.LoadConfigurationAsync(cancellationToken).ConfigureAwait(false);
+            var groupSet = runId is null
+                ? await areaGroupRepository.LoadConfigurationAsync(cancellationToken).ConfigureAwait(false)
+                : repository is IAreaGroupSnapshotSource snapshotSource
+                    ? await snapshotSource.LoadHistoricalAreaConfigurationAsync(runId.Value, cancellationToken).ConfigureAwait(false)
+                    : new AreaGroupSet([], []);
             return new DashboardAreaGroupContext(
                 DashboardAreaGroupBuilder.Build(devices, groupSet, anomalySettings),
                 string.Empty);

@@ -19,4 +19,7 @@ public sealed record DeviceFilterOptions(
     IReadOnlyList<DeviceFilterOption>? RealtimeLocks = null,
     IReadOnlyList<DeviceFilterOption>? RealtimeSystemTypes = null,
     int UnmatchedCount = 0,
-    IReadOnlyDictionary<string, int>? AreaGroupCounts = null);
+    IReadOnlyDictionary<string, int>? AreaGroupCounts = null,
+    IReadOnlyList<DeviceAreaGroupOption>? AreaGroups = null);
+
+public sealed record DeviceAreaGroupOption(long GroupId, string Name, int Count);

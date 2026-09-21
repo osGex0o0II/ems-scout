@@ -119,7 +119,136 @@ function isPlaceholderCardName(cardOrName) {
   const value = cardOrName && typeof cardOrName === 'object'
     ? (cardOrName.name || cardOrName.sourceName)
     : cardOrName;
-  return /^0-0001-KT(?:#\d+)?$/.test(String(value || '').trim());
+  const name = String(value || '').trim();
+  return !name || /^0-0001-KT(?:#\d+)?$/.test(name);
+}
+
+function isKnownCommunicationState(value) {
+  return value === '开机' || value === '关机' || value === '离线';
+}
+
+function isCardStructurallyReady(card, options = {}) {
+  if (!card || isPlaceholderCardName(card)) return false;
+  if (!isKnownCommunicationState(card.comm)) return false;
+  if (!options.allowMissingIndicator && !String(card.indicator || '').trim()) return false;
+  if (card.comm === '离线') return card.switch === '-';
+  const switchMatchesComm = (card.comm === '开机' && card.switch === 'ON') ||
+    (card.comm === '关机' && card.switch === 'OFF');
+  return switchMatchesComm &&
+    Boolean(card.mode) && card.mode !== '-' &&
+    Boolean(card.fan) && card.fan !== '-' && card.fan !== '0' &&
+    isRealIndoor(card.indoor) && isValidSetTemp(card.setTemp);
+}
+
+function parseDuplicateEvidence(value) {
+  if (Array.isArray(value)) return { evidence: value, formatValid: true };
+  if (value === null || value === undefined || value === '') return { evidence: [], formatValid: true };
+  if (typeof value !== 'string' || !value.trim()) return { evidence: [], formatValid: typeof value === 'string' };
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? { evidence: parsed, formatValid: true }
+      : { evidence: [], formatValid: false };
+  } catch {
+    return { evidence: [], formatValid: false };
+  }
+}
+
+function normalizeDuplicateEvidence(value) {
+  return parseDuplicateEvidence(value).evidence;
+}
+
+function auditPageIdentityEvidence(cardsOrNames = [], duplicateNames = [], declaredUniqueCount = undefined) {
+  const values = Array.isArray(cardsOrNames) ? cardsOrNames : [];
+  const names = values.map(value => String(
+    value && typeof value === 'object' ? value.name : value || '').trim());
+  const parsedEvidence = parseDuplicateEvidence(duplicateNames);
+  const evidence = parsedEvidence.evidence;
+  const nameCounts = new Map();
+  for (const name of names) nameCounts.set(name, (nameCounts.get(name) || 0) + 1);
+  const claimedNames = new Set();
+  const consumedIndexes = new Set();
+  let reduction = 0;
+  let evidenceValid = parsedEvidence.formatValid;
+
+  const requiredBases = new Set();
+  for (const [name, copies] of nameCounts) {
+    if (name && copies > 1) requiredBases.add(name);
+  }
+  const explicitSourceCounts = new Map();
+  for (const value of values) {
+    if (!value || typeof value !== 'object') continue;
+    const sourceName = String(value.sourceName || '').trim();
+    if (sourceName) explicitSourceCounts.set(sourceName, (explicitSourceCounts.get(sourceName) || 0) + 1);
+  }
+  for (const [sourceName, copies] of explicitSourceCounts) {
+    if (copies > 1) requiredBases.add(sourceName);
+  }
+
+  for (const item of evidence) {
+    const baseName = String(item && item.name || '').trim();
+    const copies = Number(item && item.copies);
+    if (!baseName || !Number.isInteger(copies) || copies < 2 || claimedNames.has(baseName)) {
+      evidenceValid = false;
+      continue;
+    }
+    claimedNames.add(baseName);
+    const labeledNames = Array.from({ length: copies }, (_, index) => `${baseName}#${index + 1}`);
+    const rawIndexes = [];
+    const numberedIndexes = [];
+    names.forEach((name, index) => {
+      if (name === baseName) rawIndexes.push(index);
+      else if (name.startsWith(`${baseName}#`) && /^\d+$/.test(name.slice(baseName.length + 1))) numberedIndexes.push(index);
+    });
+    const labeledComplete = rawIndexes.length === 0 && numberedIndexes.length === copies &&
+      labeledNames.every(name => nameCounts.get(name) === 1);
+    const legacyRawComplete = rawIndexes.length === copies && numberedIndexes.length === 0;
+    if (!labeledComplete && !legacyRawComplete) {
+      evidenceValid = false;
+      continue;
+    }
+    const memberIndexes = labeledComplete ? numberedIndexes : rawIndexes;
+    if (memberIndexes.some(index => consumedIndexes.has(index))) {
+      evidenceValid = false;
+      continue;
+    }
+    memberIndexes.forEach(index => consumedIndexes.add(index));
+    reduction += copies - 1;
+  }
+
+  if ([...requiredBases].some(baseName => !claimedNames.has(baseName))) evidenceValid = false;
+
+  const expectedUniqueCount = names.length - reduction;
+  const uniqueCountValid = declaredUniqueCount === null || declaredUniqueCount === undefined ||
+    (Number.isInteger(Number(declaredUniqueCount)) && Number(declaredUniqueCount) === expectedUniqueCount);
+  return { ok: evidenceValid && uniqueCountValid, expectedUniqueCount, evidenceValid, uniqueCountValid };
+}
+
+function derivePageIdentityMetadata(cards = [], duplicateNames = []) {
+  const rows = Array.isArray(cards) ? cards : [];
+  const evidence = normalizeDuplicateEvidence(duplicateNames);
+  const identityAudit = auditPageIdentityEvidence(rows, duplicateNames);
+  return {
+    count: rows.length,
+    rawCount: rows.length,
+    uniqueCount: identityAudit.expectedUniqueCount,
+    duplicateNames: evidence,
+    duplicateEvidenceComplete: evidence.length > 0 && identityAudit.evidenceValid,
+    identityEvidenceValid: identityAudit.evidenceValid,
+  };
+}
+
+function isStructurallyValidOfflinePage(cards, meta = {}) {
+  if (!Array.isArray(cards) || cards.length === 0) return false;
+  const names = cards.map(card => String(card && card.name || '').trim());
+  const rawCount = Number(meta.rawCount ?? meta.raw_count ?? cards.length);
+  const uniqueCount = Number(meta.uniqueCount ?? meta.unique_count ?? cards.length);
+  const duplicateEvidenceComplete = derivePageIdentityMetadata(cards, meta.duplicateNames ?? meta.duplicate_names).duplicateEvidenceComplete;
+  return names.every(name => !isPlaceholderCardName(name)) &&
+    new Set(names).size === names.length &&
+    Number.isFinite(rawCount) && Number.isFinite(uniqueCount) &&
+    (!(rawCount >= 3 && uniqueCount <= Math.max(1, Math.floor(rawCount * 0.5))) || duplicateEvidenceComplete) &&
+    cards.every(card => card.comm === '离线' && card.switch === '-');
 }
 
 function labelSamePageDuplicateCards(cards = []) {
@@ -127,7 +256,7 @@ function labelSamePageDuplicateCards(cards = []) {
   const groups = new Map();
   for (let index = 0; index < output.length; index++) {
     const card = output[index];
-    const baseName = sourceCardName(card);
+    const baseName = String(card.sourceName || card.name || '').trim();
     if (!baseName) continue;
     if (!groups.has(baseName)) groups.set(baseName, []);
     groups.get(baseName).push({ card, index });
@@ -178,7 +307,8 @@ function checkCardQuality(cards, meta = {}) {
   const n = cards.length;
   const rawCount = Number(meta.rawCount ?? meta.raw_count ?? n) || n;
   const uniqueCount = Number(meta.uniqueCount ?? meta.unique_count ?? n) || n;
-  const duplicateCollapse = rawCount >= 3 && uniqueCount <= Math.max(1, Math.floor(rawCount * 0.5));
+  const duplicateEvidenceComplete = derivePageIdentityMetadata(cards, meta.duplicateNames ?? meta.duplicate_names).duplicateEvidenceComplete;
+  const duplicateCollapse = rawCount >= 3 && uniqueCount <= Math.max(1, Math.floor(rawCount * 0.5)) && !duplicateEvidenceComplete;
   const placeholderNames = cards.filter(c => !c.name || isPlaceholderCardName(c)).length;
   const switchLoaded = cards.filter(c => c.switch !== '-').length;
   const withMode = cards.filter(c => c.mode !== '-').length;
@@ -187,7 +317,7 @@ function checkCardQuality(cards, meta = {}) {
   const withRealFan = cards.filter(c => c.fan !== '-' && c.fan !== '中' && c.fan !== '0').length;
   const withComm = cards.filter(c => c.comm).length;
   const withIndicator = cards.filter(c => c.indicator).length;
-  const withResolvedState = cards.filter(c => c.comm === '开机' || c.comm === '关机' || c.comm === '离线').length;
+  const withResolvedState = cards.filter(c => isKnownCommunicationState(c.comm)).length;
   const activeCards = cards.filter(c => c.comm === '开机' || c.comm === '关机');
   const activeCount = activeCards.length;
   const activeWithSwitch = activeCards.filter(c => c.switch === 'ON' || c.switch === 'OFF').length;
@@ -379,9 +509,7 @@ function classifyKnownMissingIndicatorPage(cards, meta = {}) {
     .filter(card =>
       !KNOWN_MISSING_INDICATOR_DEVICES.has(sourceCardName(card)) &&
       !intermittentUnresolved.includes(card))
-    .every(card =>
-      Boolean(card.indicator) &&
-      (card.comm === '开机' || card.comm === '关机' || card.comm === '离线'));
+    .every(card => isCardStructurallyReady(card));
   const namesComplete = names.every(name => name && !isPlaceholderCardName(name));
   const namesUnique = new Set(names).size === normalized.length;
   const eligible =
@@ -427,6 +555,11 @@ module.exports = {
   sourceCardName,
   labelSamePageDuplicateCards,
   isPlaceholderCardName,
+  isKnownCommunicationState,
+  isCardStructurallyReady,
+  isStructurallyValidOfflinePage,
+  derivePageIdentityMetadata,
+  auditPageIdentityEvidence,
   isPublic,
   classifyAreaType,
   checkCardQuality,

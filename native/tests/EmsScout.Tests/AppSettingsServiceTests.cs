@@ -1,4 +1,5 @@
 using EmsScout.Application.Settings;
+using System.Security.Cryptography;
 
 namespace EmsScout.Tests;
 
@@ -252,5 +253,57 @@ public sealed class AppSettingsServiceTests
         Assert.Equal("fade", loaded.PageTransitionStyle);
 
         Directory.Delete(tempDir, recursive: true);
+    }
+
+    [Fact]
+    public void ValidatedSaveRejectsAnExternalDataDirectoryWithoutChangingTheSettingsFile()
+    {
+        var fixture = Path.Combine(Path.GetTempPath(), "ems-scout-settings-tests", Guid.NewGuid().ToString("N"));
+        var workspace = Path.Combine(fixture, "workspace");
+        var outside = Path.Combine(fixture, "outside");
+        Directory.CreateDirectory(workspace);
+        Directory.CreateDirectory(outside);
+        var settingsPath = Path.Combine(fixture, "settings.json");
+        var service = new AppSettingsService(settingsPath);
+        service.Save(new AppSettings { Theme = "dark" });
+        var before = SHA256.HashData(File.ReadAllBytes(settingsPath));
+
+        var exception = Assert.Throws<InvalidOperationException>(() => service.SaveValidated(
+            new AppSettings { DataDirectory = outside, Theme = "light" },
+            workspace));
+
+        Assert.Contains("数据目录", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(before, SHA256.HashData(File.ReadAllBytes(settingsPath)));
+        Assert.Equal("dark", service.Current.Theme);
+        Directory.Delete(fixture, recursive: true);
+    }
+
+    [Fact]
+    public void RecoveryRepairsOnlyUnsafeDirectoriesAndPreservesOtherSettings()
+    {
+        var fixture = Path.Combine(Path.GetTempPath(), "ems-scout-settings-tests", Guid.NewGuid().ToString("N"));
+        var workspace = Path.Combine(fixture, "workspace");
+        Directory.CreateDirectory(workspace);
+        var settingsPath = Path.Combine(fixture, "settings.json");
+        var service = new AppSettingsService(settingsPath);
+        service.Save(new AppSettings
+        {
+            DataDirectory = Path.Combine(fixture, "external-data"),
+            ExportDirectory = Path.Combine(fixture, "external-export"),
+            Theme = "dark",
+            EdgeCdpPort = 9333,
+            CompactDataTable = false,
+        });
+
+        service.RecoverSafeDirectories(workspace);
+        var recovered = service.Load();
+
+        Assert.Equal("out", recovered.DataDirectory);
+        Assert.Equal("out/data-management-export", recovered.ExportDirectory);
+        Assert.Equal("dark", recovered.Theme);
+        Assert.Equal(9333, recovered.EdgeCdpPort);
+        Assert.False(recovered.CompactDataTable);
+        Assert.Null(AppSettingsValidator.Validate(recovered, workspace));
+        Directory.Delete(fixture, recursive: true);
     }
 }

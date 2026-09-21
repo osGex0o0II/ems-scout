@@ -18,11 +18,10 @@ if (-not $OutputRoot) {
 }
 
 $outputRootFull = Assert-NativePackageDirectoryIsSafe $OutputRoot
-$packageDirectory = Join-Path $outputRootFull $Version
-if (Test-Path -LiteralPath $packageDirectory) {
-    Remove-Item -LiteralPath $packageDirectory -Recurse -Force
+$finalDirectory = Join-Path $outputRootFull $Version
+if (Test-Path -LiteralPath $finalDirectory) {
+    throw "Package output already exists; choose a new version: $finalDirectory"
 }
-New-Item -ItemType Directory -Path $packageDirectory -Force | Out-Null
 
 $installed = Get-NativeInstalledPackage
 if ($null -ne $installed -and ([version]$installed.Version -ge $parsedVersion)) {
@@ -34,19 +33,24 @@ $buildOutput = "$(Join-Path $tempRoot 'build')\"
 $manifestPath = Join-Path $tempRoot 'Package.appxmanifest'
 $certificatePath = Join-Path $tempRoot 'EMS-Scout-signing.cer'
 $rootCertificatePath = Join-Path $tempRoot 'EMS-Scout-signing-root.cer'
-New-Item -ItemType Directory -Path $buildOutput -Force | Out-Null
 $nodeRuntime = (Get-Command node.exe -ErrorAction SilentlyContinue | Select-Object -First 1).Source
 if (-not $nodeRuntime) {
     throw 'Node.js runtime is required to build a functional EMS Scout package.'
 }
+if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+    throw '.NET SDK is required to build an EMS Scout package.'
+}
+$signing = Get-NativeSigningCertificate -Thumbprint $CertificateThumbprint -CreateDevelopmentCertificate:$CreateDevelopmentCertificate
+$certificate = $signing.Signer
+$packageDirectory = Join-Path $outputRootFull ('.staging-' + $Version + '-' + [guid]::NewGuid().ToString('N'))
 try {
+    New-Item -ItemType Directory -Path $buildOutput -Force | Out-Null
+    New-Item -ItemType Directory -Path $packageDirectory -Force | Out-Null
     New-NativeVersionedManifest `
         -SourceManifestPath (Join-Path $repositoryRoot 'native\src\EmsScout.Desktop\Package.appxmanifest') `
         -DestinationManifestPath $manifestPath `
         -Version $Version
 
-    $signing = Get-NativeSigningCertificate -Thumbprint $CertificateThumbprint -CreateDevelopmentCertificate:$CreateDevelopmentCertificate
-    $certificate = $signing.Signer
     Export-Certificate -Cert $certificate -FilePath $certificatePath -Type CERT | Out-Null
     if ($null -ne $signing.Root) {
         Export-Certificate -Cert $signing.Root -FilePath $rootCertificatePath -Type CERT | Out-Null
@@ -82,6 +86,7 @@ try {
     if ($null -eq $builtMainPackage) {
         throw "MSIX output was not generated under $buildOutput."
     }
+    Assert-NativeBuiltPackage -PackagePath $builtMainPackage.FullName -Version $Version -Platform $Platform -CertificateThumbprint $certificate.Thumbprint
 
     Copy-Item -LiteralPath $builtMainPackage.FullName -Destination $packageDirectory -Force
     Copy-Item -LiteralPath $certificatePath -Destination (Join-Path $packageDirectory 'EMS-Scout-signing.cer') -Force
@@ -125,9 +130,23 @@ try {
     }
     $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $packageDirectory 'package-manifest.json') -Encoding UTF8
     Read-NativePackageManifest $packageDirectory | Out-Null
-    Write-Output "Native package created: $packageDirectory"
+    foreach ($file in $manifest.Files) {
+        if ((Get-FileHash -LiteralPath (Join-Path $packageDirectory $file.Path) -Algorithm SHA256).Hash -ne $file.Sha256) {
+            throw "Package file hash mismatch: $($file.Path)"
+        }
+    }
+    # Directory.Move refuses an existing destination, including one created by a
+    # concurrent build after preflight. Staging resides on the same filesystem.
+    [IO.Directory]::Move($packageDirectory, $finalDirectory)
+    Write-Output "Native package created: $finalDirectory"
 } finally {
+    if (Test-Path -LiteralPath $packageDirectory) {
+        $stageFull = [IO.Path]::GetFullPath($packageDirectory)
+        if ((Split-Path $stageFull -Parent) -ne $outputRootFull -or (Split-Path $stageFull -Leaf) -notlike '.staging-*') { throw 'Unsafe staging cleanup path.' }
+        Remove-Item -LiteralPath $stageFull -Recurse -Force
+    }
     if (Test-Path -LiteralPath $tempRoot) {
+        if ((Split-Path ([IO.Path]::GetFullPath($tempRoot)) -Parent) -ne ([IO.Path]::GetTempPath()).TrimEnd('\')) { throw 'Unsafe temporary cleanup path.' }
         Remove-Item -LiteralPath $tempRoot -Recurse -Force
     }
 }

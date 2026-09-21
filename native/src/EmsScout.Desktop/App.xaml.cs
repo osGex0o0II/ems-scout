@@ -69,15 +69,45 @@ public partial class App : Microsoft.UI.Xaml.Application
         _mainInstance.Activated += MainInstance_Activated;
         try
         {
+            var pathService = Services.GetRequiredService<AppDataPathService>();
+            var settingsService = Services.GetRequiredService<AppSettingsService>();
+            var directoryError = AppSettingsValidator.ValidateDirectories(
+                settingsService.Current,
+                pathService.WorkspaceRoot);
+            if (directoryError is not null)
+            {
+                throw new InvalidOperationException(directoryError);
+            }
+
             await Services.GetRequiredService<SqliteSchemaMigrator>().MigrateAsync();
         }
         catch (Exception exception)
         {
             Debug.WriteLine("SQLite schema migration failed: " + exception);
-            _window = new StartupFailureWindow(exception);
+            var pathService = Services.GetRequiredService<AppDataPathService>();
+            var settingsService = Services.GetRequiredService<AppSettingsService>();
+            var canRecoverDirectories = AppSettingsValidator.ValidateDirectories(
+                settingsService.Current,
+                pathService.WorkspaceRoot) is not null;
+            _window = new StartupFailureWindow(
+                exception,
+                canRecoverDirectories ? RecoverSafeDirectoriesAndRetryAsync : null);
             _window.Activate();
             return;
         }
+        await OpenMainWindowAsync();
+    }
+
+    private async Task RecoverSafeDirectoriesAndRetryAsync()
+    {
+        var pathService = Services.GetRequiredService<AppDataPathService>();
+        Services.GetRequiredService<AppSettingsService>().RecoverSafeDirectories(pathService.WorkspaceRoot);
+        await Services.GetRequiredService<SqliteSchemaMigrator>().MigrateAsync();
+        await OpenMainWindowAsync();
+    }
+
+    private async Task OpenMainWindowAsync()
+    {
         _window = new MainWindow();
         _window.Activate();
         if (_window is MainWindow mainWindow)

@@ -44,6 +44,25 @@ public sealed class AppSettingsService
         _current = normalized;
     }
 
+    public void SaveValidated(AppSettings settings, string workspaceRoot)
+    {
+        var error = AppSettingsValidator.Validate(settings, workspaceRoot);
+        if (error is not null)
+        {
+            throw new InvalidOperationException(error);
+        }
+
+        Save(settings);
+    }
+
+    public void RecoverSafeDirectories(string workspaceRoot)
+    {
+        var recovered = Current;
+        recovered.DataDirectory = "out";
+        recovered.ExportDirectory = "out/data-management-export";
+        SaveValidated(recovered, workspaceRoot);
+    }
+
     public void Reset()
     {
         Save(new AppSettings());

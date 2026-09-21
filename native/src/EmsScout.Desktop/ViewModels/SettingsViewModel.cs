@@ -7,6 +7,7 @@ namespace EmsScout.Desktop.ViewModels;
 
 public sealed partial class SettingsViewModel(
     AppSettingsService settingsService,
+    AppDataPathService pathService,
     LocalLogCleanupService localLogCleanupService) : ObservableObject
 {
     public event EventHandler? SettingsApplied;
@@ -159,7 +160,15 @@ public sealed partial class SettingsViewModel(
         }
 
         var settings = ToSettings();
-        settingsService.Save(settings);
+        try
+        {
+            settingsService.SaveValidated(settings, pathService.WorkspaceRoot);
+        }
+        catch (InvalidOperationException exception)
+        {
+            StatusText = exception.Message;
+            return;
+        }
         Apply(settingsService.Current);
         StatusText = "设置已保存";
         SettingsApplied?.Invoke(this, EventArgs.Empty);
@@ -271,29 +280,14 @@ public sealed partial class SettingsViewModel(
 
     private static Color ParseColor(string? value, Color fallback)
     {
-        var candidate = value?.Trim();
-        if (candidate is null || (candidate.Length != 7 && candidate.Length != 9) || candidate[0] != '#')
-        {
-            return fallback;
-        }
-
-        try
-        {
-            var offset = candidate.Length == 9 ? 1 : 0;
-            var alpha = candidate.Length == 9 ? Convert.ToByte(candidate.Substring(1, 2), 16) : (byte)255;
-            var red = Convert.ToByte(candidate.Substring(1 + offset, 2), 16);
-            var green = Convert.ToByte(candidate.Substring(3 + offset, 2), 16);
-            var blue = Convert.ToByte(candidate.Substring(5 + offset, 2), 16);
-            return Color.FromArgb(alpha, red, green, blue);
-        }
-        catch (FormatException)
-        {
-            return fallback;
-        }
+        var decoded = HexColorCodec.Decode(
+            value,
+            new RgbaColor(fallback.A, fallback.R, fallback.G, fallback.B));
+        return Color.FromArgb(decoded.Alpha, decoded.Red, decoded.Green, decoded.Blue);
     }
 
-    private static string ToHex(Color color) =>
-        $"#{color.A:X2}{color.R:X2}{color.G:X2}{color.B:X2}";
+    private static string ToHex(Color color) => HexColorCodec.Encode(
+        new RgbaColor(color.A, color.R, color.G, color.B));
 
     private static int ClampToInt(double value, int minimum, int maximum)
     {
@@ -320,20 +314,19 @@ public sealed partial class SettingsViewModel(
 
     partial void OnOfflineStatusColorChanged(Color value)
     {
-        SelectedOfflineStatusColor = FindPreset(OfflineStatusColorOptions, value, 1);
+        SelectedOfflineStatusColor = FindPreset(OfflineStatusColorOptions, value);
     }
 
     partial void OnTemperatureWarningColorChanged(Color value)
     {
-        SelectedTemperatureWarningColor = FindPreset(TemperatureWarningColorOptions, value, 1);
+        SelectedTemperatureWarningColor = FindPreset(TemperatureWarningColorOptions, value);
     }
 
-    private static ColorPresetOption FindPreset(
+    private static ColorPresetOption? FindPreset(
         IReadOnlyList<ColorPresetOption> options,
-        Color value,
-        int fallbackIndex)
+        Color value)
     {
-        return options.FirstOrDefault(option => option.Color == value) ?? options[fallbackIndex];
+        return options.FirstOrDefault(option => option.Color == value);
     }
 
     private bool ValidateBeforeSave()
@@ -345,7 +338,7 @@ public sealed partial class SettingsViewModel(
             return false;
         }
 
-        var error = AppSettingsValidator.Validate(ToSettings());
+        var error = AppSettingsValidator.Validate(ToSettings(), pathService.WorkspaceRoot);
         if (error is not null)
         {
             StatusText = error;

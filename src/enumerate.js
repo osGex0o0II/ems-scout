@@ -4,7 +4,7 @@
 const { chromium } = require('playwright');
 const fs = require('fs');
 const path = require('path');
-const { BLDG_META, checkCardQuality, getZone, assessBuildingIdentity, labelSamePageDuplicateCards, classifyPersistentDeviceAnomalyPage, normalizeKnownSourceDefects, classifyKnownMissingIndicatorPage, isAcceptedCaptureQualityReason, isPlaceholderCardName } = require('./rules');
+const { BLDG_META, checkCardQuality, getZone, assessBuildingIdentity, labelSamePageDuplicateCards, classifyPersistentDeviceAnomalyPage, normalizeKnownSourceDefects, classifyKnownMissingIndicatorPage, isAcceptedCaptureQualityReason, isPlaceholderCardName, isStructurallyValidOfflinePage, derivePageIdentityMetadata } = require('./rules');
 const { validateEnumData, formatValidation } = require('./enum-validator');
 const { log: loggerLog, setLevel, setCategories, enableFileLog, close, LEVELS, CATEGORIES } = require('./logger');
 const { isAllowedEmsUrl, isAllowedCdpUrl, sanitizeUrlForDisplay } = require('./connection-policy');
@@ -177,7 +177,8 @@ function buildPartialSignature(cards = []) {
 }
 
 function isOfflineTemplateStable(cards, qc, prev = {}, elapsedMs = 0) {
-  if (!cards || cards.length < 2 || !qc || !qc.uniformTemplate || !qc.allOffline) {
+  if (!cards || cards.length < 2 || !qc || !qc.uniformTemplate || !qc.allOffline || qc.duplicateCollapse ||
+      !isStructurallyValidOfflinePage(cards, qc)) {
     return { accept: false, signature: '', rounds: 0 };
   }
   // Indicator hrefs can be refreshed independently of the offline state. Keep
@@ -353,7 +354,7 @@ async function adaptivePolling(page, extractCards, deadline, description) {
       const phCount = data.cards.filter(c => !c.name || isPlaceholderCardName(c)).length;
       // Non-template all-offline pages are a genuine comm state. Template-looking
       // offline pages require the stability window above before acceptance.
-      if (phCount === 0 && data.cards.every(c => c.comm === '离线') && !qc.uniformTemplate) {
+      if (phCount === 0 && isStructurallyValidOfflinePage(data.cards, data) && !qc.uniformTemplate) {
         loggerLog(LEVELS.DEBUG, 'QUALITY', `${description} all offline after ${Date.now()-startTime}ms: ${qc.details}`);
         data.qualityReason = 'all_offline';
         return { data, qc, quality, reason: 'all_offline' };
@@ -1003,10 +1004,11 @@ async function injectHelpers(page) {
 
         const labeled = labelDuplicateNames(cards);
 
+        const sourceUniqueCount = new Set(labeled.cards.map(card => String(card.sourceName || card.name || ''))).size;
         return {
           count: labeled.cards.length,
           rawCount: labeled.cards.length,
-          uniqueCount: labeled.cards.length,
+          uniqueCount: sourceUniqueCount,
           candidateCount: rawCardCount || labeled.cards.length,
           rejectedCount: rejectedCandidates.length,
           rejectedCandidates,
@@ -1112,15 +1114,15 @@ function pageFromData(pageName, data, extra = {}) {
   if (normalizedFieldCount > 0) {
     loggerLog(LEVELS.WARN, 'QUALITY', `${pageName} normalized out-of-range card fields: ${normalizedFieldCount}`);
   }
-  const normalizedData = { ...data, cards: normalizedCards };
   const duplicateNames = Array.isArray(data.duplicateNames) && data.duplicateNames.length
     ? data.duplicateNames
     : labeled.duplicateNames;
+  const identityMeta = derivePageIdentityMetadata(normalizedCards, duplicateNames);
+  const normalizedData = { ...data, cards: normalizedCards, duplicateNames };
   const qc = checkCardQuality(normalizedCards, normalizedData);
   const knownMissingIndicator = classifyKnownMissingIndicatorPage(normalizedCards, normalizedData);
   const persistentAnomaly = classifyPersistentDeviceAnomalyPage(normalizedCards, normalizedData);
-  const stableOfflineTemplate = normalizedCards.length > 0 &&
-    normalizedCards.every(c => c.comm === '离线') && qc.uniformTemplate;
+  const stableOfflineTemplate = isStructurallyValidOfflinePage(normalizedCards, normalizedData) && qc.uniformTemplate;
   const qualityReason = knownMissingIndicator.eligible
     ? (knownMissingIndicator.intermittent ? 'known_intermittent_indicator_missing' : 'known_source_indicator_missing')
     : (extra.qualityReason || data.qualityReason ||
@@ -1131,8 +1133,8 @@ function pageFromData(pageName, data, extra = {}) {
   return {
     page: pageName,
     count: normalizedCards.length,
-    rawCount: data.rawCount ?? normalizedCards.length,
-    uniqueCount: normalizedCards.length,
+    rawCount: data.rawCount ?? identityMeta.rawCount,
+    uniqueCount: data.uniqueCount ?? identityMeta.uniqueCount,
     candidateCount: data.candidateCount ?? normalizedCards.length,
     rejectedCount: data.rejectedCount ?? 0,
     rejectedCandidates: Array.isArray(data.rejectedCandidates) ? data.rejectedCandidates : [],
@@ -1160,7 +1162,9 @@ function auditCollectedOutput(output) {
           ? classifyPersistentDeviceAnomalyPage(cards, pageRow).eligible
           : (reason === 'known_source_indicator_missing' || reason === 'known_intermittent_indicator_missing')
             ? classifyKnownMissingIndicatorPage(cards, pageRow).eligible
-            : reason !== 'quality_pass' && isAcceptedCaptureQualityReason(reason);
+            : (reason === 'all_offline' || reason === 'offline_template_stable')
+              ? isStructurallyValidOfflinePage(cards, pageRow)
+              : reason !== 'quality_pass' && isAcceptedCaptureQualityReason(reason) && qc.placeholderNames === 0 && !qc.duplicateCollapse && qc.withResolvedState === cards.length;
         if (!qc.ok && !allowedNonPass) {
           // Generate specific quality reason based on what failed
           let specificReason = reason || 'missing_quality_reason';
@@ -3075,14 +3079,18 @@ async function main() {
   await browser.close();
 }
 
-main().catch(async e => {
-  if (ACTIVE_DIAG_INTERVAL) {
-    clearInterval(ACTIVE_DIAG_INTERVAL);
-    ACTIVE_DIAG_INTERVAL = null;
-  }
-  const detail = e && e.stack ? e.stack : String(e);
-  loggerLog(LEVELS.ERROR, 'CRASH', `RUN_FAILED context=${ACTIVE_CAPTURE_CONTEXT} ${detail}`);
-  close();
-  console.error(detail);
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch(async e => {
+    if (ACTIVE_DIAG_INTERVAL) {
+      clearInterval(ACTIVE_DIAG_INTERVAL);
+      ACTIVE_DIAG_INTERVAL = null;
+    }
+    const detail = e && e.stack ? e.stack : String(e);
+    loggerLog(LEVELS.ERROR, 'CRASH', `RUN_FAILED context=${ACTIVE_CAPTURE_CONTEXT} ${detail}`);
+    close();
+    console.error(detail);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { pageFromData, auditCollectedOutput, isOfflineTemplateStable };

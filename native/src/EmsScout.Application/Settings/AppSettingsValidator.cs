@@ -45,6 +45,44 @@ public static class AppSettingsValidator
         return null;
     }
 
+    public static string? Validate(AppSettings settings, string workspaceRoot)
+    {
+        var error = Validate(settings);
+        if (error is not null)
+        {
+            return error;
+        }
+
+        return ValidateDirectories(settings, workspaceRoot);
+    }
+
+    public static string? ValidateDirectories(AppSettings settings, string workspaceRoot)
+    {
+        try
+        {
+            PathSafety.ResolveDirectory(workspaceRoot, settings.DataDirectory);
+        }
+        catch (Exception exception) when (IsPathValidationException(exception))
+        {
+            return $"数据目录无效：{exception.Message}";
+        }
+
+        try
+        {
+            PathSafety.ResolveDirectory(workspaceRoot, settings.ExportDirectory);
+        }
+        catch (Exception exception) when (IsPathValidationException(exception))
+        {
+            return $"导出目录无效：{exception.Message}";
+        }
+
+        return null;
+    }
+
+    private static bool IsPathValidationException(Exception exception) =>
+        exception is InvalidOperationException or ArgumentException or NotSupportedException or
+            IOException or UnauthorizedAccessException or System.Security.SecurityException;
+
     private static bool IsEmsPath(string path)
     {
         var normalized = (path ?? string.Empty).TrimEnd('/');

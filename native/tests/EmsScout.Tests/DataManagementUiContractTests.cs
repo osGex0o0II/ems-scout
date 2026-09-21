@@ -347,11 +347,11 @@ public sealed class DataManagementUiContractTests
         var viewModelPath = Path.Combine(root, "native", "src", "EmsScout.Desktop", "ViewModels", "DataViewModel.cs");
         var source = File.ReadAllText(viewModelPath);
 
-        Assert.Contains("groupSet.Groups", source);
-        Assert.Contains("var value = $\"group:{group.Id.ToString", source);
+        Assert.Contains("groupSet?.Groups", source);
+        Assert.Contains("var value = $\"group:{group.GroupId.ToString", source);
         Assert.DoesNotContain("SystemKey.Equals(\"public\"", source);
         Assert.DoesNotContain("SystemKey.Equals(\"non_public\"", source);
-        Assert.Contains("$\"group:{group.Id.ToString", source);
+        Assert.Contains("$\"group:{group.GroupId.ToString", source);
         Assert.Equal(10, source.Split("DataFilterOption.All(\"全部\")", StringSplitOptions.None).Length - 1);
         Assert.DoesNotContain("DataFilterOption.All(\"全部区域组\")", source);
         Assert.DoesNotContain("DataFilterOption.All(\"全部楼栋\")", source);
@@ -397,7 +397,8 @@ public sealed class DataManagementUiContractTests
 
         Assert.Contains("var latestOption = DataSources.FirstOrDefault()", source);
         Assert.Contains("SelectedDataSource = selectedRunId is null", source);
-        Assert.Contains("?? latestOption", source);
+        Assert.Contains("EnsureSnapshotAvailable(catalog, selectedRunId)", source);
+        Assert.DoesNotContain("?? latestOption", source);
     }
 
     [Fact]

@@ -1,7 +1,7 @@
 'use strict';
 
 const crypto = require('crypto');
-const { BLDG_ORDER, assessBuildingIdentity, isAcceptedCaptureQualityReason } = require('./rules');
+const { BLDG_ORDER, assessBuildingIdentity, isAcceptedCaptureQualityReason, isPlaceholderCardName, derivePageIdentityMetadata } = require('./rules');
 
 function cardCountForPage(page) {
   return Array.isArray(page && page.cards) ? page.cards.length : 0;
@@ -61,6 +61,14 @@ function isInlinePlaceholderSubArea(building, subArea) {
     String(subArea && subArea.text || '').trim() === 'BM';
 }
 
+function isLegalInlineEmptyPage(building, subArea, page) {
+  if (!isInlinePlaceholderSubArea(building, subArea)) return false;
+  const cards = Array.isArray(page && page.cards) ? page.cards : [];
+  return String(page && page.page || '').trim() === 'inline' && cards.length === 0 &&
+    Number(page.count) === 0 && Number(page.rawCount ?? page.raw_count) === 0 &&
+    Number(page.uniqueCount ?? page.unique_count) === 0;
+}
+
 function validateEnumData(data, options = {}) {
   const buildings = normalizeSelection(data, options.buildings || options.selectedBuildings);
   const errors = [];
@@ -85,8 +93,10 @@ function validateEnumData(data, options = {}) {
     }
 
     const emptySubAreas = (building.subAreas || []).filter(subArea => {
-      if (isInlinePlaceholderSubArea(s.building, subArea)) return false;
       const pages = Array.isArray(subArea.pages) ? subArea.pages : [];
+      if (isInlinePlaceholderSubArea(s.building, subArea) && pages.length === 0 &&
+          String(subArea.err || '').trim().toLowerCase() === 'bm inline') return false;
+      if (pages.length === 1 && isLegalInlineEmptyPage(s.building, subArea, pages[0])) return false;
       const cards = pages.reduce((total, page) => total + cardCountForPage(page), 0);
       return pages.length === 0 || cards === 0;
     });
@@ -122,8 +132,35 @@ function validateEnumData(data, options = {}) {
     for (const row of flat.pages) {
       const page = row.page || {};
       const cards = Array.isArray(page.cards) ? page.cards : [];
+      const pageLabel = `${s.building}/${row.sa.text}/${page.page || 'default'}`;
+      const inlinePlaceholder = isLegalInlineEmptyPage(s.building, row.sa, page);
+      if (cards.length === 0 && !inlinePlaceholder) {
+        errors.push(`${pageLabel}: 存在空页面，未采集到任何卡片。`);
+      }
+      const declaredCount = page.count;
+      if (declaredCount !== undefined && declaredCount !== null && Number(declaredCount) !== cards.length) {
+        errors.push(`${pageLabel}: 声明数量 count=${declaredCount} 与 cards=${cards.length} 不一致。`);
+      }
+      const rawCount = page.rawCount ?? page.raw_count;
+      const uniqueCount = page.uniqueCount ?? page.unique_count;
+      const identityMeta = derivePageIdentityMetadata(cards, page.duplicateNames ?? page.duplicate_names);
+      if (rawCount !== undefined && (!Number.isInteger(Number(rawCount)) || Number(rawCount) !== cards.length)) {
+        errors.push(`${pageLabel}: 声明数量 rawCount=${rawCount} 与 cards=${cards.length} 不一致。`);
+      }
+      if (uniqueCount !== undefined && (!Number.isInteger(Number(uniqueCount)) || Number(uniqueCount) !== identityMeta.uniqueCount)) {
+        errors.push(`${pageLabel}: 声明数量 uniqueCount=${uniqueCount} 与 source identities=${identityMeta.uniqueCount} 不一致。`);
+      }
+      if (rawCount !== undefined && uniqueCount !== undefined && Number(uniqueCount) > Number(rawCount)) {
+        errors.push(`${pageLabel}: 声明数量 uniqueCount=${uniqueCount} 大于 rawCount=${rawCount}。`);
+      }
+      if (!identityMeta.identityEvidenceValid) {
+        errors.push(`${pageLabel}: duplicateNames 与完整 source group 成员不一致。`);
+      }
+      const placeholderNames = cards.filter(isPlaceholderCardName).length;
+      if (placeholderNames > 0) errors.push(`${pageLabel}: 存在 ${placeholderNames} 张占位或空白卡名。`);
+      const qualityReason = String(page.qualityReason || page.quality_reason || '').trim();
       const names = cards.map(card => String(card && card.name || '').trim()).filter(Boolean);
-      if (new Set(names).size !== names.length) {
+      if (new Set(names).size !== names.length && !identityMeta.duplicateEvidenceComplete) {
         errors.push(`${s.building}/${row.sa.text}/${page.page || 'default'}: 同页重名卡片尚未编号。`);
       }
       const sourceGroups = new Map();
@@ -146,7 +183,6 @@ function validateEnumData(data, options = {}) {
         warnings.push(`${s.building}/${row.sa.text}/${page.page || 'default'}: 已过滤 ${rejectedCount} 个无卡片结构的 SVG 名称候选。`);
       }
 
-      const qualityReason = String(page.qualityReason || page.quality_reason || '').trim();
       if (qualityReason && !isAcceptedCaptureQualityReason(qualityReason)) {
         errors.push(`${s.building}/${row.sa.text}/${page.page || 'default'}: 质量原因“${qualityReason}”未达到可导入条件。`);
       }

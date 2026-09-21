@@ -43,17 +43,26 @@ public static class PathSafety
     private static string CanonicalizeExistingParent(string path)
     {
         var full = Path.GetFullPath(path);
-        var pending = new Stack<string>();
-        var current = new DirectoryInfo(full);
-        while (current is not null && !current.Exists)
+        var root = Path.GetPathRoot(full)!;
+        var relative = Path.GetRelativePath(root, full);
+        var current = root;
+        foreach (var segment in relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
         {
-            pending.Push(current.Name);
-            current = current.Parent;
+            var next = Path.Combine(current, segment);
+            if (Directory.Exists(next))
+            {
+                current = new DirectoryInfo(next).ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? next;
+                continue;
+            }
+
+            if (File.Exists(next))
+            {
+                throw new InvalidOperationException("配置路径的上级路径必须是目录，不能是文件。");
+            }
+
+            current = next;
         }
 
-        if (current is null) return full;
-        var resolved = current.ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? current.FullName;
-        while (pending.Count > 0) resolved = Path.Combine(resolved, pending.Pop());
-        return Path.GetFullPath(resolved);
+        return Path.GetFullPath(current);
     }
 }

@@ -1,4 +1,5 @@
 using EmsScout.Application.Settings;
+using System.Diagnostics;
 
 namespace EmsScout.Tests;
 
@@ -86,5 +87,57 @@ public sealed class AppDataPathServiceTests
         Assert.Equal(Path.Combine(root, "out"), service.DataDirectory);
 
         Directory.Delete(root, recursive: true);
+    }
+
+    [Fact]
+    public void RejectsAWorkspacePathThatEscapesThroughAJunction()
+    {
+        var fixture = Path.Combine(Path.GetTempPath(), "ems-scout-path-tests", Guid.NewGuid().ToString("N"));
+        var workspace = Path.Combine(fixture, "workspace");
+        var outside = Path.Combine(fixture, "outside");
+        Directory.CreateDirectory(workspace);
+        Directory.CreateDirectory(outside);
+        var junction = Path.Combine(workspace, "linked");
+        using (var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            ArgumentList = { "/c", "mklink", "/J", junction, outside },
+        })!)
+        {
+            process.WaitForExit();
+            Assert.Equal(0, process.ExitCode);
+        }
+        var service = new AppDataPathService(workspace, new AppSettingsService(Path.Combine(fixture, "settings.json")));
+
+        Assert.Throws<InvalidOperationException>(() => service.ResolveWorkspacePath(Path.Combine(junction, "data")));
+
+        using (var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            ArgumentList = { "/c", "rmdir", junction },
+        })!)
+        {
+            process.WaitForExit();
+            Assert.Equal(0, process.ExitCode);
+        }
+        Directory.Delete(fixture, recursive: true);
+    }
+
+    [Fact]
+    public void RejectsAConfiguredDirectoryBelowARegularFile()
+    {
+        var fixture = Path.Combine(Path.GetTempPath(), "ems-scout-path-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(fixture);
+        var blocker = Path.Combine(fixture, "blocker");
+        File.WriteAllText(blocker, "x");
+        var service = new AppDataPathService(fixture, new AppSettingsService(Path.Combine(fixture, "settings.json")));
+
+        Assert.Throws<InvalidOperationException>(() => service.ResolveWorkspacePath(Path.Combine("blocker", "child")));
+
+        Directory.Delete(fixture, recursive: true);
     }
 }

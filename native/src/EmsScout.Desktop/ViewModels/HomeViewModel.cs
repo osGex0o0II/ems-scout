@@ -273,6 +273,7 @@ public sealed partial class HomeViewModel(
         var selectedRunId = SelectedDataSource?.RunId;
         var runs = await Task.Run(() => collectionRunRepository.ListAsync(null, cancellationToken), cancellationToken).ConfigureAwait(true);
         var catalog = CollectionDataSourceCatalog.Build(runs);
+        CollectionDataSourceCatalog.EnsureSnapshotAvailable(catalog, selectedRunId);
         var currentBinding = await Task.Run(
             () => collectionRunRepository.GetCurrentDataSourceAsync(cancellationToken),
             cancellationToken).ConfigureAwait(true);
@@ -289,7 +290,7 @@ public sealed partial class HomeViewModel(
         _latestDataSourceRunId = DataSources.FirstOrDefault()?.RunId;
         SelectedDataSource = selectedRunId is null
             ? DataSources.FirstOrDefault()
-            : DataSources.FirstOrDefault(option => option.RunId == selectedRunId);
+            : DataSources.First(option => option.RunId == selectedRunId);
         OnPropertyChanged(nameof(CanChangeDataSource));
     }
 
@@ -386,8 +387,10 @@ public sealed partial class HomeViewModel(
         AreaGroupsStatus = !string.IsNullOrWhiteSpace(error)
             ? "区域组统计暂不可用"
             : AreaGroups.Count == 0
-                ? "尚未配置启用的区域组"
-                : $"{AreaGroups.Count:N0} 个启用区域组；点击任一组查看设备、继续筛选并导出";
+                ? SelectedDataSource?.RunId is not null ? "该历史批次没有可用的区域规则快照" : "尚未配置启用的区域组"
+                : SelectedDataSource?.RunId is not null
+                    ? $"{AreaGroups.Count:N0} 个历史区域组；点击任一组查看该批次设备"
+                    : $"{AreaGroups.Count:N0} 个启用区域组；点击任一组查看设备、继续筛选并导出";
         NotifyAreaGroupState();
     }
 

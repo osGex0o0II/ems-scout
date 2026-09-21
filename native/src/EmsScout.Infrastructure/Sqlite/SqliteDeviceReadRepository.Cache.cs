@@ -91,8 +91,8 @@ public sealed partial class SqliteDeviceReadRepository
         if (!_pages.TryGetValue(cacheKey, out var all))
         {
             token.ThrowIfCancellationRequested();
-            // SQL filtering preceded realtime matching when this snapshot was prepared.
-            // This preserves per-building provenance and duplicate-name matching semantics.
+            // The snapshot preserves SQL visibility and source provenance, with
+            // realtime ownership resolved against complete building identities.
             var baseRows = snapshot.Rows.Where(row => DeviceQuerySpecification.MatchesScope(row, query)).ToArray();
             var filtered = SortRows(baseRows.Where(row => DeviceQuerySpecification.MatchesResult(row, query)).ToArray(), query)
                 .ToImmutableArray();
@@ -115,6 +115,7 @@ public sealed partial class SqliteDeviceReadRepository
         var result = BuildFilterOptions(snapshot.Rows, query);
         result = result with
         {
+            AreaGroups = snapshot.AreaGroups,
             Buildings = result.Buildings.ToImmutableArray(),
             CommunicationStates = result.CommunicationStates.ToImmutableArray(),
             Floors = result.Floors.ToImmutableArray(),

@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
-const { BLDG_ORDER, BLDG_META } = require('../src/rules');
+const { BLDG_ORDER, BLDG_META, isPlaceholderCardName, isKnownCommunicationState, auditPageIdentityEvidence } = require('../src/rules');
 const { ensureHistorySchema, resolveRunId, sourceForRun } = require('../src/data-history');
 const { formatLocalTimestamp } = require('../src/time');
 const { readBatchIdentity, withBatchIdentity } = require('../src/run-identity');
@@ -225,7 +225,7 @@ function buildReport(options = {}) {
     runKey: run?.run_key || envIdentity.runKey || null,
   };
   const cardRows = rows(db, `
-    SELECT sa.building, sa.floor, sa.text AS sub_area, sa.x, sa.y,
+    SELECT sa.building, sa.floor, sa.text AS sub_area, sa.x, sa.y, p.id AS page_id,
            p.page_name, p.layout, COALESCE(p.quality_reason, '') AS quality_reason,
            c.name, c.switch, c.mode, c.indoor, c.set_temp, c.fan,
            COALESCE(c.indicator, '') AS indicator,
@@ -266,13 +266,13 @@ function buildReport(options = {}) {
     byBuilding[row.building].sub_areas = row.sub_areas;
   }
 
-  const placeholderCards = cardRows.filter(r => !r.name || r.name === '0-0001-KT');
+  const placeholderCards = cardRows.filter(r => isPlaceholderCardName(r.name));
   const inconsistentState = cardRows.filter(r =>
     (r.comm === '开机' && r.switch !== 'ON') ||
     (r.comm === '关机' && r.switch !== 'OFF') ||
     (r.comm === '离线' && r.switch !== '-')
   );
-  const unknownComm = cardRows.filter(r => !r.comm);
+  const unknownComm = cardRows.filter(r => !isKnownCommunicationState(r.comm));
   const missingIndicator = cardRows.filter(r => !r.indicator && r.comm !== '离线');
   const unknownSwitch = cardRows.filter(r => r.switch !== 'ON' && r.switch !== 'OFF' && r.switch !== '-');
   const duplicateCardsSamePage = rows(db, `
@@ -307,6 +307,36 @@ function buildReport(options = {}) {
   `, source.runParams);
   const inlineSubAreas = emptySubAreas.filter(r => r.building === '6号' && r.floor === -2 && r.sub_area === 'BM');
   const emptyNonInlineSubAreas = emptySubAreas.filter(r => !(r.building === '6号' && r.floor === -2 && r.sub_area === 'BM'));
+  const pageAuditRows = rows(db, `
+    SELECT sa.building, sa.floor, sa.text AS sub_area, sa.sub_idx, sa.x, sa.y,
+           p.id AS page_id, p.page_name, p.count, p.raw_count, p.unique_count,
+           p.duplicate_names, COUNT(c.id) AS actual_cards
+    FROM ${source.subAreas} sa
+    JOIN ${source.pages} p ON p.${source.pageSaColumn} = sa.id
+    LEFT JOIN ${source.cards} c ON c.${source.cardPageColumn} = p.id
+    ${runWhere}
+    GROUP BY sa.id, p.id
+    ORDER BY sa.building, sa.sub_idx, p.id
+  `, source.runParams);
+  const cardNamesByPage = new Map();
+  for (const card of cardRows) {
+    if (!cardNamesByPage.has(card.page_id)) cardNamesByPage.set(card.page_id, []);
+    cardNamesByPage.get(card.page_id).push(card.name);
+  }
+  const invalidPageRows = pageAuditRows.flatMap(page => {
+    const identity = auditPageIdentityEvidence(cardNamesByPage.get(page.page_id) || [], page.duplicate_names, page.unique_count);
+    const invalid = page.actual_cards === 0 ||
+      (page.count !== null && page.count !== undefined && page.count !== page.actual_cards) ||
+      (page.raw_count !== null && page.raw_count !== undefined && page.raw_count !== page.actual_cards) ||
+      (page.unique_count !== null && page.unique_count !== undefined && (page.unique_count < 0 || page.unique_count > page.actual_cards)) ||
+      (page.raw_count !== null && page.raw_count !== undefined && page.unique_count !== null && page.unique_count !== undefined && page.unique_count > page.raw_count) ||
+      !identity.ok;
+    return invalid ? [{ ...page, expected_unique_count: identity.expectedUniqueCount, duplicate_evidence_valid: identity.evidenceValid }] : [];
+  });
+  const invalidPages = invalidPageRows.filter(r => !(
+    r.building === '6号' && r.floor === -2 && r.sub_area === 'BM' &&
+    r.page_name === 'inline' && r.actual_cards === 0 &&
+    r.count === 0 && r.raw_count === 0 && r.unique_count === 0));
   const suspiciousUniformPages = rows(db, `
     SELECT sa.building, sa.floor, sa.text AS sub_area, p.page_name, p.layout, COALESCE(p.quality_reason, '') AS quality_reason,
            COUNT(*) AS cards,
@@ -436,6 +466,7 @@ function buildReport(options = {}) {
   if (unknownSwitch.length) issues.push({ severity: 'P2', code: 'unknown_switch', count: unknownSwitch.length, message: '存在非 ON/OFF/- 的开关状态。' });
   if (duplicateCardsSamePage.length) issues.push({ severity: 'P2', code: 'duplicate_cards_same_page', count: duplicateCardsSamePage.length, message: '同一页面存在重复卡名。' });
   if (emptyNonInlineSubAreas.length) issues.push({ severity: 'P2', code: 'empty_sub_areas', count: emptyNonInlineSubAreas.length, message: '存在无页面/无卡片的空子区。' });
+  if (invalidPages.length) issues.push({ severity: 'P1', code: 'invalid_pages', count: invalidPages.length, message: '存在零卡页面或页面声明数量与实际卡片不一致。' });
   if (suspiciousUniformPages.length) issues.push({ severity: 'P2', code: 'suspicious_uniform_pages', count: suspiciousUniformPages.length, message: '存在统一默认值且未完整加载通讯/开关的页面。' });
   const knownBuckets = [
     splitKnownRows(unknownComm, 'unknown_comm', knownFindings),
@@ -507,6 +538,7 @@ function buildReport(options = {}) {
       issue_count: issues.filter(i => i.severity !== 'INFO').length,
       known_findings: knownIssueAnnotations.length,
       placeholder_cards: placeholderCards.length,
+      invalid_pages: invalidPages.length,
       state_mismatch: inconsistentState.length,
       unknown_comm: unknownComm.length,
       missing_indicator: missingIndicator.length,
@@ -527,6 +559,7 @@ function buildReport(options = {}) {
     details: buildQualityDetails(qualityDetailBuckets),
     samples: {
       placeholder_cards: placeholderCards.slice(0, 50),
+      invalid_pages: invalidPages.slice(0, 50),
       inconsistent_state: inconsistentState.slice(0, 50),
       unknown_comm: unknownComm.slice(0, 50),
       missing_indicator: missingIndicator.slice(0, 50),

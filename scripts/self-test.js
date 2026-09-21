@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const Database = require('better-sqlite3');
-const { checkCardQuality, classifyAreaType, getZone, assessBuildingIdentity, labelSamePageDuplicateCards, classifyPersistentDeviceAnomalyPage, normalizeCardValues, normalizeKnownSourceDefects, classifyKnownMissingIndicatorPage, isAcceptedCaptureQualityReason } = require('../src/rules');
+const { checkCardQuality, classifyAreaType, getZone, assessBuildingIdentity, labelSamePageDuplicateCards, classifyPersistentDeviceAnomalyPage, normalizeCardValues, normalizeKnownSourceDefects, classifyKnownMissingIndicatorPage, isAcceptedCaptureQualityReason, isPlaceholderCardName, isKnownCommunicationState, isStructurallyValidOfflinePage, derivePageIdentityMetadata } = require('../src/rules');
 const { validateEnumData } = require('../src/enum-validator');
 const { inspectRealtimeRow } = require('../src/realtime-quality');
 const { ensureHistorySchema, restoreCurrentFromRun } = require('../src/data-history');
@@ -99,6 +99,15 @@ function testRules() {
     ? { ...c, switch: '-', indoor: '-', setTemp: '-', fan: '-' }
     : c);
   const normalizedKnownMissing = normalizeKnownSourceDefects(knownMissingIndicator);
+  const knownMissingWithIncompleteOrdinaryCard = normalizedKnownMissing.map((card, index) => index === 0
+    ? { ...card, switch: '-', mode: '-', indoor: '-', setTemp: '-', fan: '-' }
+    : card);
+  const knownMissingWithOnOffConflict = normalizedKnownMissing.map((card, index) => index === 0
+    ? { ...card, comm: '开机', switch: 'OFF' }
+    : card);
+  const knownMissingWithOffOnConflict = normalizedKnownMissing.map((card, index) => index === 0
+    ? { ...card, comm: '关机', switch: 'ON' }
+    : card);
   const building3Cards = loaded34.map((c, i) => ({ ...c, name: `3-${i}-KT` }));
   const sanitizedInvalid = normalizeCardValues(invalidTemp);
   const labeledDuplicates = labelSamePageDuplicateCards([
@@ -110,11 +119,17 @@ function testRules() {
   assert(!checkCardQuality(notReady34).ok, '3/4号默认值且 comm/switch 未完整时应失败');
   assert(!checkCardQuality(placeholder).ok, '0-0001-KT 占位符应失败');
   assert(!checkCardQuality(labeledPlaceholder).ok, '带编号后缀的占位符也应失败');
+  assert(isPlaceholderCardName('0-0001-KT#12') && isPlaceholderCardName('   '), '占位名分类必须覆盖编号后缀和空白名称');
+  assert(isKnownCommunicationState('开机') && isKnownCommunicationState('关机') && isKnownCommunicationState('离线'), '三个通讯状态必须进入白名单');
+  assert(!isKnownCommunicationState('') && !isKnownCommunicationState('未知') && !isKnownCommunicationState('1'), '空值和任意非白名单状态必须保持未知');
   assert(checkCardQuality(realMixed).ok, '非模板真实页且通讯完整时应通过');
   assert(!checkCardQuality(missingComm).ok, '任一卡缺通讯/indicator 时应失败');
   assert(!checkCardQuality(invalidTemp).ok, '异常温度和缺失模式/风速应失败');
   assert(!checkCardQuality(missingActiveFields).ok, '开机/关机设备字段缺失应失败');
   assert(!checkCardQuality(offlineTemplate).ok, '全离线默认模板不应作为 quality_pass 通过');
+  assert(isStructurallyValidOfflinePage(offlineTemplate), '真实名称且状态完整的离线页应满足结构门槛');
+  assert(!isStructurallyValidOfflinePage(offlineTemplate.map((card, index) => index === 0 ? { ...card, name: '0-0001-KT#1' } : card)), '稳定离线例外不得豁免编号占位名');
+  assert(!isStructurallyValidOfflinePage(offlineTemplate.map((card, index) => index === 0 ? { ...card, comm: '未知' } : card)), '稳定离线例外不得豁免未知通讯');
   assert(isAcceptedCaptureQualityReason('offline_template_stable'), '稳定全离线模板应通过最终采集门槛');
   assert(!isAcceptedCaptureQualityReason('stable_partial'), '通讯状态缺失的稳定部分页必须继续阻断');
   assert(isAcceptedCaptureQualityReason('device_anomalies_preserved'), '稳定的有界设备异常应通过最终采集门槛');
@@ -131,6 +146,9 @@ function testRules() {
   assert(!classifyPersistentDeviceAnomalyPage(invalidTemp.slice(0, 1), { rawCount: 20, uniqueCount: 1 }).eligible, '重复塌缩页不得按设备异常放行');
   assert(normalizedKnownMissing.filter(c => !c.indicator && !c.comm).length === 2, '已知缺陷设备不得沿用邻卡 indicator/comm');
   assert(classifyKnownMissingIndicatorPage(normalizedKnownMissing).eligible, '仅两台精确登记设备缺 indicator 时应作为已知源缺陷保留');
+  assert(!classifyKnownMissingIndicatorPage(knownMissingWithIncompleteOrdinaryCard).eligible, '已知缺图例外不得豁免同页普通活动设备的字段缺失');
+  assert(!classifyKnownMissingIndicatorPage(knownMissingWithOnOffConflict).eligible, '已知缺图例外不得豁免普通卡开机/OFF 冲突');
+  assert(!classifyKnownMissingIndicatorPage(knownMissingWithOffOnConflict).eligible, '已知缺图例外不得豁免普通卡关机/ON 冲突');
   assert(!classifyKnownMissingIndicatorPage(normalizedKnownMissing.map((c, i) => i === 0 ? { ...c, indicator: '', comm: '' } : c)).eligible, '出现第三台缺 indicator 时必须阻断');
   assert(classifyKnownMissingIndicatorPage(intermittentMissingIndicator).eligible, '4号楼1F间歇性缺 indicator 且关键字段完整时应保留并继续任务');
   assert(!classifyKnownMissingIndicatorPage(intermittentMissingFields).eligible, '间歇性缺 indicator 设备关键字段也缺失时必须阻断');
@@ -147,6 +165,8 @@ function testRules() {
   assert(labeledDuplicates.duplicateNames[0].copies === 2, '同页重名元数据必须保留副本数');
   const relabeled = labelSamePageDuplicateCards(labeledDuplicates.cards);
   assert(relabeled.cards.map(card => card.name).join('|') === labeledDuplicates.cards.map(card => card.name).join('|'), '重名编号函数必须幂等，导入不能交换 #1/#2');
+  const identityMeta = derivePageIdentityMetadata(labeledDuplicates.cards, labeledDuplicates.duplicateNames);
+  assert(identityMeta.count === 2 && identityMeta.rawCount === 2 && identityMeta.uniqueCount === 1, '页面计数必须区分保留卡数与编号前 source-name 数');
   assert(classifyAreaType('3F-WSJ-KT-1', 'grid') === '公区', 'WSJ 应识别为公区');
   assert(classifyAreaType('QL-101-KT', 'grid') === '非公区', 'QL-NNN 应识别为非公区');
   assert(classifyAreaType('ANY', 'group') === '公区', 'group layout 应识别为公区');
@@ -203,6 +223,14 @@ function testCollectionValidationBlocksIncompleteResults() {
   };
   const emptyResult = validateEnumData({ buildings: [completeSixBuilding] }, { buildings: ['6号'] });
   assert(!emptyResult.ok && emptyResult.errors.some(error => error.includes('空子区')), '非 BM 空子区必须阻断导入');
+  const inlineOnlyBuilding = {
+    building: '6号',
+    subAreas: [
+      { idx: 0, text: '1F', floor: 1, pages: [{ page: '一页', qualityReason: 'quality_pass', cards: makeCards('6', 1) }] },
+      { idx: 1, text: 'BM', floor: -2, pages: [{ page: 'inline', count: 0, rawCount: 0, uniqueCount: 0, cards: [] }] },
+    ],
+  };
+  assert(validateEnumData({ buildings: [inlineOnlyBuilding] }, { buildings: ['6号'] }).ok, '6号 BM inline 占位页面是唯一允许的显式空页');
 
   const templateBuilding = {
     building: '1号',
@@ -239,6 +267,62 @@ function testCollectionValidationBlocksIncompleteResults() {
   };
   const dynamicResult = validateEnumData({ buildings: [dynamicBuilding] }, { buildings: ['1号'] });
   assert(dynamicResult.ok, '卡片数和子区数可以随现场配置变化，但批次内部结构完整时必须通过');
+
+  const countMismatch = JSON.parse(JSON.stringify(dynamicBuilding));
+  countMismatch.subAreas[0].pages[0].count = 10;
+  countMismatch.subAreas[0].pages[0].rawCount = 10;
+  countMismatch.subAreas[0].pages[0].uniqueCount = 10;
+  const countMismatchResult = validateEnumData({ buildings: [countMismatch] }, { buildings: ['1号'] });
+  assert(!countMismatchResult.ok && countMismatchResult.errors.some(error => error.includes('声明数量')), '页面声明数量与原始 cards 不一致时必须在归一化前阻断');
+
+  const rawOnlyMismatch = JSON.parse(JSON.stringify(dynamicBuilding));
+  rawOnlyMismatch.subAreas[0].pages[0].count = 1;
+  rawOnlyMismatch.subAreas[0].pages[0].rawCount = 10;
+  rawOnlyMismatch.subAreas[0].pages[0].uniqueCount = 1;
+  const rawOnlyMismatchResult = validateEnumData({ buildings: [rawOnlyMismatch] }, { buildings: ['1号'] });
+  assert(!rawOnlyMismatchResult.ok && rawOnlyMismatchResult.errors.some(error => error.includes('rawCount=10')), 'rawCount 必须独立守恒实际保留卡数');
+
+  const emptySecondPage = JSON.parse(JSON.stringify(dynamicBuilding));
+  emptySecondPage.subAreas[0].pages.push({ page: '二页', count: 0, rawCount: 0, uniqueCount: 0, qualityReason: 'quality_pass', cards: [] });
+  const emptySecondPageResult = validateEnumData({ buildings: [emptySecondPage] }, { buildings: ['1号'] });
+  assert(!emptySecondPageResult.ok && emptySecondPageResult.errors.some(error => error.includes('空页面')), '非 BM 子区中的任一声明空页必须阻断');
+
+  const knownSourcePage = {
+    building: '2号',
+    subAreas: [{ idx: 0, text: '2BC', floor: 2.5, pages: [{
+      page: '一页',
+      qualityReason: 'known_source_indicator_missing',
+      cards: [
+        { name: '2-2BC-2M001-KT-1', switch: '-', mode: '-', indoor: '-', setTemp: '-', fan: '-', indicator: '', comm: '' },
+        { name: '2-2BC-2M001-KT-2', switch: '-', mode: '-', indoor: '-', setTemp: '-', fan: '-', indicator: '', comm: '' },
+        { name: '2-2BC-201-KT', switch: 'ON', mode: '制冷', indoor: '26', setTemp: '24', fan: '高', indicator: '56f45bb314d74cc8da6c6c8e5942d08d.png', comm: '开机' },
+      ],
+    }] }],
+  };
+  assert(validateEnumData({ buildings: [knownSourcePage] }, { buildings: ['2号'] }).ok, '精确已知缺图设备可豁免自身 indicator/comm，普通卡仍须结构完整');
+}
+
+function testEnumeratorPageNormalizationContract() {
+  const { pageFromData } = require('../src/enumerate');
+  const card = { name: '2-2F-B-KT', switch: 'ON', mode: '制冷', indoor: '26', setTemp: '24', fan: '高', indicator: '56f45bb314d74cc8da6c6c8e5942d08d.png', comm: '开机' };
+  const page = pageFromData('一页', { cards: [{ ...card }, { ...card }], qualityReason: 'quality_pass' });
+  assert(page.count === 2 && page.rawCount === 2 && page.uniqueCount === 1, 'pageFromData 必须输出保留卡数 2/2 和 source-name 数 1');
+  assert(page.cards.map(row => row.name).join('|') === '2-2F-B-KT#1|2-2F-B-KT#2', 'pageFromData 必须保留合法同名设备并稳定编号');
+  assert(page.duplicateNames.length === 1 && page.duplicateNames[0].copies === 2, 'pageFromData 必须保留同名来源证据');
+}
+
+function runImportResult(jsonPath, dbPath, args = [], envOverrides = {}) {
+  return spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'import.js'), ...args], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      EMS_JSON_PATH: jsonPath,
+      EMS_DB_PATH: dbPath,
+      EMS_SKIP_ENUM_VALIDATION: '0',
+      ...envOverrides,
+    },
+    encoding: 'utf8',
+  });
 }
 
 function testPartialImport() {
@@ -299,12 +383,233 @@ function testPartialImport() {
   assert(rows.length === 2, '部分导入后应保留未选楼栋');
   assert(rows[0].building === '1号' && rows[0].cards === 1 && rows[0].names === '1F-A-KT', '1号数据应保留');
   assert(rows[1].building === '2号' && rows[1].cards === 4 && rows[1].names.includes('2F-B-KT#1') && rows[1].names.includes('2F-B-KT#2'), '2号同页重名设备应编号后全部入库');
-  assert(pageMeta.count === 4 && pageMeta.raw_count === 4 && pageMeta.unique_count === 4, '同页重名卡片编号后应作为独立页面卡片入库');
+  assert(pageMeta.count === 4 && pageMeta.raw_count === 4 && pageMeta.unique_count === 3, '同页重名卡片编号后仍必须保留输入的原始/唯一计数证据');
   assert(pageMeta.duplicate_names.includes('2F-B-KT'), '重复渲染设备名应入库');
   assert(pageMeta.collected_at === expectedLocalTimestamp('2026-07-12T00:20:15.000Z'), '页面必须保存实际通过采集质量门槛的时间');
   assert(runPage.collected_at === pageMeta.collected_at, '历史批次必须保留页面采集时间');
   assert(latestRun.card_count === 4 && latestRun.on_count === 2 && latestRun.off_count === 1 && latestRun.offline_count === 0 && latestRun.unknown_count === 1, 'run 统计必须按 comm 区分状态，switch=OFF 不得掩盖未知通讯');
   assert(building2.updated_at === expectedLocalTimestamp('2026-07-12T00:30:00.000Z'), '部分导入必须保留楼栋独立采集时间，不能套用顶层时间');
+}
+
+function testImportRejectsInvalidPageBeforeMutation() {
+  const tmp = path.join(ROOT, 'out', 'self-test-import-atomic');
+  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.mkdirSync(tmp, { recursive: true });
+  const validPath = path.join(tmp, 'valid.json');
+  const invalidPath = path.join(tmp, 'invalid.json');
+  const dbPath = path.join(tmp, 'ac-atomic.db');
+  const card = { name: '1-1F-101-KT', switch: 'ON', mode: '制冷', indoor: '26', setTemp: '24', fan: '高', indicator: '56f45bb314d74cc8da6c6c8e5942d08d.png', comm: '开机' };
+  const valid = { buildings: [{ building: '1号', subAreas: [{ idx: 0, text: '1F', floor: 1, pages: [{ page: '一页', count: 1, rawCount: 1, uniqueCount: 1, qualityReason: 'quality_pass', cards: [card] }] }] }] };
+  writeJson(validPath, valid);
+  const seeded = runImportResult(validPath, dbPath);
+  assert(seeded.status === 0, `合法动态批次应可导入\n${seeded.stdout}\n${seeded.stderr}`);
+
+  const snapshot = () => {
+    const db = new Database(dbPath, { readonly: true });
+    const value = JSON.stringify({
+      cards: db.prepare('SELECT name, comm FROM cards ORDER BY id').all(),
+      runs: db.prepare('SELECT id, run_key, status, card_count FROM collection_runs ORDER BY id').all(),
+      sources: db.prepare('SELECT building, run_id FROM current_data_sources ORDER BY building').all(),
+    });
+    db.close();
+    return value;
+  };
+  const before = snapshot();
+
+  for (const invalid of [
+    { ...valid, buildings: [{ ...valid.buildings[0], subAreas: [{ ...valid.buildings[0].subAreas[0], pages: [{ ...valid.buildings[0].subAreas[0].pages[0], count: 1, rawCount: 10, uniqueCount: 1 }] }] }] },
+    { ...valid, buildings: [{ ...valid.buildings[0], subAreas: [{ ...valid.buildings[0].subAreas[0], pages: [...valid.buildings[0].subAreas[0].pages, { page: '二页', count: 0, rawCount: 0, uniqueCount: 0, qualityReason: 'quality_pass', cards: [] }] }] }] },
+    { buildings: [{ building: '6号', subAreas: [
+      { idx: 0, text: 'A座1F', floor: 1, pages: [{ page: '一页', count: 1, rawCount: 1, uniqueCount: 1, qualityReason: 'quality_pass', cards: [{ ...card, name: '6-1F-A-KT' }] }] },
+      { idx: 1, text: 'BM', floor: -2, pages: [{ page: '一页', count: 0, rawCount: 0, uniqueCount: 0, cards: [] }] },
+    ] }] },
+    { buildings: [{ building: '1号', subAreas: [{ idx: 0, text: '1F', floor: 1, pages: [{ page: '一页', count: 4, rawCount: 4, uniqueCount: 1, duplicateNames: [{ name: 'room', copies: 3 }], qualityReason: 'quality_pass', cards: Array.from({ length: 4 }, (_, index) => ({ ...card, name: `room#${index + 1}` })) }] }] }] },
+    { buildings: [{ building: '1号', subAreas: [{ idx: 0, text: '1F', floor: 1, pages: [{ page: '一页', count: 4, rawCount: 4, uniqueCount: 3, duplicateNames: [{ name: 'A', copies: 2 }], qualityReason: 'quality_pass', cards: ['A', 'A', 'B', 'B'].map(name => ({ ...card, name })) }] }] }] },
+    { buildings: [{ building: '1号', subAreas: [{ idx: 0, text: '1F', floor: 1, pages: [{ page: '一页', count: 1, rawCount: 1, uniqueCount: 1, duplicateNames: '{malformed', qualityReason: 'quality_pass', cards: [{ ...card }] }] }] }] },
+    { buildings: [{ building: '1号', subAreas: [{ idx: 0, text: '1F', floor: 1, pages: [{ page: '一页', count: 2, rawCount: 2, uniqueCount: 2, qualityReason: 'quality_pass', cards: [
+      { ...card, name: 'room#1', sourceName: 'room' },
+      { ...card, name: 'room#2', sourceName: 'room' },
+    ] }] }] }] },
+  ]) {
+    writeJson(invalidPath, invalid);
+    const rejected = runImportResult(invalidPath, dbPath);
+    assert(rejected.status !== 0 && rejected.stderr.includes('采集结果校验失败'), '数量、BM 空页或重复证据矛盾必须由真实导入入口拒绝');
+    assert(snapshot() === before, '导入拒绝后当前数据、历史批次和来源绑定必须保持不变');
+  }
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+function testValidationEnabledImportLabelsDuplicatesAndPreservesUnknown() {
+  const tmp = path.join(ROOT, 'out', 'self-test-import-normal');
+  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.mkdirSync(tmp, { recursive: true });
+  const duplicatePath = path.join(tmp, 'duplicates.json');
+  const duplicateDb = path.join(tmp, 'duplicates.db');
+  const baseCard = { name: '2-2F-B-KT', switch: 'ON', mode: '制冷', indoor: '26', setTemp: '24', fan: '高', indicator: '56f45bb314d74cc8da6c6c8e5942d08d.png', comm: '开机' };
+  writeJson(duplicatePath, { buildings: [{ building: '2号', subAreas: [{ idx: 0, text: '2F', floor: 2, pages: [
+    { page: '一页', count: 2, rawCount: 2, uniqueCount: 1, duplicateNames: [{ name: '2-2F-B-KT', copies: 2 }], qualityReason: 'quality_pass', cards: [{ ...baseCard }, { ...baseCard }] },
+    { page: '二页', duplicate_names: [{ name: '2-ROOM', copies: 2 }], qualityReason: 'quality_pass', cards: [{ ...baseCard, name: '2-ROOM#1' }, { ...baseCard, name: '2-ROOM#2' }] },
+  ] }] }] });
+  const duplicateImport = runImportResult(duplicatePath, duplicateDb);
+  assert(duplicateImport.status === 0, `正常导入必须接受证据一致的原始同名卡并编号\n${duplicateImport.stdout}\n${duplicateImport.stderr}`);
+  const duplicateSqlite = new Database(duplicateDb, { readonly: true });
+  const duplicateRows = duplicateSqlite.prepare("SELECT c.name FROM cards c JOIN pages p ON p.id=c.page_id WHERE p.page_name='一页' ORDER BY c.id").all().map(row => row.name);
+  const duplicateMeta = duplicateSqlite.prepare("SELECT count, raw_count, unique_count FROM pages WHERE page_name='一页'").get();
+  const aliasMeta = duplicateSqlite.prepare("SELECT count, raw_count, unique_count, duplicate_names FROM pages WHERE page_name='二页'").get();
+  duplicateSqlite.close();
+  assert(duplicateRows.join('|') === '2-2F-B-KT#1|2-2F-B-KT#2', '正常导入必须稳定编号原始同名卡');
+  assert(duplicateMeta.count === 2 && duplicateMeta.raw_count === 2 && duplicateMeta.unique_count === 1, '导入必须保留 source-name 计数证据');
+  assert(JSON.parse(aliasMeta.duplicate_names)[0].name === '2-ROOM', 'snake_case duplicate_names 必须贯穿正常导入并保存');
+  assert(aliasMeta.count === 2 && aliasMeta.raw_count === 2 && aliasMeta.unique_count === 1, '省略页面计数时必须按最终采用的 snake_case evidence 推导 2/2/1');
+  const duplicateQualityOut = path.join(tmp, 'duplicate-quality');
+  const duplicateQuality = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'quality-report.js'), '--run-id=latest-run'], { cwd: ROOT, env: { ...process.env, EMS_DB_PATH: duplicateDb, EMS_QUALITY_OUT: duplicateQualityOut }, encoding: 'utf8' });
+  const duplicateReport = JSON.parse(fs.readFileSync(path.join(duplicateQualityOut, 'quality_report_run1.json'), 'utf8'));
+  assert(duplicateQuality.status === 0 && duplicateReport.summary.invalid_pages === 0, 'snake_case evidence 的已编号页面必须通过独立质量审计');
+
+  const unknownPath = path.join(tmp, 'unknown.json');
+  const unknownDb = path.join(tmp, 'unknown.db');
+  const qualityOut = path.join(tmp, 'quality');
+  writeJson(unknownPath, { buildings: [{ building: '1号', subAreas: [{ idx: 0, text: '1F', floor: 1, pages: [{ page: '一页', count: 1, rawCount: 1, uniqueCount: 1, qualityReason: 'quality_pass', cards: [{ ...baseCard, name: '1-1F-A-KT', comm: '故障' }] }] }] }] });
+  const unknownImport = runImportResult(unknownPath, unknownDb);
+  assert(unknownImport.status === 0, `正常导入必须保留未知通讯原值\n${unknownImport.stdout}\n${unknownImport.stderr}`);
+  const quality = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'quality-report.js'), '--run-id=latest-run'], { cwd: ROOT, env: { ...process.env, EMS_DB_PATH: unknownDb, EMS_QUALITY_OUT: qualityOut }, encoding: 'utf8' });
+  assert(quality.status === 2, `未知通讯质量报告必须阻断\n${quality.stdout}\n${quality.stderr}`);
+  const unknownSqlite = new Database(unknownDb, { readonly: true });
+  const unknownState = unknownSqlite.prepare('SELECT c.comm, r.unknown_count, r.status FROM cards c CROSS JOIN collection_runs r ORDER BY r.id DESC LIMIT 1').get();
+  unknownSqlite.close();
+  const unknownReport = JSON.parse(fs.readFileSync(path.join(qualityOut, 'quality_report_run1.json'), 'utf8'));
+  assert(unknownState.comm === '故障' && unknownState.unknown_count === 1 && unknownState.status === 'needs_review', '未知通讯必须原样入库、计入批次并转为需复核');
+  assert(unknownReport.summary.unknown_comm === unknownState.unknown_count, '质量 unknown 数必须与历史批次一致');
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+function testQualityReportAuditsPageStructureAndUnknownComm() {
+  const tmp = path.join(ROOT, 'out', 'self-test-quality-structure');
+  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.mkdirSync(tmp, { recursive: true });
+  const jsonPath = path.join(tmp, 'enum.json');
+  const dbPath = path.join(tmp, 'ac-quality.db');
+  const qualityOut = path.join(tmp, 'quality');
+  writeJson(jsonPath, { buildings: [{ building: '1号', subAreas: [{ idx: 0, text: '1F', floor: 1, pages: [{ page: '一页', qualityReason: 'quality_pass', cards: [{ name: '1-1F-101-KT', switch: 'OFF', mode: '制冷', indoor: '26', setTemp: '25', fan: '中', indicator: '3bdc38eda0ae77f26807b2b6cdde4456.png', comm: '故障' }] }] }] }] });
+  runImport(jsonPath, dbPath);
+  const db = new Database(dbPath);
+  const runUnknownCount = db.prepare('SELECT unknown_count FROM collection_runs ORDER BY id DESC LIMIT 1').get().unknown_count;
+  db.prepare('UPDATE pages SET raw_count = 10 WHERE page_name = ?').run('一页');
+  const saId = db.prepare('SELECT id FROM sub_areas LIMIT 1').get().id;
+  db.prepare("INSERT INTO pages (sub_area_id, page_name, count, raw_count, unique_count, quality_reason) VALUES (?, '二页', 0, 0, 0, 'quality_pass')").run(saId);
+  db.close();
+
+  const result = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'quality-report.js')], {
+    cwd: ROOT,
+    env: { ...process.env, EMS_DB_PATH: dbPath, EMS_QUALITY_OUT: qualityOut },
+    encoding: 'utf8',
+  });
+  assert(result.status === 2, `质量报告必须阻断零卡页和非空未知通讯\n${result.stdout}\n${result.stderr}`);
+  const report = JSON.parse(fs.readFileSync(path.join(qualityOut, 'quality_report.json'), 'utf8'));
+  assert(report.summary.invalid_pages === 2 && report.issues.some(issue => issue.code === 'invalid_pages'), '质量报告必须独立识别零卡页及 raw_count/cards 矛盾');
+  assert(report.summary.unknown_comm === 1 && report.issues.some(issue => issue.code === 'unknown_comm'), '非空未知通讯必须进入 unknown_comm 并阻断');
+  assert(report.summary.unknown_comm === runUnknownCount, '质量审计 unknown 数必须与导入批次统计一致');
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+function testQualityReportRejectsMalformedBmPage() {
+  const tmp = path.join(ROOT, 'out', 'self-test-quality-bm');
+  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.mkdirSync(tmp, { recursive: true });
+  const jsonPath = path.join(tmp, 'enum.json');
+  const dbPath = path.join(tmp, 'ac.db');
+  const qualityOut = path.join(tmp, 'quality');
+  writeJson(jsonPath, { buildings: [{ building: '6号', subAreas: [{ idx: 0, text: '1F', floor: 1, pages: [{ page: '一页', cards: [{ name: '6-1F-A-KT', switch: 'OFF', mode: '制冷', indoor: '26', setTemp: '25', fan: '中', indicator: '3bdc38eda0ae77f26807b2b6cdde4456.png', comm: '关机' }] }] }, { idx: 1, text: 'BM', floor: -2, pages: [] }] }] });
+  runImport(jsonPath, dbPath);
+  const db = new Database(dbPath);
+  const bmId = db.prepare("SELECT id FROM sub_areas WHERE text='BM'").get().id;
+  db.prepare("INSERT INTO pages (sub_area_id, page_name, count, raw_count, unique_count) VALUES (?, '一页', 0, 0, 0)").run(bmId);
+  db.close();
+  const result = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'quality-report.js')], { cwd: ROOT, env: { ...process.env, EMS_DB_PATH: dbPath, EMS_QUALITY_OUT: qualityOut }, encoding: 'utf8' });
+  const report = JSON.parse(fs.readFileSync(path.join(qualityOut, 'quality_report.json'), 'utf8'));
+  assert(result.status === 2 && report.summary.invalid_pages === 1, '仅 page_name=inline 且四项计数为零的 BM stub 可豁免');
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+function testQualityReportAuditsStoredSourceIdentityEvidence() {
+  const tmp = path.join(ROOT, 'out', 'self-test-quality-identities');
+  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.mkdirSync(tmp, { recursive: true });
+  const makeCard = (name, index = 0) => ({ name, switch: index % 2 ? 'OFF' : 'ON', mode: index % 2 ? '通风' : '制冷', indoor: String(24 + index), setTemp: String(20 + index), fan: index % 2 ? '低' : '高', indicator: index % 2 ? '3bdc38eda0ae77f26807b2b6cdde4456.png' : '56f45bb314d74cc8da6c6c8e5942d08d.png', comm: index % 2 ? '关机' : '开机' });
+
+  const validJson = path.join(tmp, 'valid.json');
+  const validDb = path.join(tmp, 'valid.db');
+  const validOut = path.join(tmp, 'valid-quality');
+  const repeated = makeCard('2-2F-B-KT');
+  writeJson(validJson, { buildings: [{ building: '2号', subAreas: [{ idx: 0, text: '2F', floor: 2, pages: [
+    { page: '一页', count: 3, rawCount: 3, uniqueCount: 1, duplicateNames: [{ name: '2-2F-B-KT', copies: 3 }], qualityReason: 'quality_pass', cards: [{ ...repeated }, { ...repeated }, { ...repeated }] },
+    { page: '二页', count: 4, rawCount: 4, uniqueCount: 4, duplicateNames: [], qualityReason: 'quality_pass', cards: [
+      makeCard('2-INDEPENDENT#1', 0), makeCard('2-INDEPENDENT#2', 1),
+      makeCard('2-INDEPENDENT#7', 2), makeCard('2-INDEPENDENT#9', 3),
+    ] },
+  ] }] }] });
+  assert(runImportResult(validJson, validDb).status === 0, '合法三副本 source group 应通过正常导入');
+  const validNamesDb = new Database(validDb, { readonly: true });
+  const independentNames = validNamesDb.prepare("SELECT c.name FROM cards c JOIN pages p ON p.id=c.page_id WHERE p.page_name='二页' ORDER BY c.id").all().map(row => row.name);
+  validNamesDb.close();
+  assert(independentNames.join('|') === '2-INDEPENDENT#1|2-INDEPENDENT#2|2-INDEPENDENT#7|2-INDEPENDENT#9', '正常导入必须逐字保留无 duplicate claim 的独立数字后缀设备名');
+  const validQuality = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'quality-report.js'), '--run-id=latest-run'], { cwd: ROOT, env: { ...process.env, EMS_DB_PATH: validDb, EMS_QUALITY_OUT: validOut }, encoding: 'utf8' });
+  const validReport = JSON.parse(fs.readFileSync(path.join(validOut, 'quality_report_run1.json'), 'utf8'));
+  assert(validQuality.status === 0 && validReport.summary.invalid_pages === 0, '证据完整的编号三副本页不得被独立审计误判');
+
+  const corruptJson = path.join(tmp, 'corrupt.json');
+  const corruptDb = path.join(tmp, 'corrupt.db');
+  const corruptOut = path.join(tmp, 'corrupt-quality');
+  const distinctCards = Array.from({ length: 4 }, (_, index) => makeCard(`1-1F-${index + 1}-KT`, index));
+  writeJson(corruptJson, { buildings: [{ building: '1号', subAreas: [{ idx: 0, text: '1F', floor: 1, pages: [{ page: '一页', count: 4, rawCount: 4, uniqueCount: 4, qualityReason: 'quality_pass', cards: distinctCards }] }] }] });
+  assert(runImportResult(corruptJson, corruptDb).status === 0, '四个不同 source identity 的基准批次应可导入');
+  const corruptSqlite = new Database(corruptDb);
+  corruptSqlite.prepare("UPDATE run_pages SET unique_count=1, duplicate_names='' WHERE run_id=1").run();
+  corruptSqlite.close();
+  const corruptQuality = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'quality-report.js'), '--run-id=latest-run'], { cwd: ROOT, env: { ...process.env, EMS_DB_PATH: corruptDb, EMS_QUALITY_OUT: corruptOut }, encoding: 'utf8' });
+  const corruptReport = JSON.parse(fs.readFileSync(path.join(corruptOut, 'quality_report_run1.json'), 'utf8'));
+  const statusDb = new Database(corruptDb, { readonly: true });
+  const corruptStatus = statusDb.prepare('SELECT status FROM collection_runs WHERE id=1').get().status;
+  statusDb.close();
+  assert(corruptQuality.status === 2 && corruptReport.summary.invalid_pages === 1, '4/4/1 且无 duplicate evidence 必须成为 blocking invalid_pages');
+  assert(corruptStatus === 'needs_review', 'source identity 元数据矛盾必须把历史批次置为需复核');
+
+  const malformedDb = new Database(corruptDb);
+  malformedDb.prepare("UPDATE run_pages SET unique_count=4, duplicate_names='{malformed' WHERE run_id=1").run();
+  malformedDb.close();
+  const malformedQuality = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'quality-report.js'), '--run-id=latest-run'], { cwd: ROOT, env: { ...process.env, EMS_DB_PATH: corruptDb, EMS_QUALITY_OUT: corruptOut }, encoding: 'utf8' });
+  const malformedReport = JSON.parse(fs.readFileSync(path.join(corruptOut, 'quality_report_run1.json'), 'utf8'));
+  assert(malformedQuality.status === 2 && malformedReport.summary.invalid_pages === 1, '非空但无法解析的 duplicate metadata 必须在独立审计中阻断');
+
+  const partialDb = new Database(corruptDb);
+  const partialIds = partialDb.prepare('SELECT id FROM run_cards WHERE run_id=1 ORDER BY id').all();
+  const partialRename = partialDb.prepare('UPDATE run_cards SET name=? WHERE id=?');
+  partialIds.forEach((row, index) => partialRename.run(index < 2 ? 'A' : 'B', row.id));
+  partialDb.prepare('UPDATE run_pages SET unique_count=3, duplicate_names=? WHERE run_id=1').run(JSON.stringify([{ name: 'A', copies: 2 }]));
+  partialDb.close();
+  const partialQuality = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'quality-report.js'), '--run-id=latest-run'], { cwd: ROOT, env: { ...process.env, EMS_DB_PATH: corruptDb, EMS_QUALITY_OUT: corruptOut }, encoding: 'utf8' });
+  const partialReport = JSON.parse(fs.readFileSync(path.join(corruptOut, 'quality_report_run1.json'), 'utf8'));
+  assert(partialQuality.status === 2 && partialReport.summary.invalid_pages === 1, '每个重复 raw name 组都必须有完整 duplicate claim');
+
+  const mutationDb = new Database(corruptDb);
+  const cardIds = mutationDb.prepare('SELECT id FROM run_cards WHERE run_id=1 ORDER BY id').all();
+  const rename = mutationDb.prepare('UPDATE run_cards SET name=? WHERE id=?');
+  cardIds.forEach((row, index) => rename.run(`room#${index + 1}`, row.id));
+  mutationDb.prepare("UPDATE run_pages SET unique_count=2, duplicate_names=? WHERE run_id=1").run(JSON.stringify([{ name: 'room', copies: 3 }]));
+  mutationDb.close();
+  const extraNumberedQuality = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'quality-report.js'), '--run-id=latest-run'], { cwd: ROOT, env: { ...process.env, EMS_DB_PATH: corruptDb, EMS_QUALITY_OUT: corruptOut }, encoding: 'utf8' });
+  const extraNumberedReport = JSON.parse(fs.readFileSync(path.join(corruptOut, 'quality_report_run1.json'), 'utf8'));
+  assert(extraNumberedQuality.status === 2 && extraNumberedReport.summary.invalid_pages === 1, 'copies=3 不得吞掉同组额外 room#4 成员');
+
+  const mixedDb = new Database(corruptDb);
+  const mixedIds = mixedDb.prepare('SELECT id FROM run_cards WHERE run_id=1 ORDER BY id').all();
+  const mixedRename = mixedDb.prepare('UPDATE run_cards SET name=? WHERE id=?');
+  mixedIds.forEach((row, index) => mixedRename.run(index < 3 ? 'room' : 'room#1', row.id));
+  mixedDb.close();
+  const mixedQuality = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'quality-report.js'), '--run-id=latest-run'], { cwd: ROOT, env: { ...process.env, EMS_DB_PATH: corruptDb, EMS_QUALITY_OUT: corruptOut }, encoding: 'utf8' });
+  const mixedReport = JSON.parse(fs.readFileSync(path.join(corruptOut, 'quality_report_run1.json'), 'utf8'));
+  assert(mixedQuality.status === 2 && mixedReport.summary.invalid_pages === 1, '旧式 raw base 行不得与同组编号变体混合');
+  fs.rmSync(tmp, { recursive: true, force: true });
 }
 
 function testTimestampNormalizationOnImport() {
@@ -575,7 +880,7 @@ function testQualityReportUsesNativePlaceholderCode() {
           layout: 'grid',
           qualityReason: 'quality_pass',
           cards: [{
-            name: '0-0001-KT',
+            name: '0-0001-KT#2',
             switch: 'OFF',
             mode: '制冷',
             indoor: '26',
@@ -660,15 +965,21 @@ function testRealtimeBatchProgressContract() {
 
 function main() {
   testRules();
+  testEnumeratorPageNormalizationContract();
   testRealtimeQualityContract();
   testCollectionValidationBlocksIncompleteResults();
   testPartialImport();
+  testImportRejectsInvalidPageBeforeMutation();
+  testValidationEnabledImportLabelsDuplicatesAndPreservesUnknown();
   testTimestampEnvironmentParsing();
   testSqliteDefaultTimestampUsesLocalOffset();
   testTimestampNormalizationOnImport();
   testTimestampNormalizationOnRestore();
   testQualityReportFailsInvalidFields();
   testQualityReportUsesNativePlaceholderCode();
+  testQualityReportAuditsPageStructureAndUnknownComm();
+  testQualityReportRejectsMalformedBmPage();
+  testQualityReportAuditsStoredSourceIdentityEvidence();
   testNativeOnlyContract();
   testRealtimeBatchProgressContract();
   console.log('Self-test passed.');

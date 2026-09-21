@@ -520,7 +520,7 @@ public sealed class DataViewModel(
         var selectedArea = SelectedArea?.Value ?? string.Empty;
 
         var query = BuildQuery(limit: 1, offset: 0);
-        var groupSetTask = Task.Run(() => areaGroupRepository.LoadConfigurationAsync(cancellationToken), cancellationToken);
+        var groupSetTask = LoadCurrentAreaConfigurationAsync(query.RunId, cancellationToken);
         var optionsTask = Task.Run(() => repository.LoadFilterOptionsAsync(
             query, cancellationToken), cancellationToken);
         var groupSet = await groupSetTask.ConfigureAwait(true);
@@ -540,9 +540,7 @@ public sealed class DataViewModel(
 
         try
         {
-            var groupSetTask = Task.Run(
-                () => areaGroupRepository.LoadConfigurationAsync(loadCancellation.Token),
-                loadCancellation.Token);
+            var groupSetTask = LoadCurrentAreaConfigurationAsync(snapshot.Query.RunId, loadCancellation.Token);
 
             DevicePageAndFilterResult combined;
             if (repository is IDeviceReadRepositoryWithFilterOptions optimizedRepository)
@@ -655,9 +653,12 @@ public sealed class DataViewModel(
         requestVersion == Volatile.Read(ref _filterLoadVersion) &&
         ReferenceEquals(Volatile.Read(ref _filterLoadCancellation), loadCancellation);
 
+    private async Task<AreaGroupSet?> LoadCurrentAreaConfigurationAsync(long? runId, CancellationToken token) =>
+        runId is not null ? null : await Task.Run(() => areaGroupRepository.LoadConfigurationAsync(token), token).ConfigureAwait(false);
+
     private void ApplyFilterOptions(
         DeviceFilterOptions options,
-        AreaGroupSet groupSet,
+        AreaGroupSet? groupSet,
         string selectedBuilding,
         string selectedCommunication,
         string selectedFloor,
@@ -675,7 +676,7 @@ public sealed class DataViewModel(
             ReplaceOptions(
                 AreaOptions,
                 DataFilterOption.All("全部"),
-                BuildAreaOptions(groupSet.Groups, options.UnmatchedCount, options.AreaGroupCounts),
+                BuildAreaOptions(groupSet?.Groups, options.UnmatchedCount, options.AreaGroups),
                 selectedArea);
             ReplaceOptions(BuildingOptions, DataFilterOption.All("全部"), options.Buildings.Select(DataFilterOption.From), selectedBuilding);
             ReplaceOptions(CommunicationOptions, DataFilterOption.All("全部"), options.CommunicationStates.Select(DataFilterOption.From), selectedCommunication);
@@ -1097,6 +1098,7 @@ public sealed class DataViewModel(
         var selectedRunId = SelectedDataSource?.RunId;
             var runs = await collectionRunRepository.ListAsync(null, cancellationToken).ConfigureAwait(true);
             var catalog = CollectionDataSourceCatalog.Build(runs);
+            CollectionDataSourceCatalog.EnsureSnapshotAvailable(catalog, selectedRunId);
             var currentBinding = await collectionRunRepository
                 .GetCurrentDataSourceAsync(cancellationToken)
                 .ConfigureAwait(true);
@@ -1115,7 +1117,7 @@ public sealed class DataViewModel(
         CurrentDataSourceTimestamp = latestOption?.Label ?? "暂无采集时间";
         SelectedDataSource = selectedRunId is null
             ? latestOption
-            : DataSources.FirstOrDefault(option => option.RunId == selectedRunId) ?? latestOption;
+            : DataSources.First(option => option.RunId == selectedRunId);
         OnPropertyChanged(nameof(CanChangeDataSource));
     }
 
@@ -1124,7 +1126,8 @@ public sealed class DataViewModel(
         DeviceNameText = request.SearchText;
         if (request.RunId is not null)
         {
-            SelectedDataSource = DataSources.FirstOrDefault(option => option.RunId == request.RunId) ?? SelectedDataSource;
+            SelectedDataSource = DataSources.FirstOrDefault(option => option.RunId == request.RunId)
+                ?? throw new InvalidOperationException($"历史批次 {request.RunId} 不可用，请重新选择数据来源。");
         }
         SelectedBuilding = SelectOption(BuildingOptions, request.Building) ?? SelectedBuilding;
         SelectedCommunication = SelectOption(CommunicationOptions, request.CommunicationState) ?? SelectedCommunication;
@@ -1212,25 +1215,25 @@ public sealed class DataViewModel(
     }
 
     private IEnumerable<DataFilterOption> BuildAreaOptions(
-        IEnumerable<AreaGroupRecord> groups,
+        IEnumerable<AreaGroupRecord>? groups,
         int unmatchedCount,
-        IReadOnlyDictionary<string, int>? areaGroupCounts)
+        IReadOnlyList<DeviceAreaGroupOption>? areaGroups)
     {
         _areaGroupFilterValues.Clear();
         var rows = new List<DataFilterOption>();
-        foreach (var group in groups.Where(group => group.Enabled).OrderBy(group => group.Name, StringComparer.CurrentCultureIgnoreCase))
+        var countsById = (areaGroups ?? []).ToDictionary(group => group.GroupId, group => group.Count);
+        var choices = groups is null ? areaGroups ?? [] : groups.Where(group => group.Enabled)
+            .Select(group => new DeviceAreaGroupOption(group.Id, group.Name, countsById.GetValueOrDefault(group.Id)));
+        foreach (var group in choices.OrderBy(group => group.Name, StringComparer.CurrentCultureIgnoreCase))
         {
-            var value = $"group:{group.Id.ToString(CultureInfo.InvariantCulture)}";
+            var value = $"group:{group.GroupId.ToString(CultureInfo.InvariantCulture)}";
             if (rows.Any(option => option.Value.Equals(value, StringComparison.OrdinalIgnoreCase)))
             {
                 continue;
             }
 
-            _areaGroupFilterValues[group.Id] = value;
-            var count = areaGroupCounts is not null && areaGroupCounts.TryGetValue(group.Name, out var historicalCount)
-                ? historicalCount
-                : group.Total;
-            rows.Add(new DataFilterOption(value, group.Name, count));
+            _areaGroupFilterValues[group.GroupId] = value;
+            rows.Add(new DataFilterOption(value, group.Name, group.Count));
         }
 
         if (unmatchedCount > 0)

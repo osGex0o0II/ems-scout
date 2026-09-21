@@ -67,6 +67,33 @@ function Read-NativePackageManifest {
     return $manifest
 }
 
+function Assert-NativeBuiltPackage {
+    param(
+        [Parameter(Mandatory)][string]$PackagePath,
+        [Parameter(Mandatory)][string]$Version,
+        [Parameter(Mandatory)][string]$Platform,
+        [Parameter(Mandatory)][string]$CertificateThumbprint
+    )
+    $signature = Get-AuthenticodeSignature -LiteralPath $PackagePath
+    if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint -ne $CertificateThumbprint) {
+        throw "MSIX signature validation failed: $($signature.Status)"
+    }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($PackagePath)
+    try {
+        $entry = $archive.GetEntry('AppxManifest.xml')
+        if ($null -eq $entry) { throw 'MSIX manifest is missing.' }
+        $reader = New-Object IO.StreamReader($entry.Open())
+        try { $xml = [xml]$reader.ReadToEnd() } finally { $reader.Dispose() }
+        $node = $xml.SelectSingleNode("/*[local-name()='Package']/*[local-name()='Identity']")
+        $identity = Get-NativePackageIdentity
+        if ($null -eq $node -or $node.Version -ne $Version -or $node.Name -ne $identity.Name -or
+            $node.Publisher -ne $identity.Publisher -or $node.ProcessorArchitecture -ne $Platform) {
+            throw 'Built MSIX identity/version/architecture mismatch.'
+        }
+    } finally { $archive.Dispose() }
+}
+
 function Get-NativeInstalledPackage {
     $identity = Get-NativePackageIdentity
     return Get-AppxPackage -Name $identity.Name -ErrorAction SilentlyContinue |

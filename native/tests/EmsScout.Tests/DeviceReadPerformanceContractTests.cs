@@ -7,6 +7,78 @@ namespace EmsScout.Tests;
 public sealed class DeviceReadPerformanceContractTests
 {
     [Fact]
+    public async Task HistoricalAreaChoicesRetainSnapshotIdentityAfterCurrentGroupsChange()
+    {
+        using var fixture = new DatabaseFixture();
+        fixture.Execute("""
+            CREATE TABLE run_buildings AS SELECT 1 AS run_id, * FROM buildings;
+            CREATE TABLE run_sub_areas AS SELECT 1 AS run_id, * FROM sub_areas;
+            CREATE TABLE run_pages AS SELECT 1 AS run_id, id, sub_area_id AS run_sub_area_id, page_name, layout, collected_at FROM pages;
+            CREATE TABLE run_cards AS SELECT 1 AS run_id, id, page_id AS run_page_id, name, switch, mode, indoor, set_temp, fan, indicator, comm FROM cards;
+            CREATE TABLE run_area_group_rules(id INTEGER,run_id INTEGER,group_id INTEGER,rule_order INTEGER,building TEXT,zuo TEXT,floor_label TEXT,floor_value REAL,match_mode TEXT,keywords TEXT,note TEXT,group_name TEXT,enabled INTEGER);
+            INSERT INTO run_area_group_rules VALUES(1,1,11,1,'1号','','',NULL,'include','GQ','','历史同名',1),(2,1,12,1,'1号','','',NULL,'include','ROOM','','历史同名',1);
+            CREATE TABLE monitor_groups(id INTEGER,name TEXT,enabled INTEGER,group_key TEXT DEFAULT 'test');
+            CREATE TABLE area_group_rules(id INTEGER,group_id INTEGER,rule_order INTEGER,building TEXT,zuo TEXT,floor_label TEXT,floor_value REAL,match_mode TEXT,keywords TEXT,note TEXT);
+            INSERT INTO monitor_groups(id,name,enabled) VALUES(11,'当前改名',1),(12,'当前禁用',0);
+            INSERT INTO area_group_rules VALUES(1,11,1,'1号','','',NULL,'include','','');
+            """);
+        using var repository = new SqliteDeviceReadRepository(fixture.Path);
+        foreach (var mutation in new[] { "SELECT 1", "UPDATE monitor_groups SET enabled=0", "DELETE FROM monitor_groups" })
+        {
+            fixture.Execute(mutation);
+            var historical = await repository.LoadFilterOptionsAsync(new DeviceQuery(RunId: 1));
+            Assert.Equal(new[] { new DeviceAreaGroupOption(11, "历史同名", 1), new DeviceAreaGroupOption(12, "历史同名", 1) }, historical.AreaGroups);
+            Assert.Equal("GQ", Assert.Single((await repository.SearchAsync(new DeviceQuery(RunId: 1, MonitorGroupIds: "11"))).Rows).Name);
+            var overview = await new EmsScout.Application.DashboardOverviewService(repository,
+                new SqliteAreaGroupRepository(() => fixture.Path)).LoadAsync(1);
+            Assert.Equal(new[] { 11L, 12L }, overview.AreaGroups.Select(group => group.Id));
+            Assert.All(overview.AreaGroups, group => { Assert.Equal("历史同名", group.Name); Assert.Equal(1, group.Total); });
+        }
+        Assert.Empty((await repository.LoadFilterOptionsAsync()).AreaGroups!);
+    }
+
+    [Fact]
+    public async Task ExactOwnerCannotBeStolenByAnEarlierOrFilteredSameNameDevice()
+    {
+        using var fixture = new DatabaseFixture();
+        fixture.Execute("UPDATE pages SET page_name='一页'; INSERT INTO pages VALUES(2,1,'二页','grid','2026-09-22'); UPDATE cards SET name='SAME'; UPDATE cards SET page_id=2 WHERE id=2;");
+        var detail = new RealtimeDetailRecord("owner", "test", DateTimeOffset.UtcNow, "1号", 1, "1F", "二页", "SAME", "dev", "", "", 0, 0, 0, false, "", "关机", "OFF", "",
+            new Dictionary<string, string> { ["集控锁定"] = "开启" }, new Dictionary<string, bool> { ["集控锁定"] = true });
+        using var repository = new SqliteDeviceReadRepository(fixture.Path, new CountingSource { Rows = [detail] });
+        foreach (var query in new[] { new DeviceQuery(), new DeviceQuery(PageName: "一页"), new DeviceQuery(PageName: "二页"),
+            new DeviceQuery(CommunicationState: "开机"), new DeviceQuery(CommunicationState: "关机"),
+            new DeviceQuery(SortBy: "name", SortDescending: true), new DeviceQuery(Limit: 1), new DeviceQuery(Limit: 1, Offset: 1) })
+        {
+            var result = await repository.SearchAsync(query);
+            Assert.NotEmpty(result.Rows);
+            foreach (var row in result.Rows)
+            {
+                if (row.Id == 1) Assert.Null(row.Realtime);
+                else { Assert.Equal("exact", row.RealtimeMatchKind); Assert.Equal("开启", row.RealtimeLockText); }
+            }
+        }
+        var locks = await repository.SearchWithFilterOptionsAsync(new DeviceQuery(RealtimeLock: "开启"));
+        Assert.Equal(2, Assert.Single(locks.Page.Rows).Id);
+        Assert.Equal(1, Assert.Single(locks.FilterOptions.RealtimeLocks!, option => option.Value == "开启").Count);
+        var exported = await new SqliteDeviceExportService(repository).ExportAsync(new DeviceQuery(),
+            System.IO.Path.Combine(System.IO.Path.GetDirectoryName(fixture.Path)!, "export"));
+        var cells = UserDeviceWorkbookAssert.ReadRows(exported.Path).Skip(1).ToArray();
+        Assert.Equal("无实时数据", Assert.Single(cells, row => row[3] == "第1页")[11]);
+        Assert.Equal("开启", Assert.Single(cells, row => row[3] == "第2页")[11]);
+    }
+
+    [Fact]
+    public async Task SingletonNameFallbackSurvivesButAmbiguousDatabaseNameDoesNot()
+    {
+        using var fixture = new DatabaseFixture();
+        var detail = new RealtimeDetailRecord("fallback", "test", DateTimeOffset.UtcNow, "1号", 99, "other", "9", "GQ", "dev", "", "", 0, 0, 0, false, "", "关机", "OFF", "", new Dictionary<string, string>(), new Dictionary<string, bool>());
+        using var repository = new SqliteDeviceReadRepository(fixture.Path, new CountingSource { Rows = [detail] });
+        Assert.Equal("name", (await repository.SearchAsync(new DeviceQuery(DeviceName: "GQ"))).Rows.Single().RealtimeMatchKind);
+        fixture.Execute("UPDATE cards SET name='GQ' WHERE id=2");
+        Assert.All((await repository.SearchAsync(new DeviceQuery(CommunicationState: "开机"))).Rows, row => Assert.Null(row.Realtime));
+    }
+
+    [Fact]
     public async Task LockedRealtimeFileIsRetriedAfterUnlockWithoutChangingItsMetadata()
     {
         using var fixture = new DatabaseFixture();

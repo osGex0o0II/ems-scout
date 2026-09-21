@@ -17,10 +17,15 @@ public static class CollectionDataSourceCatalog
             .ThenByDescending(run => run.Id)
             .ToArray();
         var current = ordered.FirstOrDefault();
-        var historical = current is null
-            ? ordered
-            : ordered.Where(run => run.Id != current.Id).ToArray();
-        return new CollectionDataSourceCatalogResult(current, historical);
+        // Current cards may be restored, mixed, or unbound. Chronology cannot
+        // identify that source, so every available snapshot remains selectable.
+        return new CollectionDataSourceCatalogResult(current, ordered);
+    }
+
+    public static void EnsureSnapshotAvailable(CollectionDataSourceCatalogResult catalog, long? runId)
+    {
+        if (runId is not null && catalog.HistoricalRuns.All(run => run.Id != runId))
+            throw new InvalidOperationException($"历史批次 {runId} 不可用，请重新选择数据来源。");
     }
 
     private static DateTimeOffset ParseTimestamp(string primary, string fallback)

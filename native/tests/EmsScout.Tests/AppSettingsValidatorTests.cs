@@ -86,4 +86,27 @@ public sealed class AppSettingsValidatorTests
 
         Assert.Contains("温度", error, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void WorkspaceValidationUsesTheSamePathPolicyAsRuntimeResolution()
+    {
+        var fixture = Path.Combine(Path.GetTempPath(), "ems-scout-validator-tests", Guid.NewGuid().ToString("N"));
+        var workspace = Path.Combine(fixture, "workspace");
+        var outside = Path.Combine(fixture, "outside");
+        Directory.CreateDirectory(workspace);
+        Directory.CreateDirectory(outside);
+        var file = Path.Combine(workspace, "file-not-directory");
+        File.WriteAllText(file, "x");
+
+        Assert.Contains("数据目录", AppSettingsValidator.Validate(
+            new AppSettings { DataDirectory = outside }, workspace), StringComparison.Ordinal);
+        Assert.Contains("导出目录", AppSettingsValidator.Validate(
+            new AppSettings { ExportDirectory = file }, workspace), StringComparison.Ordinal);
+        Assert.Null(AppSettingsValidator.Validate(new AppSettings
+        {
+            DataDirectory = "out",
+            ExportDirectory = "out/exports",
+        }, workspace));
+        Directory.Delete(fixture, recursive: true);
+    }
 }

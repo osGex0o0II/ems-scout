@@ -1,6 +1,11 @@
 namespace EmsScout.Application.Settings;
 
-public sealed record LocalLogCleanupPreview(int FileCount, long TotalBytes);
+public sealed record LocalLogCleanupPreview(int FileCount, long TotalBytes)
+{
+    public IReadOnlyList<string> SkippedPaths { get; init; } = [];
+
+    public IReadOnlyList<string> FailedPaths { get; init; } = [];
+}
 
 public sealed record LocalLogCleanupResult(
     int DeletedCount,
@@ -15,8 +20,12 @@ public sealed class LocalLogCleanupService(Func<string> dataDirectoryResolver)
 {
     public LocalLogCleanupPreview Preview()
     {
-        var files = EnumerateLogFiles().ToArray();
-        return new LocalLogCleanupPreview(files.Length, files.Sum(GetLength));
+        var scan = ScanLogFiles();
+        return new LocalLogCleanupPreview(scan.Files.Count, scan.Files.Sum(GetLength))
+        {
+            SkippedPaths = scan.SkippedPaths,
+            FailedPaths = scan.FailedPaths,
+        };
     }
 
     public LocalLogCleanupResult Clear()
@@ -29,20 +38,21 @@ public sealed class LocalLogCleanupService(Func<string> dataDirectoryResolver)
 
         var deleted = 0;
         long deletedBytes = 0;
-        var skipped = new List<string>();
-        var failed = new List<string>();
-        foreach (var file in EnumerateLogFiles())
+        var scan = ScanLogFiles();
+        var skipped = new List<string>(scan.SkippedPaths);
+        var failed = new List<string>(scan.FailedPaths);
+        foreach (var file in scan.Files)
         {
             var relative = Path.GetRelativePath(root, file);
             try
             {
-                var info = new FileInfo(file);
-                if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
+                if (!IsSafeFile(root, file))
                 {
                     skipped.Add(relative);
                     continue;
                 }
 
+                var info = new FileInfo(file);
                 var length = info.Length;
                 File.Delete(file);
                 deleted++;
@@ -61,17 +71,90 @@ public sealed class LocalLogCleanupService(Func<string> dataDirectoryResolver)
         return new LocalLogCleanupResult(deleted, deletedBytes, skipped, failed);
     }
 
-    private IEnumerable<string> EnumerateLogFiles()
+    private LogFileScan ScanLogFiles()
     {
         var root = ResolveRoot();
         if (!Directory.Exists(root))
         {
-            return [];
+            return new LogFileScan([], [], []);
         }
 
-        return Directory.EnumerateFiles(root, "*.log", SearchOption.AllDirectories)
-            .Where(path => IsInside(root, Path.GetFullPath(path)))
-            .Where(path => !string.Equals(Path.GetFileName(path), "", StringComparison.Ordinal));
+        try
+        {
+            var reparsePoint = FindReparsePoint(root);
+            if (reparsePoint is not null)
+            {
+                return new LogFileScan([], [reparsePoint], []);
+            }
+        }
+        catch (IOException)
+        {
+            return new LogFileScan([], [], ["."]);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new LogFileScan([], [], ["."]);
+        }
+
+        var files = new List<string>();
+        var skipped = new List<string>();
+        var failed = new List<string>();
+        var pending = new Stack<DirectoryInfo>();
+        pending.Push(new DirectoryInfo(root));
+
+        while (pending.Count > 0)
+        {
+            var directory = pending.Pop();
+            FileSystemInfo[] entries;
+            try
+            {
+                entries = directory.EnumerateFileSystemInfos("*", SearchOption.TopDirectoryOnly).ToArray();
+            }
+            catch (IOException)
+            {
+                failed.Add(Path.GetRelativePath(root, directory.FullName));
+                continue;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                failed.Add(Path.GetRelativePath(root, directory.FullName));
+                continue;
+            }
+
+            foreach (var entry in entries)
+            {
+                string relative;
+                try
+                {
+                    relative = Path.GetRelativePath(root, entry.FullName);
+                    if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
+                    {
+                        skipped.Add(relative);
+                        continue;
+                    }
+
+                    if (entry is DirectoryInfo child)
+                    {
+                        pending.Push(child);
+                    }
+                    else if (entry is FileInfo file &&
+                             file.Extension.Equals(".log", StringComparison.OrdinalIgnoreCase))
+                    {
+                        files.Add(file.FullName);
+                    }
+                }
+                catch (IOException)
+                {
+                    failed.Add(Path.GetRelativePath(root, entry.FullName));
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    failed.Add(Path.GetRelativePath(root, entry.FullName));
+                }
+            }
+        }
+
+        return new LogFileScan(files, skipped, failed);
     }
 
     private string ResolveRoot()
@@ -101,7 +184,44 @@ public sealed class LocalLogCleanupService(Func<string> dataDirectoryResolver)
         }
     }
 
-    private static bool IsInside(string root, string path) =>
-        string.Equals(root, path, StringComparison.OrdinalIgnoreCase) ||
-        path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    private static bool IsSafeFile(string root, string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var relative = Path.GetRelativePath(root, fullPath);
+        if (relative.Equals("..", StringComparison.Ordinal) ||
+            relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return FindReparsePoint(fullPath) is null;
+    }
+
+    private static string? FindReparsePoint(string path)
+    {
+        var fullPath = Path.GetFullPath(path);
+        var volumeRoot = Path.GetPathRoot(fullPath)!;
+        var current = volumeRoot;
+        foreach (var segment in Path.GetRelativePath(volumeRoot, fullPath)
+                     .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        {
+            current = Path.Combine(current, segment);
+            if (!Directory.Exists(current) && !File.Exists(current))
+            {
+                break;
+            }
+
+            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+            {
+                return current;
+            }
+        }
+
+        return null;
+    }
+
+    private sealed record LogFileScan(
+        IReadOnlyList<string> Files,
+        IReadOnlyList<string> SkippedPaths,
+        IReadOnlyList<string> FailedPaths);
 }

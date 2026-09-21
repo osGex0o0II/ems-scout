@@ -4,7 +4,7 @@ const Database = require('better-sqlite3');
 const { formatLocalTimestamp } = require('../src/time');
 const { ensureHistorySchema, createRunFromCurrent, syncFloorCatalogFromCurrent, normalizeStoredTimestamp } = require('../src/data-history');
 const { validateEnumData, formatValidation } = require('../src/enum-validator');
-const { labelSamePageDuplicateCards } = require('../src/rules');
+const { labelSamePageDuplicateCards, derivePageIdentityMetadata } = require('../src/rules');
 
 const ROOT = path.join(__dirname, '..');
 const JSON_PATH = process.env.EMS_JSON_PATH || path.join(ROOT, 'out', 'enum_full_v5.json');
@@ -14,20 +14,6 @@ const data = JSON.parse(fs.readFileSync(JSON_PATH, 'utf8'));
 const BUILDING_FILTER = process.argv.find(a => a.startsWith('--bldg='));
 const IMPORT_FILTER = BUILDING_FILTER ? BUILDING_FILTER.split('=')[1].split(',').map(s => s.trim()).filter(Boolean) : null;
 const buildings = (data.buildings || []).filter(b => !IMPORT_FILTER || IMPORT_FILTER.includes(b.building));
-
-for (const building of buildings) {
-  for (const subArea of building.subAreas || []) {
-    for (const page of subArea.pages || []) {
-      const labeled = labelSamePageDuplicateCards(page.cards || []);
-      if (!labeled.duplicateNames.length) continue;
-      page.cards = labeled.cards;
-      page.count = labeled.cards.length;
-      page.rawCount = labeled.cards.length;
-      page.uniqueCount = labeled.cards.length;
-      page.duplicateNames = labeled.duplicateNames;
-    }
-  }
-}
 
 if (IMPORT_FILTER && buildings.length !== IMPORT_FILTER.length) {
   const found = new Set(buildings.map(b => b.building));
@@ -142,8 +128,6 @@ function preparePageCards(cards = []) {
   const labeled = labelSamePageDuplicateCards(cards);
   return {
     cards: labeled.cards,
-    rawCount: labeled.cards.length,
-    uniqueCount: labeled.cards.length,
     duplicateNames: labeled.duplicateNames,
   };
 }
@@ -172,15 +156,17 @@ function insertBuildings() {
       for (const p of (sa.pages || [])) {
         const pageCards = preparePageCards(p.cards || []);
         const cards = pageCards.cards;
-        const duplicateList = normalizeDuplicateNames(p.duplicateNames);
+        const duplicateList = normalizeDuplicateNames(p.duplicateNames ?? p.duplicate_names);
         const duplicateNames = (duplicateList.length ? duplicateList : pageCards.duplicateNames);
-        const rawCount = pageCards.rawCount;
-        const uniqueCount = pageCards.uniqueCount;
+        const metadata = derivePageIdentityMetadata(cards, duplicateNames);
+        const count = p.count ?? metadata.count;
+        const rawCount = p.rawCount ?? p.raw_count ?? metadata.rawCount;
+        const uniqueCount = p.uniqueCount ?? p.unique_count ?? metadata.uniqueCount;
         const duplicateNamesJson = duplicateNames.length ? JSON.stringify(duplicateNames) : '';
         const pageCollectedAt = normalizeStoredTimestamp(
           p.collectedAt || p.collected_at,
           buildingCollectedAt(bldg));
-        const pResult = insertPage.run(saId, p.page, cards.length, rawCount, uniqueCount, duplicateNamesJson, p.onHref ?? null, p.offHref ?? null, p.layout, p.qualityReason ?? p.quality_reason ?? '', pageCollectedAt, p.err ?? null);
+        const pResult = insertPage.run(saId, p.page, count, rawCount, uniqueCount, duplicateNamesJson, p.onHref ?? null, p.offHref ?? null, p.layout, p.qualityReason ?? p.quality_reason ?? '', pageCollectedAt, p.err ?? null);
         const pageId = pResult.lastInsertRowid;
         for (const c of cards) {
           insertCard.run(pageId, c.name, c.switch, c.mode, c.indoor, c.setTemp, c.fan, c.indicator || '', c.comm || '');

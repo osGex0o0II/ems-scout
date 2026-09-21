@@ -16,6 +16,8 @@ public sealed class SettingsUiContractTests
         Assert.Contains("ClearLocalLogs", codeBehind);
         Assert.Contains("LocalLogCleanupService", app);
         Assert.DoesNotContain("SQLite", xaml);
+        Assert.Contains("preview.SkippedPaths.Count", codeBehind, StringComparison.Ordinal);
+        Assert.Contains("preview.FailedPaths.Count", codeBehind, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -173,6 +175,22 @@ public sealed class SettingsUiContractTests
         Assert.Contains("ConstrainPhysicalSizeForWindow", source);
         Assert.Contains("ConstrainPhysicalSizeForWindow(window, new SizeInt32(placement.Width, placement.Height))", source);
         Assert.DoesNotContain("ScaleSizeForWindow(window, new SizeInt32(placement.Width, placement.Height))", source);
+    }
+
+    [Fact]
+    public void StartupFailureOffersDirectoryRecoveryButRetriesTheRealMigration()
+    {
+        var root = LocateRepositoryRoot();
+        var app = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "App.xaml.cs"));
+        var failureWindow = File.ReadAllText(Path.Combine(root, "native", "src", "EmsScout.Desktop", "StartupFailureWindow.cs"));
+
+        Assert.Contains("RecoverSafeDirectories", app, StringComparison.Ordinal);
+        Assert.Contains("MigrateAsync", app, StringComparison.Ordinal);
+        Assert.Contains("恢复安全目录", failureWindow, StringComparison.Ordinal);
+        Assert.Contains("retry", failureWindow, StringComparison.OrdinalIgnoreCase);
+        Assert.True(
+            app.IndexOf("ValidateDirectories", StringComparison.Ordinal) <
+            app.IndexOf("MigrateAsync", StringComparison.Ordinal));
     }
 
     private static string LocateRepositoryRoot()
